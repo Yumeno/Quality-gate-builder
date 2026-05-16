@@ -1,70 +1,75 @@
-# quality-gate-builder 要件定義書・基本設計書 v0.2
+# quality-gate-builder 要件定義書・基本設計書 v0.3
 
 ## 1. 文書概要
 
 ### 1.1 文書名
 
-quality-gate-builder 要件定義書・基本設計書 v0.2
+quality-gate-builder 要件定義書・基本設計書 v0.3
 
 ### 1.2 目的
 
-本書は、任意の対象プロジェクトに対して、要求・契約・テスト・証跡・判定ゲートからなる品質確認系を生成するための `quality-gate-builder` について、要件および基本設計を定義する。
+本書は、任意の対象プロジェクトに対して、要求・契約・テスト・証跡・判定ゲートからなる品質確認系を生成するための `quality-gate-builder` (qgb) について、要件および基本設計を定義する。
 
-本システムは、LLMによる生成物や評価を無条件に信頼するのではなく、要求、機械的契約、自動テスト、証跡、ユーザー判断を組み合わせることで、成果物の採用可否を説明可能にすることを目的とする。
+本システムは、LLM による生成物や評価を無条件に信頼するのではなく、要求、機械的契約、自動テスト、証跡、ユーザー判断を組み合わせることで、成果物の採用可否を説明可能にすることを目的とする。
 
-### 1.3 v0.2での主な更新点
+### 1.3 v0.3 での主な更新点
 
-本版では、以下の論点を統合した。
+本版は v0.2 を全面改訂し、設計判断の整理と関連文書の分離を行った。主な変更：
 
-- Phase 1の範囲を「Pythonバックエンド + 導入マニュアル付きMVP」として明確化
-- 対象プロジェクトの言語と、品質ゲート基盤の実装言語を分離
-- Phase 1の実装コアはPythonを前提とする方針を追加
-- JSONを機械正本とする方針を追加
-- Project Knowledge Baseを追加
-- ユーザー裁量によるテスト段階の対象外・免除設計を追加
-- TDD modeを追加
-- 依存ライブラリ選定時のサプライチェーンリスク調査要件を追加
-- PyPI等のパッケージレジストリもリスクを持つ前提で扱う方針を追加
+- 思想層を `philosophy.md`（思想憲章）として分離。本書の上位制約とする
+- 固定の L1〜L6 段階体系を削除し、対象系適応的な段階設計に転換
+- 段階設計フェーズの仕様を `stage-design.md` として分離
+- フレームワーク／利用者プロジェクトの境界を `framework-shape.md` として分離
+- 判定値を ALLOW / DENY / REVIEW から ALLOW / DENY の 2 値に整理（REVIEW 廃止）
+- 実行前検証フェーズ（READY / NOT_READY）を導入し、構成ミスを判定から分離
+- TDD mode の `mode` フィールド削除、`phase` (red/green/refactor/verify) で表現
+- gate.json スキーマを最小化（runner / failed_stage / stages[].contract_ref を追加、checks[] を stages[] に統合）
+- 採用判定 (`evidence/`) と揮発 (`artifacts/`) の 2 系統パス分離を採用
+- 入口分離（`qgb verify` 軽量 / `qgb run` 採用判定）を採用
+- 新コマンド `qgb design-stages`, `qgb validate-policy`, `qgb verify` を追加
+- エージェント中立スキル提供方針を追加：単一の中間表現から Claude Code / Codex CLI / Gemini CLI 向けスキル成果物をコンバータで生成する（F-019, C-008）
 
 ### 1.4 対象読者
 
-- quality-gate-builderを設計・実装する開発者
-- AI支援開発環境を構築する技術者
-- LLMを用いてソフトウェア開発・検証を行うユーザー
+- quality-gate-builder を設計・実装する開発者
+- AI 支援開発環境を構築する技術者
+- LLM を用いてソフトウェア開発・検証を行うユーザー
 - 要件定義、テスト設計、レビュー、監査に関与する担当者
 
 ### 1.5 本書の位置づけ
 
-本書は、quality-gate-builderの正本となる要件定義・基本設計書である。
+本書は qgb の要件定義・基本設計の正本である。
 
-補足メモや議論ログが存在する場合も、実装判断においては本書を優先する。
+ただし、本書は思想憲章 (`philosophy.md`) に従属する。思想憲章と本書が衝突する場合、思想憲章が優先される。
+
+### 1.6 関連文書
+
+本書と並列に維持される文書：
+
+- `philosophy.md` — 思想憲章（本書の上位制約）
+- `stage-design.md` — 段階設計フェーズ仕様
+- `framework-shape.md` — フレームワーク境界
+- `project-background.md` — 本プロジェクトの経緯
+- `wakaba-talk-summary.md` — 着想の起点となった発表資料のまとめ
+- `yaoyorozu-system-references.md` — 参考実装の情報
+- `requirements_and_development.v0.2.md` — 前版（履歴保存）
 
 ---
 
 ## 2. 背景と課題
 
-### 2.1 背景
+背景の詳細は `project-background.md` および `philosophy.md` 第 2 節を参照。
 
-LLMを用いた開発支援では、コード生成、設計補助、テスト生成、レビュー、リファクタリングなどを高速化できる。
+### 2.1 解決すべき課題
 
-一方で、LLMの出力や評価は確率的に揺れる。複数回評価して中央値を取る方法もあるが、その評価値が正規分布に従う保証はない。また、各試行が独立同分布である保証もない。
-
-したがって、LLMの主観評価をそのまま品質保証の根拠とすることは危険である。
-
-品質判断には、外部化された要求、検査可能な契約、自動テスト、実行証跡、明示的な採否判断が必要である。
-
-### 2.2 解決すべき課題
-
-本システムは、以下の課題を解決する。
-
-1. LLM生成物の採用可否を、LLMの主観評価だけに依存せず判定したい。
-2. 要求・契約・テスト・証跡・判定をリポジトリ内に明示したい。
-3. 対象プロジェクトの言語・フレームワークに依存しない品質ゲート系を構築したい。
-4. 既存プロジェクトへの後付け導入だけでなく、TDD開始時点からの導入にも対応したい。
-5. ユーザーが提示した前提、外部調査情報、設計判断を根拠として保持したい。
-6. テスト段階の必須・任意・対象外・免除をユーザー裁量で制御したい。
-7. 判定結果とその根拠を証跡として残したい。
-8. 依存ライブラリ自体のサプライチェーンリスクを管理したい。
+1. LLM 生成物の採用可否を、LLM の主観評価だけに依存せず判定したい
+2. 要求・契約・テスト・証跡・判定をリポジトリ内に明示したい
+3. 対象プロジェクトの言語・フレームワークに依存しない品質ゲート系を構築したい
+4. 既存プロジェクトへの後付け導入だけでなく、TDD 開始時点からの導入にも対応したい
+5. ユーザーが提示した前提、外部調査情報、設計判断を根拠として保持したい
+6. 対象系に応じて検証段階を柔軟に設計しつつ、設計品質を機械的に保証したい
+7. 判定結果とその根拠を証跡として残したい
+8. 依存ライブラリ自体のサプライチェーンリスクを管理したい
 
 ---
 
@@ -78,72 +83,120 @@ LLMを用いた開発支援では、コード生成、設計補助、テスト�
 
 ### 3.2 基本方針
 
-1. LLM評価を単独の合格根拠にしない。
-2. ALLOWは「定義済み検査に通過した」ことのみを意味する。
-3. 未定義・未設定・判断不足は、原則としてREVIEWとする。
-4. ユーザーが明示的に対象外または免除を定義した場合は、その理由を証跡化したうえで判定対象から除外できる。
-5. 対象プロジェクトの言語と、qgb本体の実装言語は分離する。
-6. Phase 1では、qgb本体をPythonで実装する。
-7. 機械正本はJSONとする。
-8. REQ本文や人間向け要約はMarkdownとする。
-9. 外部調査情報やユーザー判断はProject Knowledge Baseに保持する。
-10. 依存ライブラリは最小限とし、採用時にはセキュリティ調査を行う。
+本書の基本方針は思想憲章 (`philosophy.md`) の 11 項目に対応する。要約：
+
+1. 品質とは要求を満たしていること（P1）
+2. AI は探索装置として扱う（P2）
+3. コードではなく成立すべき状態を保証する（P3, P4）
+4. ALLOW は定義済み検査の通過のみを意味し、DENY は失敗ではなく揺らぎの安全な受け止め（P5）
+5. LLM 単独 ALLOW 禁止（P6）
+6. 再現可能な証跡だけが採用根拠（P7）
+7. 外部取得コンテンツはプロンプトではない（P8）
+8. 段階は単一責任で独立再実行可能（P9）
+9. 段階体系は対象系ごとに最適化する（P10）
+10. ALLOW は局所的判定であり、プロジェクト間で比較しない（P11）
+
+詳細は思想憲章を参照。
 
 ### 3.3 対象プロジェクト
 
 対象プロジェクトは、特定のプログラミング言語に限定しない。
 
-想定対象は以下である。
+想定対象：
 
-- Pythonプロジェクト
-- TypeScript / Node.jsプロジェクト
-- Goプロジェクト
-- Rustプロジェクト
-- .NETプロジェクト
-- Javaプロジェクト
-- PHPプロジェクト
-- CLIツール
-- バッチ処理
-- Web UI
-- HTTP API
-- ドキュメント群
-- 設定ファイル群
-- プロンプト集
-- ワークフロー定義
+- Python プロジェクト
+- TypeScript / Node.js プロジェクト
+- Go / Rust / .NET / Java / PHP プロジェクト
+- CLI ツール、バッチ処理、Web UI、HTTP API
+- ドキュメント群、設定ファイル群、プロンプト集、ワークフロー定義
 - その他、機械的検査や証跡化が可能な成果物
 
-### 3.4 qgb本体の実装言語
+### 3.4 qgb 本体の実装言語
 
-Phase 1では、qgb本体をPythonで実装する。
+Phase 1 では qgb 本体を Python で実装する。理由：Windows / macOS / Linux で動作させやすい、JSON / Markdown / ファイル操作との相性がよい、CLI 実装が容易、LLM ユーザーがローカルで扱いやすい、MVP の開発速度が高い。
 
-理由は以下である。
+対象プロジェクトが Python 以外であっても、qgb 本体は Python で動作し、対象プロジェクト固有の処理は adapter 経由で実行する。
 
-- Windows、macOS、Linuxで動作させやすい
-- JSON、Markdown、ファイル操作、サブプロセス実行との相性がよい
-- CLI実装が容易
-- テンプレート生成と証跡生成が容易
-- LLMユーザーがローカルで扱いやすい
-- MVPの開発速度が高い
-
-対象プロジェクトがPython以外であっても、qgb本体はPythonで動作し、対象プロジェクト固有の処理はアダプタ経由で実行する。
-
-### 3.5 システム構成
+### 3.5 qgb 本体のリポジトリ構成
 
 ```text
 quality-gate-builder/
   qgb/
+    __init__.py
     __main__.py
     cli.py
     core/
+      runner.py
+      decision.py
+      evidence.py
+      schema.py
+      patch.py
+      knowledge.py
+      policy.py
+      command.py
+      stage_design.py
     adapters/
+      base.py
+      python.py
+      node.py
+      go.py
+      rust.py
+      dotnet.py
+      java.py
+      php.py
+      generic.py
     schemas/
+      config.schema.json
+      policy.schema.json
+      contract.schema.json
+      gate.schema.json
+      knowledge.schema.json
+      req-meta.schema.json
     templates/
-  docs/
+      req.md
+      req.meta.json
+      contract.command.json
+      contract.json-schema.json
+      contract.file.json
+      summary.md
+      quality-gate.ps1
+  development/
+    docs/
+      philosophy.md
+      requirements_and_development.md
+      stage-design.md
+      framework-shape.md
+      project-background.md
+      wakaba-talk-summary.md
+      yaoyorozu-system-references.md
+      requirements_and_development.v0.2.md
   examples/
+    generic-minimal/
+    python-cli-pytest/
+    markdown-docs/
   skills/
+    source/                          # 単一の中間表現（正本）
+      metadata.yaml
+      body.md
+      workflow.md
+      references.md
+      prompts/
+        design-stages.md
+        review-policy.md
+  tools/
+    build_skill.py                   # 3 エージェント向けスキル生成コンバータ
+  dist/
+    skills/                          # ビルド成果物（.gitignore、リリース時にのみ生成）
+      claude/
+      codex/
+      gemini/
   tests/
   pyproject.toml
+  README.md
+  LICENSE
 ```
+
+詳細は `framework-shape.md` Layer 2 を参照。
 
 ### 3.6 生成される対象プロジェクト側構造
 
@@ -157,7 +210,8 @@ project-root/
       REQ-APP-001.meta.json
     contracts/
       REQ-APP-001/
-        contract.json
+        S1.json
+        S2.json
     knowledge/
       knowledge.jsonl
       source-index.json
@@ -167,22 +221,30 @@ project-root/
         latest/
           gate.json
           summary.md
-          command.log
+          stages/
+            S1.log
+            S2.log
+    artifacts/
+      REQ-APP-001/
+        runs/
+          2026-05-15T012345Z/
+            gate.json
+            stages/
+              S1.log
 
   tests/
     quality/
-      L1_behavior/
-      L2_state/
-      L3_boundary/
-      L4_flow/
-      L5_contract/
-      L6_experience/
+      <stage-id>/
+        <REQ>/
 
   scripts/
     quality-gate.ps1
 ```
 
-対象プロジェクトの慣習により、`tests/quality` や `scripts` の配置は変更可能とする。
+- `evidence/<REQ>/latest/` — 採用判定の最新証跡（コミット対象）
+- `artifacts/<REQ>/runs/<timestamp>/` — 揮発的な実行証跡（`.gitignore` で除外）
+
+詳細は `framework-shape.md` Layer 4 を参照。
 
 ---
 
@@ -190,100 +252,80 @@ project-root/
 
 | 用語 | 意味 |
 |---|---|
-| REQ | Requirement。成立すべき要求を記述した正本。 |
-| CONTRACT | 機械的に検査可能な契約。UI、API、CLI、ファイル、DB状態などを対象とする。 |
-| TEST | 要求や契約を検証する自動テスト。 |
-| EVIDENCE | 実行結果、ログ、JUnit XML、スクリーンショット、判定結果などの証跡。 |
-| GATE | REQ単位で検査を実行し、ALLOW / DENY / REVIEWを返す判定機構。 |
-| ADAPTER | 言語、フレームワーク、テストランナーごとの差分を吸収する接続層。 |
-| Project Knowledge Base | 対象プロジェクトの前提情報、外部調査情報、ユーザー判断を保持する根拠ストア。 |
-| ALLOW | 定義済みの必須検査に通過した状態。完全な正しさは保証しない。 |
-| DENY | 定義済みの必須検査に失敗した状態。 |
-| REVIEW | 機械判定では不足し、人間確認または追加定義が必要な状態。 |
-| out_of_scope | 当該REQまたはプロジェクトでは対象外と明示された状態。 |
-| waived | 本来は必要だが、理由つきで免除された状態。 |
-| TDD mode | テストを先に生成し、Red → Green → Refactorを証跡化するモード。 |
+| REQ | Requirement。成立すべき要求を記述した正本 |
+| STAGE | 検証段階。policy.json で定義された単一責任の検査単位 |
+| CONTRACT | 機械的に検査可能な契約。段階ごとに REQ 単位で定義される |
+| TEST | 要求や契約を検証する自動テスト |
+| EVIDENCE | 実行結果、ログ、終了コード、判定結果などの証跡 |
+| GATE | REQ 単位で検査を実行し、ALLOW / DENY を返す判定機構 |
+| ADAPTER | 言語、フレームワーク、テストランナーごとの差分を吸収する接続層 |
+| Project Knowledge Base | 対象プロジェクトの前提情報、外部調査情報、ユーザー判断を保持する根拠ストア |
+| ALLOW | 定義済みの必須検査に通過した状態。完全な正しさは保証しない |
+| DENY | 定義済みの必須検査に失敗した状態。揺らぎを安全に受け止めた結果であり、失敗ではない |
+| READY | 検査を実行可能な準備が整った状態 |
+| NOT_READY | 構成不備により検査を実行できない状態。gate.json は生成されない |
+| waived | 本来は必要だが、理由つきで免除された状態 |
+| phase | TDD サイクル上の位置。`red` / `green` / `refactor` / `verify` |
 
 ---
 
 ## 5. 要件定義
 
-## 5.1 業務要件
+### 5.1 業務要件
 
-### B-001: AI生成物の採用可否判定構造を提供する
+#### B-001: AI 生成物の採用可否判定構造を提供する
 
-AIが生成したコード、設計、テスト、設定ファイルなどを、そのまま採用するのではなく、要求、契約、テスト、証跡に基づいて採用可否を判定できる構造を提供する。
+AI が生成したコード、設計、テスト、設定ファイルなどを、そのまま採用するのではなく、要求、契約、テスト、証跡に基づいて採用可否を判定できる構造を提供する。
 
-### B-002: 処理系非依存の品質ゲート思想を提供する
+#### B-002: 処理系非依存の品質ゲート思想を提供する
 
-対象プロジェクトの言語やフレームワークにかかわらず、REQ、CONTRACT、TEST、EVIDENCE、GATEの共通構造を適用できること。
+対象プロジェクトの言語やフレームワークにかかわらず、REQ、CONTRACT、STAGE、EVIDENCE、GATE の共通構造を適用できる。
 
-### B-003: qgb本体は対象プロジェクトから独立して動作する
+#### B-003: qgb 本体は対象プロジェクトから独立して動作する
 
-qgb本体は、対象プロジェクトの言語とは独立したPython製CLIとして実装する。
+qgb 本体は、対象プロジェクトの言語とは独立した Python 製 CLI として実装する。対象プロジェクト固有の検査は、adapter および設定されたコマンドを通じて実行する。
 
-対象プロジェクト固有の検査は、アダプタおよび設定されたコマンドを通じて実行する。
+#### B-004: 既存リポジトリへ最小侵襲で導入できる
 
-### B-004: 既存リポジトリへ最小侵襲で導入できること
+既存コードへの影響を最小化し、原則として `.quality-system`、`tests/quality`、`scripts` などの追加によって導入できる。
 
-既存コードへの影響を最小化し、原則として `.quality-system`、`tests/quality`、`scripts` などの追加によって導入できること。
+#### B-005: TDD 開始時点から導入できる
 
-### B-005: TDD開始時点から導入できること
+既存プロジェクトへの後付けだけでなく、新規開発において REQ、contract、失敗する初期テスト、gate を先に生成できる。
 
-既存プロジェクトへの後付けだけでなく、新規開発においてREQ、contract、失敗する初期テスト、gateを先に生成できること。
+#### B-006: 監査可能な証跡を残せる
 
-### B-006: 監査可能な証跡を残せること
+REQ 単位で、実行コマンド、検査結果、テスト結果、判定結果、参照した根拠、runner バージョンを証跡として保存できる。
 
-REQ単位で、実行コマンド、検査結果、テスト結果、判定結果、参照した根拠を証跡として保存できること。
+#### B-007: 対象系に応じた段階設計をユーザー裁量で行える
 
-### B-007: ユーザー裁量を反映できること
+固定の段階体系を強制せず、対象プロジェクトの構造と目的に応じて段階を設計できる。段階の設計品質は機械的に検査される。
 
-テスト段階の必須・任意・対象外・免除を、ユーザーまたはプロジェクト方針により制御できること。
+#### B-008: LLM ユーザーが導入可能である
 
-### B-008: LLMユーザーが導入可能であること
+Phase 1 では、PyPI 公開や完全自動インストーラを必須とせず、導入マニュアルに従って LLM ユーザーがローカル実行できることを目標とする。
 
-Phase 1では、PyPI公開や完全自動インストーラを必須とせず、導入マニュアルに従ってLLMユーザーがローカル実行できることを目標とする。
+### 5.2 機能要件
 
----
+#### F-001: リポジトリ構成検出
 
-## 5.2 機能要件
+対象リポジトリを読み取り、以下を推定する：
 
-### F-001: リポジトリ構成検出
-
-対象リポジトリを読み取り、以下を推定する。
-
-- 使用言語
-- フレームワーク
-- パッケージマネージャ
-- テストランナー
-- Lintツール
-- 型検査ツール
-- E2Eテストツール
+- 使用言語、フレームワーク、パッケージマネージャ
+- テストランナー、Lint ツール、型検査ツール、E2E テストツール
 - 実行コマンド候補
 
-検出対象ファイルの例を以下に示す。
+検出対象ファイルの例：
 
 ```text
-package.json
-pnpm-lock.yaml
-yarn.lock
-package-lock.json
-pyproject.toml
-requirements.txt
-uv.lock
-Pipfile
-Cargo.toml
-go.mod
-pom.xml
-build.gradle
-*.csproj
-*.sln
-composer.json
-Makefile
-Dockerfile
+package.json, pnpm-lock.yaml, yarn.lock, package-lock.json
+pyproject.toml, requirements.txt, uv.lock, Pipfile
+Cargo.toml, go.mod, pom.xml, build.gradle
+*.csproj, *.sln, composer.json
+Makefile, Dockerfile
 ```
 
-### F-002: config.json生成
+#### F-002: config.json 生成
 
 検出結果を `.quality-system/config.json` に保存する。
 
@@ -292,482 +334,421 @@ Dockerfile
 ```json
 {
   "schema_version": "1.0",
-  "project": {
-    "name": "sample-project"
-  },
+  "project": { "name": "sample-project" },
   "runtime": {
-    "target_language": "typescript",
-    "framework": "nextjs",
-    "package_manager": "pnpm",
-    "test_runner": "vitest",
-    "e2e_runner": "playwright"
+    "target_language": "python",
+    "framework": "cli",
+    "package_manager": "pip",
+    "test_runner": "pytest"
   },
   "qgb": {
     "core_language": "python",
     "version": "0.1.0"
   },
   "commands": {
-    "unit_test": "pnpm vitest run",
-    "e2e_test": "pnpm exec playwright test",
-    "lint": "pnpm lint",
-    "typecheck": "pnpm tsc --noEmit"
+    "unit_test": "pytest",
+    "lint": "ruff check"
   }
 }
 ```
 
-### F-003: policy.json生成
+#### F-003: policy.json 生成
 
-品質ゲートの判定方針を `.quality-system/policy.json` に保存する。
+対象系に応じた段階定義を `.quality-system/policy.json` に保存する。段階の構造は `stage-design.md` を参照。
 
 例：
 
 ```json
 {
   "schema_version": "1.0",
-  "default_required_levels": ["L1", "L5"],
-  "level_policy": {
-    "L1": { "required": true },
-    "L2": { "required": false, "default_if_missing": "review" },
-    "L3": { "required": false, "default_if_missing": "review" },
-    "L4": { "required": false, "default_if_missing": "review" },
-    "L5": { "required": true },
-    "L6": { "required": false, "default_if_missing": "review" }
-  },
-  "llm_review": {
-    "enabled": false,
-    "can_allow": false
-  }
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "コマンド成立",
+      "responsibility": "CLI コマンドが終了コード 0 で完了する",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command", "expected_exit_code"]
+    }
+  ]
 }
 ```
 
-### F-004: REQ生成
+#### F-004: REQ 生成
 
-REQ本文はMarkdownで生成する。
-
-REQの機械可読メタデータは、JSON sidecarとして保存する。
+REQ 本文は Markdown で生成する。機械可読メタデータは JSON sidecar として保存する。
 
 ```text
 .quality-system/req/REQ-APP-001.md
 .quality-system/req/REQ-APP-001.meta.json
 ```
 
-REQ本文には以下を含める。
+REQ 本文には以下を含める：目的、成立条件、非目標、入力、出力または状態、境界条件、契約、対応する段階、採用条件。
 
-- 目的
-- 成立条件
-- 非目標
-- 入力
-- 出力または状態
-- 境界条件
-- 契約
-- 対応テスト
-- 採用条件
+REQ メタには以下を含める：
 
-### F-005: contract.json生成
+```json
+{
+  "req_id": "REQ-APP-001",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "required": true
+    }
+  ]
+}
+```
 
-対象システムの種類に応じて、契約ファイルを生成する。
+#### F-005: contract.json 生成
 
-契約種別は以下を想定する。
+各段階の検査パラメータを `.quality-system/contracts/<REQ>/<stage-id>.json` に保存する。
 
-- Web UI契約
-- HTTP API契約
-- CLI契約
-- バッチ処理契約
-- ファイル入出力契約
-- DB状態契約
-- ログ契約
-- 文書契約
+contract.json の構造は `policy.json` の `verification_type` と `required_contract_fields` に従う。
 
-### F-006: テスト階層生成
+Phase 1 で対応する検査種別：
 
-以下のテスト階層を生成できること。
+- `command` — 外部コマンド実行と終了コード検査
+- `file_exists` — ファイル存在検査
+- `substring_match` — テキスト内文字列包含検査
+- `json_schema` — JSON Schema 検証
+- `manual_check` — 人間判断（採用判定の根拠にできない）
+
+#### F-006: 段階設計フェーズ
+
+固定の段階体系を持たず、対象系に応じた段階を設計するフェーズを提供する。仕様の詳細は `stage-design.md` を参照。
+
+設計プロセス：
+
+- 提案フェーズ（`qgb design-stages`）— ルールベース推定または対話で段階案を生成
+- 採用フェーズ（`qgb design-stages --commit`）— 設計品質検査を経て `policy.json` に焼き込み
+
+#### F-007: 段階の選択と免除
+
+各 REQ メタは `policy.json` で定義された段階のサブセットを宣言する。宣言外の段階は判定対象外（存在しない）。
+
+`waived` メタ：本来必要な段階を理由つきで免除する場合、段階に `waived: true` と `waiver_reason` を付与する。waived 段階は判定対象から除外される。免除判断は `knowledge.jsonl` に記録する。
+
+#### F-008: 入口の分離
+
+軽量チェックと採用判定を別コマンドに分離する：
+
+- `qgb verify <REQ>` — 段階を実行して結果を返す。揮発側 (`artifacts/.../runs/<ts>/`) にのみ書き込み
+- `qgb run <REQ>` — 採用判定を残す。揮発側に加えて採用側 (`evidence/.../latest/`) を更新
+
+`qgb run` は実行前に確認プロンプトを出す（`--yes` でスキップ可）。
+
+#### F-009: 段階の機械検査
+
+`qgb validate-policy` は段階設計の品質を機械検査する。検査項目は `stage-design.md` 第 11 節を参照。
+
+Phase 1 必須検査の例：
+
+- stage id の重複なし
+- `depends_on` が DAG
+- 各 stage に `responsibility` が存在
+- REQ メタの `stage_id` が policy に存在
+- `contract_ref` の指す contract が存在
+- `manual_check` のみで構成される REQ は警告
+
+#### F-010: 証跡出力
+
+`qgb run` 実行時、採用側と揮発側の両方に書き込む：
 
 ```text
-L1_behavior
-L2_state
-L3_boundary
-L4_flow
-L5_contract
-L6_experience
-```
-
-Phase 1では、L1およびL5を中心とする。
-
-### F-007: テスト段階ポリシー制御
-
-各検査段階は、以下の状態を持てること。
-
-| 状態 | 意味 | 判定への影響 |
-|---|---|---|
-| required | 必須 | 未設定または失敗でDENY/REVIEW |
-| optional | 任意 | 失敗時の扱いはpolicyに従う |
-| not_configured | 未設定 | 原則REVIEW |
-| out_of_scope | 対象外 | 理由があれば判定対象外 |
-| waived | 理由つき免除 | 証跡必須、判定対象外またはREVIEW |
-
-ユーザーが明示的に対象外または免除を指定した場合、その判断を証跡に残す。
-
-### F-008: 品質ゲートランナー生成
-
-Phase 1では、Python製qgb CLIが品質ゲートを実行する。
-
-必要に応じて対象プロジェクト側にPowerShellラッパーを生成する。
-
-例：
-
-```powershell
-python -m qgb run REQ-APP-001
-```
-
-または、ラッパー経由で以下を実行する。
-
-```powershell
-.\scripts\quality-gate.ps1 REQ-APP-001
-```
-
-### F-009: 契約検証
-
-contract.jsonを読み取り、機械的に検査する。
-
-Phase 1の検査対象は以下とする。
-
-- ファイル存在
-- 文字列包含
-- JSON構文
-- JSON Schema検証
-- コマンド終了コード
-- 標準出力形式
-- 生成ファイル存在
-
-### F-010: 証跡出力
-
-品質ゲート実行時、以下を保存する。
-
-```text
-.quality-system/evidence/<REQ-ID>/latest/
+.quality-system/evidence/<REQ>/latest/
   gate.json
   summary.md
-  command.log
+  stages/
+    <stage-id>.log
+
+.quality-system/artifacts/<REQ>/runs/<timestamp>/
+  gate.json
+  stages/
+    <stage-id>.log
 ```
 
-拡張時には以下を追加できる。
+`qgb verify` は揮発側のみに書き込む。
 
-```text
-junit.xml
-screenshots/
-coverage/
-trace/
-raw/
-llm-review.md
-```
+揮発側は `QGB_KEEP_RUNS` 環境変数で保持件数を制御する（デフォルト 10、`0` で無制限）。
 
-### F-011: gate.json生成
+#### F-011: gate.json 生成
 
-品質ゲートの判定結果を `gate.json` に保存する。
+判定結果を `gate.json` に保存する。必須フィールド：
 
-必須項目は以下とする。
+| フィールド | 説明 |
+|---|---|
+| `schema_version` | スキーマバージョン（`major.minor`） |
+| `req_id` | REQ ID（`^REQ-[A-Z0-9]+-[0-9]{3,}$`） |
+| `timestamp_utc` | 履歴互換 UTC 時刻（`YYYY-MM-DDTHHMMSSZ`） |
+| `timestamp_rfc3339` | ツール互換 UTC 時刻 |
+| `phase` | TDD サイクル位置（`red` / `green` / `refactor` / `verify`） |
+| `status` | 判定結果（`ALLOW` / `DENY`） |
+| `failed_stage` | DENY 時の最初に failed になった stage id。ALLOW のとき空文字 |
+| `decision` | `result` と `meaning`（ALLOW/DENY の限定的意味） |
+| `runner` | `name` と `version`（qgb のバージョン） |
+| `paths` | `run_dir`（揮発）と `curated_latest_dir`（採用） |
+| `stages[]` | 各段階の結果。`id`, `name`, `result`, `verification_type`, `exit_code`, `contract_ref`, `log_ref` |
+| `basis[]` | 判定根拠（REQ, policy, contract, knowledge の id 配列） |
 
-- schema_version
-- req_id
-- mode
-- phase
-- status
-- generated_at
-- runtime
-- checks
-- evidence_dir
-- decision
-- basis
-
-例：
+例（ALLOW）：
 
 ```json
 {
   "schema_version": "1.0",
   "req_id": "REQ-APP-001",
-  "mode": "retrofit",
+  "timestamp_utc": "2026-05-15T012345Z",
+  "timestamp_rfc3339": "2026-05-15T01:23:45Z",
   "phase": "verify",
   "status": "ALLOW",
-  "generated_at": "2026-05-15T00:00:00+09:00",
-  "checks": [
-    {
-      "name": "contract",
-      "level": "L5",
-      "status": "passed",
-      "command": "python -m qgb verify-contract REQ-APP-001",
-      "exit_code": 0
-    }
-  ],
-  "evidence_dir": ".quality-system/evidence/REQ-APP-001/latest",
+  "failed_stage": "",
   "decision": {
     "result": "ALLOW",
     "meaning": "Defined checks passed. This is not proof of total correctness."
   },
-  "basis": [
-    "REQ-APP-001",
-    "CONTRACT-REQ-APP-001",
-    "POLICY-DEFAULT"
-  ]
+  "runner": { "name": "qgb", "version": "0.1.0" },
+  "paths": {
+    "run_dir": ".quality-system/artifacts/REQ-APP-001/runs/2026-05-15T012345Z",
+    "curated_latest_dir": ".quality-system/evidence/REQ-APP-001/latest"
+  },
+  "stages": [
+    {
+      "id": "S1",
+      "name": "コマンド成立",
+      "result": "passed",
+      "verification_type": "command",
+      "exit_code": 0,
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "log_ref": "stages/S1.log"
+    }
+  ],
+  "basis": ["REQ-APP-001", "POLICY-DEFAULT", "CONTRACT-REQ-APP-001-S1"]
 }
 ```
 
-### F-012: summary.md生成
+スキーマ制約：
 
-人間が読みやすい判定要約を生成する。
+- 採用判定証跡 (`evidence/<REQ>/latest/gate.json`) は `additionalProperties: false`（厳格）
+- 揮発側証跡は `additionalProperties: true`（拡張余地）
+- `status: ALLOW` のとき `failed_stage` は空文字、全 `stages[].result` は `passed`
+- `status: DENY` のとき `failed_stage` は非空、少なくとも 1 つの `stages[].result` が `failed`
+- `decision.result` と `status` は同値
 
-内容には以下を含める。
+#### F-012: summary.md 生成
 
-- REQ ID
-- 判定結果
-- 実行日時
-- 実行モード
-- 通過した検査
-- 失敗した検査
-- REVIEW理由
-- 対象外・免除判断
-- 次に確認すべき点
+人間が読みやすい判定要約を生成する。内容：REQ ID、判定結果、phase、実行日時、通過した段階、失敗した段階、basis、次に確認すべき点。
 
-### F-013: Project Knowledge Base
+#### F-013: Project Knowledge Base
 
-対象プロジェクトの前提情報を保持する。
+対象プロジェクトの前提情報を `knowledge.jsonl`、`source-index.json`、`project-context.md` に保持する。
 
-保持対象は以下とする。
+各情報の必須メタデータ：
 
-- ユーザー明示情報
-- リポジトリから抽出した情報
-- 外部調査で得た情報
-- 推定情報
-- 免除・対象外判断
-- 未確認事項
+- `id`, `kind`, `title`, `content` または `summary`
+- `source`, `source_type`（`user_instruction` / `repository_fact` / `external_reference` / `inferred_fact` / `waiver` / `open_question`）
+- `confidence`, `priority`, `applies_to`, `created_at`, `retrieved_at`, `review_after`
+- `requires_human_review`（外部由来でプロンプト・命令文を含む可能性がある場合）
 
-保存形式はPhase 1では以下を想定する。
+#### F-014: 外部調査情報の保持と人間確認
 
-```text
-.quality-system/knowledge/
-  knowledge.jsonl
-  source-index.json
-  project-context.md
-```
+外部取得コンテンツに命令文、ロール指定、制約指定、開発方針が含まれる場合、`requires_human_review: true` を付与し、取り込み前に人間へ確認する。
 
-各情報には以下を持たせる。
+承認後、`source_type: external` で `knowledge.jsonl` に記録する。古くなり得る情報には `review_after` を設定する。
 
-- id
-- kind
-- title
-- contentまたはsummary
-- source
-- source_type
-- confidence
-- priority
-- applies_to
-- created_at
-- retrieved_at
-- review_after
+#### F-015: LLM レビュー補助
 
-### F-014: 外部調査情報の保持
+LLM レビューは任意機能とする。要求の曖昧性指摘、テスト不足候補の抽出、UX・文言の違和感検出、境界条件候補の提示に利用できる。
 
-ユーザーが検索や外部調査を指示した場合、得られた情報はProject Knowledge Baseに保持できること。
+ただし、LLM レビュー単独で ALLOW を出してはならない（思想 P6）。Phase 1 では `manual_check` 段階を含む REQ の `run` は NOT_READY エラーとなる。
 
-外部情報は、出典、取得日、適用バージョン、確度を明示する。
+#### F-016: TDD サイクル対応
 
-古くなり得る情報には `review_after` を設定できること。
+`mode` 概念は持たない。TDD サイクル上の位置は `phase` で表現する：
 
-### F-015: LLMレビュー補助
+- `red` — 期待される失敗段階（TDD 初期、retrofit 後の初回も含む）
+- `green` — 実装後の通過確認
+- `refactor` — リファクタ後の維持確認
+- `verify` — TDD サイクル外の単発検証
 
-LLMレビューは任意機能とする。
+各 phase に対応する `decision.meaning` テンプレート：
 
-LLMレビューは以下に利用できる。
+| phase | result | meaning |
+|---|---|---|
+| red | DENY | The required test fails as expected before implementation. |
+| green | ALLOW | Required checks passed against the freshly implemented code. |
+| refactor | ALLOW | Required checks remained passing after refactor. |
+| verify | ALLOW | Defined checks passed. This is not proof of total correctness. |
+| verify | DENY | Defined checks did not pass. This is not a failure but a signal to revise. |
 
-- 要求の曖昧性指摘
-- テスト不足候補の抽出
-- UX・文言の違和感検出
-- 境界条件候補の提示
+TDD 初期の段階を仕込むユーティリティとして `qgb tdd-init <REQ>` を提供する（内部実装は `qgb scaffold --initial-phase red` 相当）。
 
-ただし、LLMレビュー単独でALLOWを出してはならない。
+#### F-017: JSON Patch または専用 CLI による編集
 
-### F-016: TDD mode
+Phase 1 では JSON ファイルの直接編集を許容するが、編集後の `qgb validate` を必須とする。
 
-TDD modeでは、以下を生成する。
-
-- REQ
-- contract.json
-- 失敗する初期テスト
-- gate設定
-- Red段階の証跡
-- Green段階の証跡
-
-TDD modeでは、初期のDENYは期待される状態として扱える。
-
-例：
-
-```json
-{
-  "req_id": "REQ-APP-001",
-  "mode": "tdd",
-  "phase": "red",
-  "status": "DENY",
-  "decision": {
-    "result": "DENY",
-    "meaning": "The required test fails as expected before implementation."
-  }
-}
-```
-
-### F-017: JSON Patchまたは専用CLIによる編集
-
-Phase 1では、JSONファイルの直接編集を許容するが、編集後のvalidateを必須とする。
-
-将来的には、LLMによる全文書き換えではなく、JSON Patchまたは専用CLIによる変更を推奨する。
-
-想定コマンド例：
+将来的には、LLM による全文書き換えではなく、JSON Patch または専用 CLI による変更を推奨する。想定コマンド例：
 
 ```powershell
 python -m qgb validate
 python -m qgb patch policy patch.json
-python -m qgb set-required-levels REQ-APP-001 L1 L5
-python -m qgb add-waiver REQ-APP-001 L6 --reason "Internal CLI tool"
+python -m qgb add-waiver REQ-APP-001 S6 --reason "Internal CLI tool"
 ```
 
-### F-018: 導入マニュアル生成・整備
+#### F-018: 導入マニュアル生成・整備
 
-Phase 1では、導入マニュアルを成果物に含める。
+Phase 1 では導入マニュアルを成果物に含める。必須章立ては §8 を参照。
 
-導入マニュアルには以下を含める。
+#### F-019: エージェント中立なスキル提供
 
-- 前提環境
-- Pythonの確認方法
-- 仮想環境の作成方法
-- 依存ライブラリのインストール方法
-- qgbの実行方法
-- 初期化方法
-- サンプルREQ生成方法
-- quality-gate実行方法
-- gate.jsonとsummary.mdの読み方
-- Windows PowerShellでの実行例
-- トラブルシューティング
-- 依存ライブラリ確認手順
+qgb の Phase 5 スキルは、Claude Code / Codex CLI / Gemini CLI のいずれにも投入できる形で提供する。
 
----
+##### 単一中間表現
 
-## 5.3 非機能要件
+スキル本体は `skills/source/` 配下の単一の中間表現を正本とする：
 
-### NF-001: 再現性
+```text
+skills/source/
+  metadata.yaml         # スキル ID、バージョン、各エージェント向けバインディング
+  body.md               # スキル本体（中立 Markdown）
+  workflow.md           # 作業手順
+  references.md         # philosophy.md / stage-design.md などへの参照集
+  prompts/
+    design-stages.md
+    review-policy.md
+```
 
-同一リポジトリ、同一REQ、同一契約、同一テスト、同一policyに対して、可能な限り再現性のある判定を行う。
+`metadata.yaml` には各エージェント固有の配置情報（filename、frontmatter キー、補助ファイルの取り込み方）を持たせる。中間表現のフォーマット詳細は `framework-shape.md` を参照。
 
-### NF-002: 監査性
+##### コンバータ
 
-判定結果だけでなく、判定に使用したコマンド、終了コード、ログ、参照した根拠を保存する。
+`tools/build_skill.py` が中間表現から 3 エージェント向け成果物を生成する：
 
-### NF-003: 最小侵襲性
+| エージェント | 成果物 | 配置先（利用者環境） |
+|---|---|---|
+| Claude Code | `SKILL.md`（YAML frontmatter 付き）+ 補助ファイル一式 | `~/.claude/skills/<skill-id>/` または `.claude/skills/<skill-id>/` |
+| Codex CLI | `AGENTS.md`（補助ファイルを末尾に連結したフラット Markdown） | プロジェクトルート |
+| Gemini CLI | `GEMINI.md`（補助ファイルを `@import` で参照） + `.gemini/commands/<command>.toml` | `~/.gemini/` またはプロジェクト直下 |
 
-既存のソースコード、テスト、CI設定を不必要に変更しない。
+生成物は `dist/skills/{claude,codex,gemini}/` に出力される。`dist/` は `.gitignore` 対象とし、リリースタグ付与時に CI で生成して GitHub Releases にアタッチする。
 
-### NF-004: 可搬性
+##### 再生成可能性
 
-Windows、macOS、Linuxで利用できる構造とする。
+- 中間表現を変更したら、必ずコンバータを通して 3 成果物を再生成する
+- リリース成果物に対する直接編集は禁止（ドリフトを防ぐ）
+- コンバータ自体のバージョンを成果物に記録し、再現可能性を担保する（思想 P7）
 
-特にPhase 1では、Windows PowerShell環境での実行手順を明記する。
+##### Phase 計画
 
-### NF-005: 拡張性
+- Phase 1〜4: スキル成果物は作らない。`skills/source/` のディレクトリ構造のみ予約
+- Phase 5: 中間表現とコンバータを本実装、3 エージェント向けリリースを CI で生成
 
-新しい言語、フレームワーク、テストランナー、契約種別、証跡種別を追加できる構造とする。
+### 5.3 非機能要件
 
-### NF-006: 説明可能性
+#### NF-001: 再現性
 
-ALLOW / DENY / REVIEW の意味を、出力ファイル内に明示する。
+同一リポジトリ、同一 REQ、同一契約、同一テスト、同一 policy に対して、可能な限り再現性のある判定を行う。`runner.version` を gate.json に記録することで遡及可能性を保つ。
 
-### NF-007: 安全性
+#### NF-002: 監査性
 
-外部コンテンツやリポジトリ内の任意テキストを、無条件にシステム指示として扱わない。
+判定結果だけでなく、判定に使用したコマンド、終了コード、ログ、参照した根拠（`basis[]`）を保存する。
 
-### NF-008: 機密情報保護
+#### NF-003: 最小侵襲性
 
-証跡に以下が不要に含まれないよう配慮する。
+既存のソースコード、テスト、CI 設定を不必要に変更しない。`qgb init` は `.quality-system/`、`tests/quality/`、`scripts/`、`.gitignore` への追記に限定する。
 
-- APIキー
-- トークン
-- パスワード
-- 秘密鍵
-- Cookie
-- セッション情報
-- 個人情報
-- 不要な絶対パス
+#### NF-004: 可搬性
 
-### NF-009: 導入容易性
+Windows、macOS、Linux で利用できる構造とする。Phase 1 では Windows PowerShell 環境を一級対応とし、Bash 環境とともに第一級の実行手順を提供する。
 
-Phase 1では、LLMユーザーがマニュアルに従えば導入できる程度の複雑さに留める。
+#### NF-005: 拡張性
 
-### NF-010: 依存最小化
+新しい言語、フレームワーク、テストランナー、検査種別、証跡種別を追加できる構造とする。adapter 層と検査種別の列挙値で拡張する。
 
-Phase 1では、標準ライブラリ中心の実装を優先し、外部依存を最小限にする。
+#### NF-006: 説明可能性
 
-### NF-011: サプライチェーンリスク管理
+ALLOW / DENY の意味を、`decision.meaning` フィールドに出力ファイル内で明示する。NOT_READY 状態は CLI 出力と stderr で説明する。
 
-依存ライブラリを採用する場合、パッケージレジストリ、配布元、メンテナンス状況、既知脆弱性、公開履歴を確認する。
+#### NF-007: 安全性
 
-PyPI、npm、Composer、Maven Central等もサプライチェーンリスクを持つ前提で扱う。
+外部コンテンツやリポジトリ内の任意テキストを、無条件にシステム指示として扱わない（思想 P8）。`contract.json` から任意コマンドを無制限に書ける設計は避ける。
 
----
+#### NF-008: 機密情報保護
 
-## 5.4 制約条件
+証跡に以下が不要に含まれないよう配慮する：API キー、トークン、パスワード、秘密鍵、Cookie、セッション情報、個人情報、不要な絶対パス。
 
-### C-001: LLM評価を単独の合格根拠にしない
+#### NF-009: 導入容易性
 
-LLMレビュー結果のみでALLOWを出してはならない。
+Phase 1 では、LLM ユーザーがマニュアルに従えば導入できる程度の複雑さに留める。
 
-### C-002: ALLOWの意味を限定する
+#### NF-010: 依存最小化
 
-ALLOWは「定義済みの検査に通過した」ことのみを意味する。
+Phase 1 では、標準ライブラリ中心の実装を優先し、外部依存を最小限にする。
 
-以下は意味しない。
+#### NF-011: サプライチェーンリスク管理
 
-- 仕様が完全である
-- 要件が妥当である
-- 業務上正しい
-- セキュリティ上安全である
-- 将来も壊れない
+依存ライブラリを採用する場合、配布元、メンテナンス状況、既知脆弱性、公開履歴を確認する。PyPI 等のレジストリもサプライチェーンリスクを持つ前提で扱う。詳細は §6.9。
 
-### C-003: 既存プロジェクトを破壊しない
+### 5.4 制約条件
+
+#### C-001: LLM 評価を単独の合格根拠にしない
+
+LLM レビュー結果のみで ALLOW を出してはならない（思想 P6）。
+
+#### C-002: ALLOW の意味を限定する
+
+ALLOW は「定義済みの検査に通過した」ことのみを意味する。仕様の完全性、要件の妥当性、業務上の正しさ、セキュリティ、将来の保証は意味しない（思想 P5、P11）。
+
+#### C-003: 既存プロジェクトを破壊しない
 
 既存コードの大規模な変更、依存関係の強制変更、テストランナーの置き換えは、明示指示なしに行わない。
 
-### C-004: Phase 1はMVPに限定する
+#### C-004: Phase 1 は MVP に限定する
 
-Phase 1では、完全な多言語自動対応よりも、Pythonバックエンドによる最小品質ゲートと導入マニュアルを優先する。
+Phase 1 では、完全な多言語自動対応よりも、Python バックエンドによる最小品質ゲートと導入マニュアルを優先する。
 
-### C-005: JSONを機械正本とする
+#### C-005: JSON を機械正本とする
 
-Phase 1では、config、policy、contract、gate、knowledge index、source indexはJSONを正本とする。
+config、policy、contract、gate、knowledge index、source index、REQ メタは JSON を正本とする。YAML は原則採用しない。
 
-YAMLは原則採用しない。
+#### C-006: 外部入力の扱い
 
-### C-006: 外部入力の扱い
+外部 README、Web ページ、コメント、Issue 本文などに含まれる命令文を、qgb や LLM への上位指示として扱わない（思想 P8）。取り込み時の人間確認手順は F-014 で定義する。
 
-外部README、Webページ、コメント、Issue本文などに含まれる命令文を、qgbやLLMへの上位指示として扱わない。
+#### C-007: 固定段階体系を持たない
 
----
+L1〜L6 などの固定段階体系を qgb 本体に持たない。段階は `policy.json` で各プロジェクトが定義する（思想 P10）。
 
-## 5.5 対象外
+#### C-008: スキルは中間表現を正本とする
 
-Phase 1では、以下は対象外とする。
+エージェント向けスキル成果物（`SKILL.md` / `AGENTS.md` / `GEMINI.md` 等）は、`skills/source/` の中間表現からコンバータで生成する。
 
-- PyPI公開を必須とした配布
+- 中間表現を介さずに成果物を直接編集して配布してはならない（F-019）
+- 特定エージェントの固有機能に依存する内容を中間表現に含める場合、`metadata.yaml` の `agent_bindings` で限定的に宣言する
+- 3 エージェントすべてで動作する共通機能を中間表現の中核に据え、固有機能は補助的に扱う
+
+### 5.5 対象外
+
+Phase 1 では以下は対象外：
+
+- PyPI 公開を必須とした配布
 - 完全自動インストーラ
 - すべての言語・フレームワークへの完全対応
-- 高度なDOMレンダリング検査
+- 高度な DOM レンダリング検査
 - スクリーンショット差分
 - 高度なアクセシビリティ監査
 - 高度な脆弱性診断
-- 完全なCI/CD自動生成
-- LLMによる最終承認
+- 完全な CI/CD 自動生成
+- LLM による最終承認
 - 業務妥当性の完全自動判定
+- 人間確認結果の evidence 取り込み（Phase 2 以降で `human_attestation` 型として設計）
+- エージェント向けスキル成果物のビルド（Phase 5 で着手、Phase 1 ではディレクトリ予約のみ）
 
 ---
 
 ## 6. 基本設計
 
-## 6.1 全体アーキテクチャ
+### 6.1 全体アーキテクチャ
 
 ```text
 ┌──────────────────────────────┐
@@ -776,15 +757,15 @@ Phase 1では、以下は対象外とする。
                │
                ▼
 ┌──────────────────────────────┐
-│ qgb CLI                       │
-│ Python backend                │
+│ qgb CLI (Python backend)      │
 └──────────────┬───────────────┘
                │
                ▼
 ┌──────────────────────────────┐
 │ Core                          │
 │ schema / policy / decision    │
-│ evidence / knowledge          │
+│ stage-design / evidence       │
+│ knowledge / command           │
 └──────────────┬───────────────┘
                │
                ▼
@@ -800,448 +781,269 @@ Phase 1では、以下は対象外とする。
 └──────────────────────────────┘
 ```
 
-### 6.1.1 Coreの責務
+#### 6.1.1 Core の責務
 
-qgb coreは以下を担当する。
+- JSON ファイルの読み書き、JSON Schema 検証
+- policy 評価、段階設計フェーズの実装
+- adapter 選択、コマンド実行
+- 終了コード収集、stdout/stderr 保存
+- gate.json 生成、summary.md 生成
+- Project Knowledge Base 参照
+- 実行前検証（READY / NOT_READY 判定）
+- ALLOW / DENY 判定
 
-- JSONファイルの読み書き
-- JSON Schema検証
-- policy評価
-- adapter選択
-- コマンド実行
-- 終了コード収集
-- stdout/stderr保存
-- gate.json生成
-- summary.md生成
-- Project Knowledge Base参照
-- ALLOW / DENY / REVIEW判定
-
-### 6.1.2 Adapterの責務
-
-adapterは以下を担当する。
+#### 6.1.2 Adapter の責務
 
 - 対象プロジェクトの構成検出
-- テストコマンド候補の生成
+- 実行コマンド候補の生成
 - 言語別テンプレート選択
 - テスト配置候補の提示
 - 実行コマンドの標準化
 
----
+#### 6.1.3 思想憲章との対応
 
-## 6.2 リポジトリ構成
+| Core / Adapter モジュール | 守る思想 |
+|---|---|
+| `decision.py` | P5, P11 |
+| `stage_design.py` | P9, P10 |
+| `policy.py` | P9, P10 |
+| `evidence.py` | P7 |
+| `command.py` | P7, NF-007 |
+| `knowledge.py` | P8 |
 
-```text
-quality-gate-builder/
-  README.md
-  pyproject.toml
+### 6.2 CLI 設計
 
-  qgb/
-    __init__.py
-    __main__.py
-    cli.py
-
-    core/
-      runner.py
-      decision.py
-      evidence.py
-      schema.py
-      patch.py
-      knowledge.py
-      policy.py
-      command.py
-
-    adapters/
-      base.py
-      python.py
-      node.py
-      go.py
-      rust.py
-      dotnet.py
-      java.py
-      php.py
-      generic.py
-
-    schemas/
-      config.schema.json
-      policy.schema.json
-      contract.schema.json
-      gate.schema.json
-      knowledge.schema.json
-      req-meta.schema.json
-
-    templates/
-      req.md
-      req.meta.json
-      contract.web-ui.json
-      contract.http-api.json
-      contract.cli.json
-      contract.file.json
-      summary.md
-      quality-gate.ps1
-
-  docs/
-    installation.md
-    phase1-manual.md
-    security-dependency-policy.md
-    decision-semantics.md
-    knowledge-base.md
-    tdd-mode.md
-
-  examples/
-    python-cli-pytest/
-    python-fastapi-pytest/
-    node-cli-vitest/
-    generic-powershell/
-
-  skills/
-    skill-creator-plus/
-    generated-skill-template/
-
-  tests/
-```
-
----
-
-## 6.3 CLI設計
-
-### 6.3.1 Phase 1必須コマンド
+#### 6.2.1 Phase 1 必須コマンド
 
 ```powershell
 python -m qgb init
 python -m qgb detect
-python -m qgb scaffold REQ-APP-001
+python -m qgb design-stages
+python -m qgb scaffold <REQ>
 python -m qgb validate
-python -m qgb run REQ-APP-001
+python -m qgb validate-policy
+python -m qgb verify <REQ>
+python -m qgb run <REQ>
 ```
 
-### 6.3.2 Phase 1任意コマンド
+#### 6.2.2 Phase 1 任意コマンド
 
 ```powershell
-python -m qgb verify-contract REQ-APP-001
+python -m qgb verify-contract <REQ> <stage-id>
 python -m qgb add-knowledge knowledge.json
-python -m qgb add-waiver REQ-APP-001 L6 --reason "Internal CLI tool"
-python -m qgb tdd-init REQ-APP-001
+python -m qgb add-waiver <REQ> <stage-id> --reason "..."
+python -m qgb tdd-init <REQ>
 ```
 
-### 6.3.3 将来コマンド
+#### 6.2.3 終了コード
+
+| 終了コード | 意味 |
+|---|---|
+| 0 | 成功（ALLOW、または検査自体の成功） |
+| 1 | DENY |
+| 2 | NOT_READY（構成不備、ファイル不在、検証エラー） |
+| その他 | 内部エラー |
+
+#### 6.2.4 将来コマンド
 
 ```powershell
 qgb init
-qgb run REQ-APP-001
+qgb run <REQ>
 qgb patch policy patch.json
-qgb set-required-levels REQ-APP-001 L1 L5
+qgb design-stages --interactive
 qgb create-skill
 ```
 
----
+### 6.3 判定設計
 
-## 6.4 判定設計
-
-### 6.4.1 判定値
+#### 6.3.1 判定値
 
 | 判定 | 意味 | 採用可否 |
 |---|---|---|
-| ALLOW | 定義済み必須検査を通過した | 条件付き採用可 |
-| DENY | 定義済み必須検査に失敗した | 採用不可 |
-| REVIEW | 機械判定では不足 | 人間確認または追加定義が必要 |
+| ALLOW | 定義済み必須段階を通過した | 条件付き採用可（思想 P5, P11 のもとで） |
+| DENY | 定義済み必須段階に失敗した | 採用不可。ただし失敗ではなく、再生成と再判定への入口 |
 
-### 6.4.2 判定フロー
+`NOT_READY` は判定値ではなく、検査実行前の状態。gate.json は生成されない。
 
-```text
-REQなし
-  → REVIEW
-
-contractなし
-  → REVIEW
-
-policy上必須の検査が未設定
-  → REVIEW
-
-contract検証失敗
-  → DENY
-
-必須テスト失敗
-  → DENY
-
-証跡生成失敗
-  → REVIEW
-
-対象外・免除が理由つきで定義済み
-  → 判定対象から除外可能
-
-全必須検査成功
-  → ALLOW
-```
-
-### 6.4.3 out_of_scope / waivedの扱い
-
-`out_of_scope` は、当該REQまたはプロジェクトにおいて対象外であることを意味する。
-
-`waived` は、本来は必要だが理由つきで免除されたことを意味する。
-
-いずれも、以下を必須とする。
-
-- req_id
-- level
-- status
-- reason
-- decided_by
-- created_at
-
----
-
-## 6.5 L1〜L6設計
-
-| レベル | 名称 | 目的 | 例 |
-|---|---|---|---|
-| L1 | 表層動作検査 | ユーザーから見える基本動作を確認する | HTTP 200、CLI終了コード0 |
-| L2 | 状態生成検査 | DB、ファイル、セッション等の状態変化を確認する | レコード作成、ファイル出力 |
-| L3 | 境界条件検査 | 異常系、空値、権限なし、重複を確認する | 400、403、バリデーションエラー |
-| L4 | 流れ検査 | 複数手順の業務フローを確認する | ログイン→登録→確認 |
-| L5 | 契約検査 | 機械的契約を満たすか確認する | JSON Schema、DOM属性、OpenAPI |
-| L6 | 体験・非機能検査 | UX、文言、性能、監査性を確認する | 表示文言、アクセシビリティ、ログ |
-
-Phase 1では、L1とL5を中心に扱う。
-
----
-
-## 6.6 TDD mode設計
-
-### 6.6.1 目的
-
-TDD modeは、プロジェクト開始時点または新機能開発開始時点で、REQ、contract、失敗する初期テスト、gateを先に生成するためのモードである。
-
-### 6.6.2 フロー
+#### 6.3.2 判定フロー
 
 ```text
-1. ユーザーが目的・要求・受け入れ条件を提示する
-2. qgbがREQを生成する
-3. qgbがcontract.jsonを生成する
-4. qgbが失敗する初期テストを生成する
-5. qgb runを実行し、Red段階のDENYを証跡化する
-6. ユーザーまたはLLMが実装する
-7. qgb runを再実行し、Green段階のALLOWを目指す
-8. 必要に応じてRefactor後の証跡を残す
+qgb run <REQ>
+  ↓
+[実行前検証]
+  ├─ qgb validate 失敗 → NOT_READY (exit 2)
+  ├─ contract_ref が指す contract 不在 → NOT_READY
+  ├─ REQ メタの stage_id が policy 未定義 → NOT_READY
+  ├─ depends_on が DAG でない → NOT_READY
+  ├─ required stages が空 → NOT_READY
+  ├─ manual_check のみで構成 → NOT_READY (Phase 1)
+  └─ READY → [採用判定へ]
+
+[採用判定]
+  ├─ 全 required 段階通過 → ALLOW (exit 0)
+  └─ いずれかの required 段階失敗 → DENY (exit 1)
 ```
 
-### 6.6.3 TDD modeの判定解釈
+#### 6.3.3 waived の扱い
 
-TDD modeのRed段階では、DENYは期待される結果である。
-
-ただし、期待される失敗であることを `phase` と `meaning` に明示する。
-
----
-
-## 6.7 Project Knowledge Base設計
-
-### 6.7.1 目的
-
-Project Knowledge Baseは、品質ゲート生成や判定に用いる前提情報を保持する根拠ストアである。
-
-### 6.7.2 保持する情報
-
-| 種別 | 例 | 優先度 |
-|---|---|---|
-| user_instruction | ユーザーが明示した方針 | 高 |
-| repository_fact | リポジトリから抽出した事実 | 高 |
-| external_reference | 公式ドキュメントや外部調査情報 | 中〜高 |
-| inferred_fact | qgbまたはLLMが推定した情報 | 低〜中 |
-| waiver | 免除判断 | 高 |
-| open_question | 未確認事項 | REVIEW要因 |
-
-### 6.7.3 保存形式
-
-Phase 1では、JSON Lines形式を採用する。
+`waived: true` の段階は判定対象から除外される。免除判断は `knowledge.jsonl` に記録：
 
 ```json
-{"id":"CTX-USER-001","kind":"user_instruction","title":"Target mode","content":"Use TDD mode for this feature.","source":"user","confidence":"explicit","priority":"high","created_at":"2026-05-15T00:00:00+09:00"}
+{
+  "id": "WAIVER-REQ-APP-001-S6",
+  "kind": "waiver",
+  "title": "L6 体験段階の免除",
+  "applies_to": "REQ-APP-001",
+  "stage_id": "S6",
+  "reason": "Internal CLI tool, no UI",
+  "decided_by": "user",
+  "created_at": "2026-05-15T01:23:45Z"
+}
 ```
 
-### 6.7.4 外部調査情報
+### 6.4 段階設計
 
-外部調査情報には、少なくとも以下を付与する。
+段階設計の詳細は `stage-design.md` を参照。本書では要点のみ：
 
-- source_type
-- retrieved_at
-- applies_to
-- confidence
-- review_after
+- 固定の段階体系（L1〜L6 など）は持たない（思想 P10）
+- `policy.json` がプロジェクト全体の段階定義、REQ メタが REQ ごとの段階選択（二段構造）
+- 段階間の依存関係は DAG
+- 推奨段階数は 3〜7
+- 段階設計フェーズは「提案」と「採用」の 2 段階
+- 採用フェーズは `qgb validate-policy` をパスしないと完了しない
 
-外部情報は、古くなる可能性があるため、必要に応じて再確認対象とする。
+### 6.5 ファイル形式設計
 
----
-
-## 6.8 ファイル形式設計
-
-### 6.8.1 方針
-
-Phase 1では、以下の方針とする。
+#### 6.5.1 方針
 
 ```text
-JSON = 機械正本
+JSON     = 機械正本
 Markdown = 人間向け文書
 text/log = 実行ログ
-XML = JUnit等の互換出力が必要な場合のみ
-YAML = 原則使用しない
+XML      = 互換出力が必要な場合のみ
+YAML     = 原則使用しない
 ```
 
-### 6.8.2 JSON正本
-
-以下はJSONを正本とする。
+#### 6.5.2 JSON 正本
 
 - config.json
 - policy.json
 - contract.json
 - gate.json
-- req meta json
+- REQ メタ JSON
 - source-index.json
 - knowledge schema
 
-### 6.8.3 Markdown文書
+#### 6.5.3 Markdown 文書
 
-以下はMarkdownとする。
-
-- REQ本文
+- REQ 本文
 - summary.md
 - project-context.md
 - 導入マニュアル
-- LLMレビュー結果
+- LLM レビュー結果
 
-### 6.8.4 LLMによる編集方針
+#### 6.5.4 LLM による編集方針
 
-Phase 1ではJSON直接編集を許容するが、編集後に必ずvalidateする。
+Phase 1 では JSON 直接編集を許容するが、編集後に必ず `qgb validate` と `qgb validate-policy` を実行する。将来的には JSON Patch または専用 CLI による変更へ寄せる。
 
-将来的には、JSON Patchまたは専用CLIによる変更へ寄せる。
+### 6.6 依存ライブラリ・サプライチェーン設計
 
----
+#### 6.6.1 基本方針
 
-## 6.9 依存ライブラリ・サプライチェーン設計
+Phase 1 では外部依存を最小限にする。可能な限り Python 標準ライブラリで実装する。
 
-### 6.9.1 基本方針
+#### 6.6.2 調査項目
 
-Phase 1では、外部依存を最小限にする。
+外部依存採用時には、公式リポジトリ、配布元、メンテナンス状況、リリース履歴、ライセンス、既知脆弱性、不審なメンテナ交代、依存ツリーの大きさ、postinstall 等の危険な仕組みの有無、ネットワーク通信の有無、バイナリ配布の有無を確認する。
 
-可能な限りPython標準ライブラリで実装する。
+#### 6.6.3 PyPI に関する方針
 
-外部依存を採用する場合は、セキュリティ調査を要件とする。
-
-### 6.9.2 調査項目
-
-ライブラリ採用時には、以下を確認する。
-
-- 公式リポジトリ
-- パッケージレジストリ上の配布元
-- メンテナンス状況
-- リリース履歴
-- ライセンス
-- 既知脆弱性
-- 直近のセキュリティ報告
-- 不審なメンテナ交代
-- 依存ツリーの大きさ
-- postinstall等の危険な仕組みの有無
-- ネットワーク通信の有無
-- バイナリ配布の有無
-
-### 6.9.3 PyPIに関する方針
-
-PyPIもサプライチェーンリスクを持つ前提で扱う。
-
-Phase 1では、PyPIからの導入を必須にしない。
-
-初期利用者は、リポジトリを取得し、導入マニュアルに従ってローカル実行できればよい。
-
-### 6.9.4 依存候補
-
-Phase 1で外部依存を使う場合の候補は最小限とする。
-
-例：
-
-- JSON Schema検証ライブラリ
-
-ただし、採用前にセキュリティ確認を行い、標準ライブラリ実装で代替可能な場合は標準ライブラリを優先する。
+PyPI もサプライチェーンリスクを持つ前提で扱う。Phase 1 では PyPI からの導入を必須にしない。初期利用者は、リポジトリを取得し、導入マニュアルに従ってローカル実行できればよい。
 
 ---
 
-## 7. Phase 1 MVP定義
+## 7. Phase 1 MVP 定義
 
-## 7.1 Phase 1の目的
+### 7.1 Phase 1 の目的
 
-Phase 1では、完全な多言語品質ゲート生成基盤ではなく、Pythonバックエンドで動作する最小構成と、LLMユーザーが導入できるマニュアルを提供する。
+完全な多言語品質ゲート生成基盤ではなく、Python バックエンドで動作する最小構成と、LLM ユーザーが導入できるマニュアルを提供する。
 
-### 7.2 Phase 1必須成果物
+### 7.2 Phase 1 必須成果物
 
-- Python製 qgb CLI
+- Python 製 qgb CLI
 - `.quality-system` 初期化機能
-- config.json
-- policy.json
-- REQ Markdown + meta JSON
-- contract.json
-- gate.json
-- summary.md
-- command.log
-- L1 / L5中心の最小テスト構造
+- config.json、policy.json、REQ Markdown + meta JSON、contract.json、gate.json、summary.md
+- 採用側 (`evidence/`) と揮発側 (`artifacts/`) の 2 系統証跡
+- 段階設計フェーズ（パターン A: ルールベース推定 + 確認）
+- policy 設計検査器（`qgb validate-policy`）
 - Generic adapter
-- Python adapterまたはNode adapterの少なくとも一方
+- Python adapter
+- 設計例パック 3 例（`generic-minimal`, `python-cli-pytest`, `markdown-docs`）
 - 導入マニュアル
 - 依存ライブラリ調査ポリシー
+- 思想憲章、段階設計仕様、フレームワーク境界（本書と並列）
 
-### 7.3 Phase 1対応コマンド
+### 7.3 Phase 1 対応コマンド
 
 ```powershell
 python -m qgb init
 python -m qgb detect
-python -m qgb scaffold REQ-APP-001
+python -m qgb design-stages [--commit]
+python -m qgb scaffold <REQ>
 python -m qgb validate
-python -m qgb run REQ-APP-001
+python -m qgb validate-policy
+python -m qgb verify <REQ>
+python -m qgb run <REQ>
 ```
 
-### 7.4 Phase 1で扱う対象例
+### 7.4 Phase 1 で扱う対象例
 
-- Generic CLI
+- Generic（言語非依存、最小例）
 - Python CLI
-- Python FastAPI
-- Node CLI
+- Markdown ドキュメント群
 
-### 7.5 Phase 1で扱わないもの
+### 7.5 Phase 1 で扱わないもの
 
-- 完全なGUI
-- PyPI公開必須化
-- 完全なCI生成
-- 全言語アダプタ完成
-- 高度なLLMレビュー
+- 完全な GUI
+- PyPI 公開必須化
+- 完全な CI 生成
+- 全言語 adapter 完成
+- 高度な LLM レビュー
 - 高度な画面検査
 - 高度なセキュリティスキャン
+- 人間確認結果の evidence 取り込み
 
 ---
 
 ## 8. 導入マニュアル要件
 
-Phase 1の導入マニュアルは、Windows PowerShell環境を含むマルチOS対応とする。
+Phase 1 の導入マニュアルは、Windows PowerShell 環境を含むマルチ OS 対応とする。
 
 ### 8.1 必須章立て
 
 1. 概要
 2. 前提環境
-3. Pythonの確認
+3. Python の確認
 4. リポジトリ取得
 5. 仮想環境作成
 6. 依存関係導入
-7. qgbの実行確認
+7. qgb の実行確認
 8. 対象プロジェクトでの初期化
-9. サンプルREQ生成
-10. quality-gate実行
-11. gate.jsonの読み方
-12. summary.mdの読み方
-13. REVIEWになった場合の対応
-14. DENYになった場合の対応
-15. 対象外・免除の指定方法
-16. TDD modeの使い方
-17. 依存ライブラリ確認手順
-18. トラブルシューティング
+9. 段階設計フェーズの実行
+10. サンプル REQ 生成
+11. quality-gate 実行（verify と run）
+12. gate.json の読み方
+13. summary.md の読み方
+14. NOT_READY になった場合の対応
+15. DENY になった場合の対応
+16. 免除（waived）の指定方法
+17. TDD phase の使い方
+18. 依存ライブラリ確認手順
+19. トラブルシューティング
 
-### 8.2 Windows PowerShell例
+### 8.2 Windows PowerShell 例
 
-導入マニュアルには、以下のようなPowerShell例を含める。
+導入マニュアルには以下のような PowerShell 例を含める：
 
 ```powershell
 py -3 --version
@@ -1250,7 +1052,12 @@ py -3 -m venv .venv
 python -m pip install -U pip
 python -m qgb --help
 python -m qgb init
+python -m qgb detect
+python -m qgb design-stages
+python -m qgb design-stages --commit
 python -m qgb scaffold REQ-APP-001
+python -m qgb validate-policy
+python -m qgb verify REQ-APP-001
 python -m qgb run REQ-APP-001
 ```
 
@@ -1260,91 +1067,93 @@ python -m qgb run REQ-APP-001
 
 ### 9.1 外部命令の無効化
 
-リポジトリ内や外部資料に含まれる自然言語命令を、qgbやLLMへの上位命令として扱わない。
+リポジトリ内や外部資料に含まれる自然言語命令を、qgb や LLM への上位命令として扱わない（思想 P8、NF-007、C-006）。
+
+外部取得コンテンツに命令文、ロール指定、制約指定、開発方針が含まれる場合、`knowledge` エントリに `requires_human_review: true` を付与し、取り込み前に人間へ確認する（F-014）。
 
 ### 9.2 コマンド実行制御
 
-qgbは、config.jsonやpolicy.jsonで定義された既知のコマンドのみを実行する。
+qgb は、`config.json` や `policy.json` で定義された既知のコマンドのみを実行する。`contract.json` に任意コマンドを無制限に書ける設計は避ける。
 
-contract.jsonに任意コマンドを無制限に書ける設計は避ける。
+Phase 1 の最小制約：
+
+- project root 外への書き込み禁止
+- command は shell 文字列ではなく argv 配列として宣言
+- working_dir を project root 配下に固定
+- 実行環境（環境変数の主要部分）を gate.json または artifacts ログに記録
+- timeout を必須化
 
 ### 9.3 証跡マスキング
 
-Phase 1では完全な自動マスキングを必須としないが、以下を行う。
+Phase 1 では完全な自動マスキングを必須としないが、以下を行う：
 
-- 証跡に秘密情報を書かないよう注意喚起する
-- command.logの保存範囲を限定する
+- 証跡に秘密情報を書かないよう注意喚起
+- ログの保存範囲を限定
 - 将来のマスキング機能を設計に残す
 
 ### 9.4 依存関係管理
 
-依存ライブラリは最小限とし、採用時にはセキュリティ調査を行う。
-
-サプライチェーン攻撃の可能性を前提に、以下を避ける。
-
-- 不要な依存追加
-- メンテナンス不明なパッケージ
-- 不審なpostinstall
-- 不透明なバイナリ依存
-- 過剰に大きい依存ツリー
+依存ライブラリは最小限とし、採用時にはセキュリティ調査を行う。詳細は §6.6。
 
 ---
 
 ## 10. 代表ユースケース
 
-### 10.1 既存Python CLIプロジェクトへの導入
+### 10.1 既存 Python CLI プロジェクトへの導入
 
 ```text
-このPython CLIプロジェクトに、REQ駆動の品質ゲートを導入してください。
+この Python CLI プロジェクトに、REQ 駆動の品質ゲートを導入してください。
 終了コード、標準出力、生成ファイルを検査できる最小構成でお願いします。
 ```
 
 期待結果：
 
-- PythonまたはGeneric adapterを選択
-- CLI contractを生成
-- L1 / L5検査を生成
-- gate.jsonとsummary.mdを出力
+- Python または Generic adapter を選択
+- 段階設計フェーズで CLI 向け段階（コマンド成立 / 出力契約 / 異常系）を提案
+- 段階を policy.json に焼き込み
+- REQ サンプルを生成
+- `qgb run` で gate.json と summary.md を出力
 
-### 10.2 Nodeプロジェクトへの導入
+### 10.2 Markdown ドキュメント群への導入
 
 ```text
-このNodeプロジェクトに、Vitestを使った品質ゲートを作ってください。
+この Markdown ドキュメント群に、構造と用語統一を保証する品質ゲートを作ってください。
 ```
 
 期待結果：
 
-- Node adapterを選択
-- package.jsonを読み取る
-- testコマンドを検出
-- L1検査を生成
+- Generic adapter を選択
+- 段階設計フェーズで文書向け段階（必須見出し / 内部リンク健全性 / 用語表ベース表記統一）を提案
+- 段階を policy.json に焼き込み
+- 各文書を REQ として扱うか、文書群全体を 1 REQ とするかをユーザーと相談
 
-### 10.3 TDD modeでの新機能開発
+### 10.3 TDD 開始時点での導入
 
 ```text
-この新機能はTDDで進めたいです。
-REQ、contract、失敗する初期テスト、gateを先に作ってください。
+この新機能は TDD で進めたいです。
+REQ、contract、失敗する初期テスト、gate を先に作ってください。
 ```
 
 期待結果：
 
-- TDD modeでREQを作成
-- contractを作成
-- 失敗する初期テストを生成
-- Red段階のDENYを証跡化
+- `qgb tdd-init REQ-APP-001` で phase=red 状態を仕込む
+- REQ、contract、失敗する初期テストを生成
+- `qgb run` で phase=red の DENY を証跡化
+- 実装後に `qgb run` を再実行し、phase=green の ALLOW を目指す
 
 ### 10.4 ユーザー裁量による免除
 
 ```text
-このREQは内部バッチなのでL6体験検査は対象外にしてください。
+この REQ は内部バッチなので、UI 系の段階は免除してください。
 理由も証跡に残してください。
 ```
 
 期待結果：
 
-- policyまたはwaiverにout_of_scopeを記録
-- gate.jsonに対象外理由を記録
-- L6未設定をREVIEWにしない
+- 該当段階に `waived: true` と `waiver_reason` を付与
+- `knowledge.jsonl` に waiver エントリを追加
+- gate.json の `basis[]` で waiver を参照
+- waived 段階は判定対象から除外
 
 ---
 
@@ -1352,37 +1161,49 @@ REQ、contract、失敗する初期テスト、gateを先に作ってくださ�
 
 | リスク | 内容 | 対策 |
 |---|---|---|
-| LLM評価への依存 | 主観評価を合格根拠にしてしまう | LLM単独ALLOW禁止 |
-| ALLOW過信 | 完全な正しさと誤解される | decision.meaningに明記 |
-| 未設定検査の見落とし | SKIPが合格扱いされる | 原則REVIEW、対象外・免除は理由必須 |
-| JSON編集ミス | LLMがJSONを壊す | validate必須、将来JSON Patch化 |
-| 依存ライブラリリスク | PyPI等経由のサプライチェーン攻撃 | 依存最小化、採用前調査 |
+| LLM 評価への依存 | 主観評価を合格根拠にしてしまう | LLM 単独 ALLOW 禁止、`manual_check` の NOT_READY 化（思想 P6） |
+| ALLOW 過信 | 完全な正しさと誤解される | `decision.meaning` に明記（思想 P5、P11） |
+| 段階設計の甘さ | スキルが甘い段階を設計しても通る | `qgb validate-policy` で機械検査（思想 P9） |
+| 未定義検査の見落とし | 構成ミスが DENY に紛れる | NOT_READY 状態で gate.json を出さない |
+| 自由設計の恣意性 | プロジェクトごとに ALLOW の意味がずれる | 思想 P11、`basis[]` 必須化 |
+| JSON 編集ミス | LLM が JSON を壊す | `qgb validate`、`qgb validate-policy` 必須、将来 JSON Patch 化 |
+| 依存ライブラリリスク | PyPI 等経由のサプライチェーン攻撃 | 依存最小化、採用前調査 |
 | 証跡への機密混入 | ログに秘密情報が残る | 保存範囲制御、将来マスキング |
-| 導入が重い | ユーザーが使わない | Phase 1はPython CLI + マニュアルに限定 |
-| 多言語対応の複雑化 | adapterが肥大化する | Coreとadapterを分離 |
-| 外部情報の劣化 | 古い仕様を根拠にする | retrieved_at / review_afterを保持 |
+| 導入が重い | ユーザーが使わない | Phase 1 は Python CLI + マニュアルに限定 |
+| 外部情報の劣化 | 古い仕様を根拠にする | `retrieved_at` / `review_after` を保持 |
+| 任意コマンド実行 | contract から任意コマンドが走る | argv 配列宣言、working_dir 固定、timeout 必須 |
 
 ---
 
 ## 12. 受け入れ条件
 
-Phase 1は、以下を満たした場合に受け入れ可能とする。
+Phase 1 は以下を満たした場合に受け入れ可能とする：
 
-1. Pythonでqgb CLIを起動できる。
-2. `python -m qgb init` で `.quality-system` を生成できる。
-3. config.json、policy.json、REQ、contract.jsonを生成できる。
-4. `python -m qgb validate` でJSON正本を検証できる。
-5. `python -m qgb run REQ-APP-001` でgateを実行できる。
-6. gate.json、summary.md、command.logを出力できる。
-7. 検査成功時にALLOWを出せる。
-8. 検査失敗時にDENYを出せる。
-9. 未設定または不足時にREVIEWを出せる。
-10. out_of_scopeまたはwaivedを理由つきで記録できる。
-11. TDD modeでRed段階のDENYを期待結果として証跡化できる。
-12. Project Knowledge Baseにユーザー明示情報を保存できる。
-13. 導入マニュアルが存在する。
-14. 依存ライブラリ採用方針とセキュリティ確認手順が文書化されている。
-15. LLMレビュー単独でALLOWを出さない方針が明示されている。
+1. Python で qgb CLI を起動できる
+2. `python -m qgb init` で `.quality-system` を生成できる
+3. `python -m qgb detect` で対象系を推定できる
+4. `python -m qgb design-stages` で段階を提案でき、`--commit` で採用できる
+5. config.json、policy.json、REQ、contract.json を生成できる
+6. `python -m qgb validate` で JSON 正本を検証できる
+7. `python -m qgb validate-policy` で段階設計の品質を検査できる
+8. `python -m qgb verify <REQ>` で軽量チェックを実行できる
+9. `python -m qgb run <REQ>` で採用判定を残せる
+10. gate.json、summary.md、stages/\*.log を出力できる
+11. 採用側 (`evidence/.../latest/`) と揮発側 (`artifacts/.../runs/<ts>/`) の 2 系統に書き込める
+12. 検査成功時に ALLOW を出せる
+13. 検査失敗時に DENY を出せる
+14. 構成不備時に NOT_READY を出し、gate.json を生成しない
+15. `phase: red` の DENY を期待結果として証跡化できる
+16. `manual_check` を含む REQ の run は NOT_READY となる
+17. waived を理由つきで `knowledge.jsonl` に記録できる
+18. Project Knowledge Base にユーザー明示情報を保存できる
+19. 外部由来情報に `requires_human_review` を付与できる
+20. 設計例パック 3 例（generic-minimal / python-cli-pytest / markdown-docs）が動作する
+21. 導入マニュアルが存在する
+22. 依存ライブラリ採用方針とセキュリティ確認手順が文書化されている
+23. LLM レビュー単独で ALLOW を出さない方針が明示されている
+24. 思想憲章、段階設計仕様、フレームワーク境界の 3 文書が並列に維持されている
+25. `skills/source/` のディレクトリ構造が予約されており、Phase 5 でのエージェント中立スキル提供方針 (F-019) が要件として確定している
 
 ---
 
@@ -1390,77 +1211,82 @@ Phase 1は、以下を満たした場合に受け入れ可能とする。
 
 ### Phase 1: Python CLI MVP + 導入マニュアル
 
-- Python製qgb CLI
-- JSON正本
-- validate
-- init
-- scaffold
-- run
-- Generic adapter
-- 最小Python/Node adapter
+- Python 製 qgb CLI（init, detect, design-stages, scaffold, validate, validate-policy, verify, run）
+- JSON 正本、JSON Schema 検証
+- 段階設計フェーズ（パターン A）
+- policy 設計検査器
+- 採用 / 揮発の 2 系統証跡
+- Generic adapter、最小 Python adapter
+- 設計例パック 3 例
 - 導入マニュアル
 - 依存関係セキュリティ方針
 
-### Phase 2: 編集安全化
+### Phase 2: 編集安全化と拡張入口
 
-- JSON Patch対応
-- 専用CLIによるpolicy編集
-- waiver追加コマンド
-- knowledge追加コマンド
-- schema強化
+- JSON Patch 対応
+- 専用 CLI による policy 編集
+- waiver 追加コマンド、knowledge 追加コマンド
+- `qgb check` / `qgb dev` のような日常確認入口
+- schema 強化
+- 段階設計フェーズ（パターン B: 対話的設計）
+- 設計例パック追加（FastAPI / Next.js / Go）
 
-### Phase 3: adapter拡張
+### Phase 3: adapter 拡張
 
-- Go adapter
-- Rust adapter
-- .NET adapter
-- Java adapter
-- PHP adapter
+- Go adapter、Rust adapter、.NET adapter、Java adapter、PHP adapter
+- 言語ごとの設計例パック追加
 
-### Phase 4: CI連携
+### Phase 4: CI 連携
 
-- GitHub Actions例
-- GitLab CI例
-- JUnit XML出力
-- PRコメント用summary
+- GitHub Actions 例、GitLab CI 例
+- JUnit XML 出力
+- PR コメント用 summary
+- 採用判定のレビュー連動
 
-### Phase 5: Skill Creator化
+### Phase 5: Skill Creator 化（エージェント中立）
 
-- 対象プロジェクト専用スキル生成
-- skill-creator-plus
+- スキル中間表現 `skills/source/` の整備（`metadata.yaml`, `body.md`, `workflow.md`, `references.md`, `prompts/`）
+- コンバータ `tools/build_skill.py` の実装
+- Claude Code 向け成果物（`SKILL.md` + 補助ファイル）の生成
+- Codex CLI 向け成果物（`AGENTS.md` 単体）の生成
+- Gemini CLI 向け成果物（`GEMINI.md` + `.gemini/commands/qgb.toml`）の生成
+- 3 エージェント向け CI ビルドと GitHub Releases へのアタッチ
+- 段階設計フェーズ（パターン B / C）の自律実行
+- 設計例パック few-shot 参照
 - 主要言語ごとの生成例パック
-- LLM向け運用ガイド
+- 3 エージェント向け運用ガイド（インストール・更新・トラブルシューティング）
 
 ---
 
 ## 14. 結論
 
-quality-gate-builderは、LLMの生成能力を活用しつつ、その評価の揺らぎを外部化された構造で抑えるための品質ゲート生成基盤である。
+quality-gate-builder は、LLM の生成能力を活用しつつ、その評価の揺らぎを外部化された構造で抑えるための品質ゲート生成基盤である。
 
-本システムの中核は、以下の分離にある。
+本システムの中核は、以下の分離にある：
 
 ```text
 要求
 契約
-テスト
-証跡
-判定
+段階（対象系ごとに自由設計）
+証跡（採用 / 揮発の 2 系統）
+判定（ALLOW / DENY / NOT_READY の 3 層）
 根拠情報
 ```
 
-Phase 1では、対象プロジェクトの言語に依存しないPython製CLIとして最小実装し、JSONを機械正本、Markdownを人間向け文書として扱う。
+Phase 1 では、対象プロジェクトの言語に依存しない Python 製 CLI として最小実装し、JSON を機械正本、Markdown を人間向け文書として扱う。
 
 また、依存ライブラリ自体もサプライチェーンリスクを持つ前提で、標準ライブラリ中心・依存最小化・採用前調査を基本方針とする。
 
-最も重要な原則は以下である。
+最も重要な原則は思想憲章 (`philosophy.md`) に集約される。要約：
 
 ```text
-LLMは候補生成と補助レビューには使える。
-しかし、LLMの主観評価だけでALLOWを出してはならない。
-ALLOWは、定義済みの契約と検査に通過したことのみを意味する。
-未設定や判断不足はREVIEWとする。
-ただし、ユーザーが明示的に対象外または免除を定義した場合は、その理由を証跡に残したうえで判定へ反映できる。
+LLM は候補生成と補助レビューには使える。
+しかし、LLM の主観評価だけで ALLOW を出してはならない。
+ALLOW は、定義済みの段階と検査に通過したことのみを意味し、当該プロジェクト内の局所的判定である。
+DENY は失敗ではなく、揺らぎを安全に受け止めた結果である。
+NOT_READY は構成不備であり、gate.json には含まれない。
+段階は対象系ごとに自由設計されるが、単一責任原則と機械検査による品質保証が守られる。
+ユーザーが明示的に免除を定義した場合は、その理由を証跡に残したうえで判定から除外できる。
 ```
 
-この原則により、AI生成物を無批判に採用するのではなく、採用可能性を検査・説明・改善できる開発系を構築する。
-
+この原則により、AI 生成物を無批判に採用するのではなく、採用可能性を検査・説明・改善できる開発系を構築する。
