@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/policy.schema.json",
+  "title": "qgb policy",
+  "description": "Stage definitions for the project. Free-form id naming. DAG dependency checked at runtime.",
+  "type": "object",
+  "required": ["schema_version", "policy_id", "stages"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "policy_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stages": {
+      "type": "array",
+      "description": "List of stages defined for this project. Stage id uniqueness and DAG-ness are enforced at runtime, not in schema.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "responsibility", "depends_on", "verification_type"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage identifier, unique within this policy. Free-form (S1, L1, cmd, ...)."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "responsibility": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Single sentence describing the single responsibility of this stage."
+          },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "verification_type": {
+            "type": "string",
+            "enum": [
+              "command",
+              "file_exists",
+              "substring_match",
+              "json_schema",
+              "manual_check"
+            ]
+          },
+          "required_contract_fields": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true,
+            "description": "Field names that each contract.json MUST contain for this verification_type."
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

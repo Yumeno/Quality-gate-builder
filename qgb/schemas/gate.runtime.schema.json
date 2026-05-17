@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/gate.runtime.schema.json",
+  "title": "qgb gate report (volatile, permissive)",
+  "description": "Schema for gate.json under artifacts/.../runs/<timestamp>/. Same required fields as curated, but additionalProperties allowed for future expansion.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "req_id",
+    "timestamp_utc",
+    "timestamp_rfc3339",
+    "phase",
+    "status",
+    "failed_stage",
+    "decision",
+    "runner",
+    "paths",
+    "stages",
+    "basis"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "req_id": {
+      "type": "string",
+      "pattern": "^REQ-[A-Z0-9]+-[0-9]{3,}$"
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z$"
+    },
+    "timestamp_rfc3339": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["red", "green", "refactor", "verify"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ALLOW", "DENY"]
+    },
+    "failed_stage": { "type": "string" },
+    "decision": {
+      "type": "object",
+      "required": ["result", "meaning"],
+      "properties": {
+        "result": { "type": "string", "enum": ["ALLOW", "DENY"] },
+        "meaning": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "runner": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "paths": {
+      "type": "object",
+      "required": ["run_dir", "curated_latest_dir"],
+      "properties": {
+        "run_dir": { "type": "string", "minLength": 1 },
+        "curated_latest_dir": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "result", "verification_type"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "result": { "type": "string", "enum": ["passed", "failed"] },
+          "verification_type": {
+            "type": "string",
+            "enum": [
+              "command",
+              "file_exists",
+              "substring_match",
+              "json_schema",
+              "manual_check"
+            ]
+          },
+          "exit_code": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "maximum": 255
+          },
+          "contract_ref": { "type": "string", "minLength": 1 },
+          "log_ref": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "basis": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "ALLOW" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "properties": { "result": { "const": "ALLOW" } }
+          },
+          "failed_stage": { "const": "" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "DENY" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "properties": { "result": { "const": "DENY" } }
+          },
+          "failed_stage": { "minLength": 1 }
+        }
+      }
+    }
+  ]
+}

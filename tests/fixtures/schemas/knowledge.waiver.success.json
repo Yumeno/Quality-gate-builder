@@ -1,0 +1,11 @@
+{
+  "id": "WAIVER-REQ-APP-002-S6",
+  "kind": "waiver",
+  "title": "L6 体験段階の免除",
+  "applies_to": "REQ-APP-002",
+  "stage_id": "S6",
+  "reason": "Internal CLI tool, no UI",
+  "decided_by": "user",
+  "source_type": "user",
+  "created_at": "2026-05-18T01:23:45Z"
+}

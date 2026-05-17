@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-APP-001",
+  "timestamp_utc": "2026-05-18T012345Z",
+  "timestamp_rfc3339": "2026-05-18T01:23:45Z",
+  "phase": "verify",
+  "status": "ALLOW",
+  "failed_stage": "",
+  "decision": { "result": "ALLOW", "meaning": "ok" },
+  "runner": { "name": "qgb", "version": "0.1.0" },
+  "paths": {
+    "run_dir": ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z",
+    "curated_latest_dir": ".quality-system/evidence/REQ-APP-001/latest"
+  },
+  "stages": [
+    {
+      "id": "S1",
+      "name": "ファイル存在",
+      "result": "passed",
+      "verification_type": "file_exists"
+    }
+  ],
+  "basis": ["REQ-APP-001"],
+  "extra_debug_field": "permitted in runtime schema"
+}

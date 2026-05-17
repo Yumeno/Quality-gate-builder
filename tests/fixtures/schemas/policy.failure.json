@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "",
+      "name": "missing responsibility",
+      "responsibility": "",
+      "depends_on": [],
+      "verification_type": "shell_script"
+    }
+  ]
+}

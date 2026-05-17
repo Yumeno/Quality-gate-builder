@@ -1,0 +1,18 @@
+{
+  "req_id": "REQ-APP-002",
+  "title": "免除を含む要求",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-APP-002/S1.json",
+      "required": true
+    },
+    {
+      "stage_id": "S6",
+      "contract_ref": ".quality-system/contracts/REQ-APP-002/S6.json",
+      "required": true,
+      "waived": true,
+      "waiver_reason": "Internal CLI tool, no UI"
+    }
+  ]
+}

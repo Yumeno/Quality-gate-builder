@@ -1,0 +1,11 @@
+{
+  "id": "CTX-USER-001",
+  "kind": "user_instruction",
+  "title": "Target mode",
+  "content": "Use TDD mode for this feature.",
+  "source": "user",
+  "source_type": "user",
+  "confidence": "explicit",
+  "priority": "high",
+  "created_at": "2026-05-18T01:23:45Z"
+}

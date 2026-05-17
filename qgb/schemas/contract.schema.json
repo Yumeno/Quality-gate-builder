@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/contract.schema.json",
+  "title": "qgb contract (base)",
+  "description": "Base structure for a per-stage contract. verification_type determines additional required fields, validated separately.",
+  "type": "object",
+  "required": ["schema_version", "req_id", "stage_id", "verification_type"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "req_id": {
+      "type": "string",
+      "pattern": "^REQ-[A-Z0-9]+-[0-9]{3,}$"
+    },
+    "stage_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verification_type": {
+      "type": "string",
+      "enum": [
+        "command",
+        "file_exists",
+        "substring_match",
+        "json_schema",
+        "manual_check"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "verification_type": { "const": "command" } },
+        "required": ["verification_type"]
+      },
+      "then": {
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 1,
+            "description": "argv array (no shell). Required by the contract.command.schema.json."
+          },
+          "expected_exit_code": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255,
+            "default": 0
+          },
+          "working_dir": {
+            "type": "string",
+            "description": "Optional working directory, must resolve under the project root."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 60
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "verification_type": { "const": "file_exists" } },
+        "required": ["verification_type"]
+      },
+      "then": {
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Workspace-relative path that MUST exist."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "verification_type": { "const": "substring_match" } },
+        "required": ["verification_type"]
+      },
+      "then": {
+        "required": ["target", "must_contain"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "minLength": 1
+          },
+          "must_contain": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "verification_type": { "const": "json_schema" } },
+        "required": ["verification_type"]
+      },
+      "then": {
+        "required": ["target", "schema"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Workspace-relative path to the JSON Schema file that target must satisfy."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "verification_type": { "const": "manual_check" } },
+        "required": ["verification_type"]
+      },
+      "then": {
+        "required": ["description"],
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable description of the manual check. Cannot be the sole basis for ALLOW (philosophy P6)."
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

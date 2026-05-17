@@ -1,0 +1,10 @@
+{
+  "req_id": "REQ-APP-002",
+  "stages": [
+    {
+      "stage_id": "S6",
+      "contract_ref": ".quality-system/contracts/REQ-APP-002/S6.json",
+      "waived": true
+    }
+  ]
+}

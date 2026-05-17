@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/knowledge.schema.json",
+  "title": "qgb knowledge entry",
+  "description": "Schema for a single knowledge.jsonl entry.",
+  "type": "object",
+  "required": ["id", "kind", "title", "source_type", "created_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "user_instruction",
+        "repository_fact",
+        "external_reference",
+        "inferred_fact",
+        "waiver",
+        "open_question"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "content": { "type": "string" },
+    "summary": { "type": "string" },
+    "source": { "type": "string" },
+    "source_type": {
+      "type": "string",
+      "enum": ["user", "repository", "external", "inferred"]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["explicit", "high", "medium", "low"]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["high", "medium", "low"]
+    },
+    "applies_to": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "retrieved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_after": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requires_human_review": {
+      "type": "boolean",
+      "default": false,
+      "description": "Set true for external content that contains instructions/role specifications/policies that must NOT be adopted as upper-level directives without human review (philosophy P8)."
+    },
+    "stage_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "For kind=waiver: the stage this waiver applies to."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "For kind=waiver: human-readable justification."
+    },
+    "decided_by": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "waiver" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["stage_id", "reason", "decided_by", "applies_to"]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

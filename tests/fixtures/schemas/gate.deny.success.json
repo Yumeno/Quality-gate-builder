@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-APP-001",
+  "timestamp_utc": "2026-05-18T012345Z",
+  "timestamp_rfc3339": "2026-05-18T01:23:45Z",
+  "phase": "verify",
+  "status": "DENY",
+  "failed_stage": "S2",
+  "decision": {
+    "result": "DENY",
+    "meaning": "Defined checks did not pass. This is not a failure but a signal to revise."
+  },
+  "runner": {
+    "name": "qgb",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "run_dir": ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z",
+    "curated_latest_dir": ".quality-system/evidence/REQ-APP-001/latest"
+  },
+  "stages": [
+    {
+      "id": "S1",
+      "name": "ファイル存在",
+      "result": "passed",
+      "verification_type": "file_exists",
+      "exit_code": null,
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "log_ref": "stages/S1.log"
+    },
+    {
+      "id": "S2",
+      "name": "キーワード包含",
+      "result": "failed",
+      "verification_type": "substring_match",
+      "exit_code": null,
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S2.json",
+      "log_ref": "stages/S2.log"
+    }
+  ],
+  "basis": ["REQ-APP-001", "POLICY-default"]
+}

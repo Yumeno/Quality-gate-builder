@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/config.schema.json",
+  "title": "qgb config",
+  "type": "object",
+  "required": ["schema_version", "project", "qgb"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "project": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "target_language": { "type": "string" },
+        "framework": { "type": "string" },
+        "package_manager": { "type": "string" },
+        "test_runner": { "type": "string" },
+        "lint": { "type": "string" },
+        "typecheck": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "qgb": {
+      "type": "object",
+      "required": ["core_language", "version"],
+      "properties": {
+        "core_language": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

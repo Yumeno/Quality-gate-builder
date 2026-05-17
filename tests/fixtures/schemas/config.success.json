@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "name": "sample-project"
+  },
+  "runtime": {
+    "target_language": "python",
+    "test_runner": "pytest"
+  },
+  "qgb": {
+    "core_language": "python",
+    "version": "0.1.0"
+  },
+  "commands": {
+    "unit_test": "pytest"
+  }
+}
