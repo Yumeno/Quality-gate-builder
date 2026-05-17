@@ -34,9 +34,6 @@ dev = [
     "ruff>=0.5",
 ]
 
-[project.scripts]
-qgb = "qgb.__main__:main"
-
 [project.urls]
 Repository = "https://github.com/Yumeno/Quality-gate-builder"
 Issues = "https://github.com/Yumeno/Quality-gate-builder/issues"

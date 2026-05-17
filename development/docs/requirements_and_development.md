@@ -842,7 +842,10 @@ python -m qgb tdd-init <REQ>
 | 0 | 成功（ALLOW、または検査自体の成功） |
 | 1 | DENY |
 | 2 | NOT_READY（構成不備、ファイル不在、検証エラー） |
+| 64 | CLI usage error（不明な引数、未実装サブコマンドの呼び出し、argparse のエラー） |
 | その他 | 内部エラー |
+
+`64` は BSD sysexits.h の `EX_USAGE` に対応する。`argparse` はデフォルトで引数エラー時に exit 2 を返すが、これは NOT_READY と衝突するため、qgb の CLI は argparse の `error()` を上書きして exit 64 に逃がす。NOT_READY (exit 2) は実行前検証フェーズが意図的に返す状態であり、CLI の引数エラーとは区別される。
 
 #### 6.2.4 将来コマンド
 
