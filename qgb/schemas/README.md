@@ -36,8 +36,10 @@ Phase 1 で対応:
 - **`responsibility` は単一文を要求**: minLength: 1 にとどめ、複数センテンスかどうかは validate-policy 側で警告する。
 - **REQ id 形式**: `^REQ-[A-Z0-9]+-[0-9]{3,}$` (core 互換)。
 - **timestamp 二系統**: `YYYY-MM-DDTHHMMSSZ` (履歴・ファイルパス互換) と RFC3339 (ツール互換) を両方記録。
-- **gate.json の `if/then` 制約**: `status: ALLOW` のとき `failed_stage` は空文字、`status: DENY` のとき `failed_stage` は非空、`decision.result` と `status` は同値。
-- **`exit_code` は null 許容**: `file_exists` や `json_schema` など外部プロセスを起動しない stage では null。
+- **gate.json の `if/then` 制約**: `status: ALLOW` のとき `failed_stage` は空文字、`decision.result` は `ALLOW`、全 `stages[].result` は `passed`。`status: DENY` のとき `failed_stage` は非空、`decision.result` は `DENY`、少なくとも 1 つの `stages[].result` が `failed`。
+- **`exit_code` は null 許容、ただし必須**: `file_exists` や `json_schema` など外部プロセスを起動しない stage では null を入れる（フィールド自体は必須）。
+- **採用判定証跡の stage は contract_ref / log_ref / exit_code が必須**: 思想 P7（再現可能な証跡）を schema レベルで強制。揮発側 (`gate.runtime.schema.json`) では緩い。
+- **`format: date-time` は qgb 独自 format checker で強制**: jsonschema の built-in には date-time 検査が含まれないため、`qgb.core.schema` で stdlib 経由の RFC3339 チェッカーを追加登録（NF-010 依存最小化）。
 
 ## 思想憲章との対応
 

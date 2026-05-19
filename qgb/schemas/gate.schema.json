@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/gate.schema.json",
   "title": "qgb gate report (curated, strict)",
-  "description": "Schema for the curated gate.json under evidence/<REQ>/latest/. Strict (additionalProperties false) to keep committed evidence clean.",
+  "description": "Schema for the curated gate.json under evidence/<REQ>/latest/. Strict (additionalProperties false) at every level to keep committed evidence clean.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -87,7 +87,15 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name", "result", "verification_type"],
+        "required": [
+          "id",
+          "name",
+          "result",
+          "verification_type",
+          "exit_code",
+          "contract_ref",
+          "log_ref"
+        ],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
@@ -130,7 +138,7 @@
   },
   "allOf": [
     {
-      "description": "decision.result must match status.",
+      "description": "ALLOW: failed_stage must be empty, decision.result must be ALLOW, every stage must have result=passed.",
       "if": {
         "properties": { "status": { "const": "ALLOW" } },
         "required": ["status"]
@@ -140,12 +148,17 @@
           "decision": {
             "properties": { "result": { "const": "ALLOW" } }
           },
-          "failed_stage": { "const": "" }
+          "failed_stage": { "const": "" },
+          "stages": {
+            "items": {
+              "properties": { "result": { "const": "passed" } }
+            }
+          }
         }
       }
     },
     {
-      "description": "DENY: failed_stage must be non-empty; decision.result must be DENY.",
+      "description": "DENY: failed_stage must be non-empty, decision.result must be DENY, at least one stage must have result=failed.",
       "if": {
         "properties": { "status": { "const": "DENY" } },
         "required": ["status"]
@@ -155,7 +168,13 @@
           "decision": {
             "properties": { "result": { "const": "DENY" } }
           },
-          "failed_stage": { "minLength": 1 }
+          "failed_stage": { "minLength": 1 },
+          "stages": {
+            "contains": {
+              "properties": { "result": { "const": "failed" } },
+              "required": ["result"]
+            }
+          }
         }
       }
     }

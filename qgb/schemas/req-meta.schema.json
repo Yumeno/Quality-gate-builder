@@ -5,6 +5,11 @@
   "type": "object",
   "required": ["req_id", "stages"],
   "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Optional in Phase 1; will become required once REQ meta migrations begin."
+    },
     "req_id": {
       "type": "string",
       "pattern": "^REQ-[A-Z0-9]+-[0-9]{3,}$"

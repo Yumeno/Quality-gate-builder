@@ -20,7 +20,10 @@
       "id": "S1",
       "name": "ファイル存在",
       "result": "failed",
-      "verification_type": "file_exists"
+      "verification_type": "file_exists",
+      "exit_code": null,
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "log_ref": "stages/S1.log"
     }
   ],
   "basis": ["REQ-APP-001"]
