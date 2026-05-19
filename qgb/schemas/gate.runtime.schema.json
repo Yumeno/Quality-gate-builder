@@ -30,7 +30,8 @@
     },
     "timestamp_utc": {
       "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z$"
+      "description": "Compact UTC timestamp used in volatile run-dir names: YYYY-MM-DDTHHMMSSZ.",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T(0[0-9]|1[0-9]|2[0-3])([0-5][0-9]){2}Z$"
     },
     "timestamp_rfc3339": {
       "type": "string",
@@ -112,6 +113,7 @@
   },
   "allOf": [
     {
+      "description": "ALLOW: failed_stage must be empty, decision.result must be ALLOW, every stage must have result=passed. Same semantic constraints as the curated schema; only the additionalProperties policy differs.",
       "if": {
         "properties": { "status": { "const": "ALLOW" } },
         "required": ["status"]
@@ -121,11 +123,17 @@
           "decision": {
             "properties": { "result": { "const": "ALLOW" } }
           },
-          "failed_stage": { "const": "" }
+          "failed_stage": { "const": "" },
+          "stages": {
+            "items": {
+              "properties": { "result": { "const": "passed" } }
+            }
+          }
         }
       }
     },
     {
+      "description": "DENY: failed_stage must be non-empty, decision.result must be DENY, at least one stage must have result=failed.",
       "if": {
         "properties": { "status": { "const": "DENY" } },
         "required": ["status"]
@@ -135,7 +143,13 @@
           "decision": {
             "properties": { "result": { "const": "DENY" } }
           },
-          "failed_stage": { "minLength": 1 }
+          "failed_stage": { "minLength": 1 },
+          "stages": {
+            "contains": {
+              "properties": { "result": { "const": "failed" } },
+              "required": ["result"]
+            }
+          }
         }
       }
     }

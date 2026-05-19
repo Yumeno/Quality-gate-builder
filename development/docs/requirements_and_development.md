@@ -415,6 +415,14 @@ Phase 1 で対応する検査種別：
 - `json_schema` — JSON Schema 検証
 - `manual_check` — 人間判断（採用判定の根拠にできない）
 
+##### contract.json の verification_type 固有フィールドの扱い
+
+`contract.json` には `verification_type` ごとに必須・任意のフィールドが定まる（例: `command` なら `command`/`expected_exit_code`、`file_exists` なら `target`）。**当該 `verification_type` に対応しない余計なフィールド（別 type の必須フィールド）が混在することは、`qgb validate` 系コマンドで error として扱う**。
+
+- `contract.schema.json` 自体は拡張可能性のため `additionalProperties: true` を維持する
+- 検査種別と field の整合性は、`qgb validate` または `qgb validate-policy` 実装時に runner レベルで強制する
+- これは思想 P5（ALLOW/DENY の意味の限定）および P7（再現可能な証跡）を、契約の曖昧さで損なわせないための制約である
+
 #### F-006: 段階設計フェーズ
 
 固定の段階体系を持たず、対象系に応じた段階を設計するフェーズを提供する。仕様の詳細は `stage-design.md` を参照。

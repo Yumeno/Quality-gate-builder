@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import resources
+from importlib.resources.abc import Traversable
 from typing import Any
 
 import jsonschema
@@ -38,6 +39,15 @@ def _to_pointer(parts: object) -> str:
     return "/" + "/".join(_json_pointer_escape(t) for t in tokens)
 
 
+def schemas_root() -> Traversable:
+    """Return the bundled schemas directory as an ``importlib.resources.Traversable``.
+
+    Use this when you need to enumerate or inspect the bundled schemas without
+    materialising real on-disk paths (which would break wheel/zip installs).
+    """
+    return resources.files("qgb").joinpath("schemas")
+
+
 def load_schema(name: str) -> dict[str, Any]:
     """Load a bundled schema by short name (e.g. "gate", "policy").
 
@@ -46,7 +56,7 @@ def load_schema(name: str) -> dict[str, Any]:
     """
     if name not in SCHEMA_FILES:
         raise KeyError(f"Unknown schema name: {name!r}. Known: {sorted(SCHEMA_FILES)}")
-    resource = resources.files("qgb").joinpath("schemas", SCHEMA_FILES[name])
+    resource = schemas_root().joinpath(SCHEMA_FILES[name])
     with resource.open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -62,9 +72,11 @@ def _build_format_checker() -> FormatChecker:
     ``jsonschema`` ships built-in checkers for ``date``, ``email``, ``ipv4``,
     ``ipv6``, ``regex``, and ``uuid`` (and ``idn-email``). It does NOT enforce
     ``date-time`` by default (it requires the optional ``rfc3339-validator``
-    package). qgb depends on ``date-time`` (gate.json timestamps, knowledge
-    entries) so we register a checker here using the stdlib only, preserving
-    NF-010 (minimal dependencies).
+    package). qgb relies on ``date-time`` for gate.json timestamps and
+    knowledge entries, so we register a checker here using only the stdlib
+    (preserving NF-010, minimal dependencies). The checker validates the
+    RFC3339 *shape* qgb uses (YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)); it does
+    not aim for full RFC3339 conformance (e.g. leap seconds).
     """
     checker = FormatChecker()
     # Copy the bundled checkers from the canonical FORMAT_CHECKER (date, email,
@@ -77,7 +89,7 @@ def _build_format_checker() -> FormatChecker:
         if not isinstance(value, str):
             return False
         if not _RFC3339_DATE_TIME_RE.match(value):
-            raise ValueError(f"not a valid RFC3339 date-time: {value!r}")
+            raise ValueError(f"not in the RFC3339 date-time shape qgb uses: {value!r}")
         # Final sanity check via fromisoformat (Python 3.11+ accepts the trailing Z).
         # Python 3.10 needs "Z" replaced with "+00:00".
         candidate = value.replace("Z", "+00:00") if value.endswith("Z") else value

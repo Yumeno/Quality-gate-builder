@@ -14,6 +14,7 @@ from qgb.core.schema import (
     ValidationIssue,
     is_valid,
     load_schema,
+    schemas_root,
     validate,
 )
 
@@ -49,6 +50,22 @@ def test_all_schemas_are_loadable_via_importlib_resources() -> None:
         schema = load_schema(name)
         assert isinstance(schema, dict)
         assert "$schema" in schema
+
+
+def test_schemas_root_exposes_bundled_schema_files() -> None:
+    root = schemas_root()
+    # Traversable: list the entries and ensure each schema file is present.
+    names = {entry.name for entry in root.iterdir()}
+    for filename in SCHEMA_FILES.values():
+        assert filename in names, f"missing bundled schema: {filename!r} (have: {sorted(names)})"
+
+
+def test_schemas_root_entries_are_readable() -> None:
+    root = schemas_root()
+    config_resource = root.joinpath("config.schema.json")
+    with config_resource.open("r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+    assert payload["title"] == "qgb config"
 
 
 # --- config ---
@@ -256,6 +273,28 @@ def test_gate_bad_timestamp_rfc3339_rejected() -> None:
     assert _has_instance_path(issues, "/timestamp_rfc3339")
 
 
+@pytest.mark.parametrize(
+    "bogus_value",
+    [
+        "2026-99-99T999999Z",     # impossible month / day / time-of-day
+        "2026-13-01T000000Z",     # invalid month
+        "2026-02-32T000000Z",     # invalid day
+        "2026-05-18T240000Z",     # invalid hour
+        "2026-05-18T006000Z",     # invalid minute
+        "2026-05-18T000060Z",     # invalid second
+        "26-05-18T000000Z",       # wrong year width
+        "2026-05-18T000000",      # missing trailing Z
+    ],
+)
+def test_gate_timestamp_utc_regex_rejects_bogus_values(bogus_value: str) -> None:
+    """Codex review item 8: timestamp_utc must not accept obviously invalid components."""
+    payload = _load_fixture("gate.allow.success.json")
+    payload["timestamp_utc"] = bogus_value
+    issues = validate(payload, "gate")
+    assert issues, f"timestamp_utc must reject {bogus_value!r}"
+    assert _has_instance_path(issues, "/timestamp_utc")
+
+
 def test_gate_stage_requires_contract_ref_and_log_ref() -> None:
     """Codex review item 3: curated gate requires contract_ref and log_ref per stage."""
     payload = _load_fixture("gate.allow.success.json")
@@ -300,6 +339,25 @@ def test_gate_runtime_still_enforces_decision_result_match() -> None:
     assert issues, "runtime schema also enforces decision.result vs status"
 
 
+def test_gate_runtime_rejects_allow_with_failed_stage_result() -> None:
+    """status=ALLOW must imply every stages[].result=passed, even on runtime side."""
+    issues = validate(
+        _load_fixture("gate.allow_with_failed_stage_result.failure.json"), "gate-runtime"
+    )
+    assert issues, (
+        "runtime gate.json must also reject ALLOW + failed stage result; "
+        "volatile artifacts feed into curated evidence and must not be semantically inconsistent"
+    )
+
+
+def test_gate_runtime_rejects_deny_with_all_passed_stages() -> None:
+    """status=DENY must require at least one failed stage, even on runtime side."""
+    issues = validate(
+        _load_fixture("gate.deny_with_all_passed_stages.failure.json"), "gate-runtime"
+    )
+    assert issues, "runtime gate.json must also reject DENY + all stages passed"
+
+
 # --- knowledge ---
 
 
@@ -338,21 +396,47 @@ def test_knowledge_bad_created_at_format_rejected() -> None:
 # --- ValidationIssue path is an RFC 6901 JSON Pointer ---
 
 
-def test_validation_issue_path_uses_json_pointer_escapes() -> None:
-    """If an instance has a key with `/` or `~`, ValidationIssue.path must escape it.
-
-    Build a synthetic schema/instance pair to drive a known violation under such a key.
-    """
-    # Construct a schema that requires a specific field to be a string;
-    # then feed a violation through validate() to inspect the resulting pointer.
-    # We piggyback on the policy schema by sticking a violation in `policy_id`.
+def test_validation_issue_path_for_simple_key_starts_with_slash() -> None:
+    """Simple keys (no `/` or `~`) still produce a leading `/` per RFC 6901."""
     payload = _load_fixture("policy.success.json")
-    payload["policy_id"] = 123  # type: ignore[assignment]  # wrong type triggers an error
+    payload["policy_id"] = 123  # wrong type triggers an error at /policy_id
     issues = validate(payload, "policy")
     assert issues
-    # /policy_id is a simple path; no escape needed. But the pointer must start with /.
-    assert any(i.path.startswith("/") for i in issues)
     assert any(i.path == "/policy_id" for i in issues), [i.path for i in issues]
+
+
+def test_validation_issue_path_escapes_tilde_and_slash_per_rfc6901() -> None:
+    """Keys containing `/` or `~` must be escaped to `~1` and `~0` respectively.
+
+    We drive a real violation through a synthetic Draft 2020-12 validator so the
+    error path runs through ``ValidationIssue.from_error`` with awkward keys.
+    """
+    from jsonschema import Draft202012Validator
+
+    synthetic_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "patternProperties": {
+            "^.+$": {"type": "string"},
+        },
+    }
+    instance = {
+        "weird/key": 1,           # value of wrong type at "weird/key"
+        "ti~de": 2,               # value of wrong type at "ti~de"
+        "mixed/with~both": 3,     # value of wrong type at "mixed/with~both"
+    }
+    validator = Draft202012Validator(synthetic_schema)
+    issues = sorted(
+        (ValidationIssue.from_error(e) for e in validator.iter_errors(instance)),
+        key=lambda i: i.path,
+    )
+    paths = {i.path for i in issues}
+    # RFC 6901 §4: '~' -> '~0', '/' -> '~1'.
+    assert "/weird~1key" in paths, paths
+    assert "/ti~0de" in paths, paths
+    # Both characters escaped within the same token; '~' must be escaped first
+    # to avoid creating a spurious '~1' from a real slash.
+    assert "/mixed~1with~0both" in paths, paths
 
 
 # --- Stable ordering of issues ---

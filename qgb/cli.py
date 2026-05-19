@@ -11,7 +11,12 @@ from qgb import __version__
 EXIT_OK = 0
 EXIT_DENY = 1
 EXIT_NOT_READY = 2
-EXIT_USAGE = 64  # BSD sysexits EX_USAGE; also used for not-yet-implemented subcommands
+EXIT_USAGE = 64  # BSD sysexits EX_USAGE. See requirements doc §6.2.3.
+# Phase 1 transitional: stub handlers for not-yet-implemented subcommands also
+# return EXIT_USAGE so callers can distinguish CLI-level problems from gate
+# decisions (ALLOW=0, DENY=1) and from NOT_READY=2. Once every subcommand is
+# implemented, this overload disappears and EXIT_USAGE is reserved for genuine
+# argparse usage errors.
 
 
 class QgbArgumentParser(argparse.ArgumentParser):
@@ -29,7 +34,7 @@ class QgbArgumentParser(argparse.ArgumentParser):
 
 def _not_implemented(command: str) -> int:
     print(
-        f"qgb {command}: command is not implemented yet (Phase 1, Step 0).",
+        f"qgb {command}: command is not implemented yet in this Phase 1 build.",
         file=sys.stderr,
     )
     return EXIT_USAGE
