@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "ファイル存在",
+      "responsibility": "target ファイルが存在する",
+      "depends_on": [],
+      "verification_type": "file_exists",
+      "required_contract_fields": ["target"]
+    },
+    {
+      "id": "S2",
+      "name": "キーワード包含",
+      "responsibility": "target ファイルに必須キーワードが含まれる",
+      "depends_on": ["S1"],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    }
+  ]
+}

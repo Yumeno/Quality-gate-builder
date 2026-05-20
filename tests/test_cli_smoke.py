@@ -70,12 +70,25 @@ def test_unknown_top_level_flag_exits_with_usage_code() -> None:
 
 
 def _run_qgb(*args: str) -> subprocess.CompletedProcess[str]:
+    """Spawn `python -m qgb ...` with UTF-8 forced on both ends.
+
+    Windows defaults to the active code page (e.g. CP932) for console I/O, so
+    the child process can produce bytes the parent's UTF-8 reader thread
+    cannot decode. ``PYTHONIOENCODING=utf-8`` and ``PYTHONUTF8=1`` make the
+    child use UTF-8 unconditionally.
+    """
+    import os
+
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     return subprocess.run(
         [sys.executable, "-m", "qgb", *args],
         check=False,
         capture_output=True,
         text=True,
         encoding="utf-8",
+        env=env,
     )
 
 

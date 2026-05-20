@@ -1,0 +1,16 @@
+{
+  "req_id": "REQ-APP-001",
+  "title": "サンプル要求",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "required": true
+    },
+    {
+      "stage_id": "S2",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S2.json",
+      "required": true
+    }
+  ]
+}

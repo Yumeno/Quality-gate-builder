@@ -1,0 +1,10 @@
+{
+  "req_id": "REQ-APP-001",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "required": true
+    }
+  ]
+}
