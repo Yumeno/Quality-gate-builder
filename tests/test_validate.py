@@ -1,4 +1,11 @@
-"""Tests for the validate command (Step 2, with Step 2 patch corrections)."""
+"""Tests for the validate command (Step 2).
+
+Scope: ``qgb validate`` checks each existing JSON spec file against the
+bundled schemas and enforces the §F-005 contract field policy. Cross-file
+integrity, tree-shape, and missing required files are NOT this command's
+concern (delegated to ``qgb validate-policy`` and ``qgb run`` preflight in
+later steps).
+"""
 
 from __future__ import annotations
 
@@ -13,7 +20,6 @@ import pytest
 from qgb.cli import EXIT_NOT_READY, EXIT_OK, EXIT_USAGE, main
 from qgb.core.validate import (
     FieldMismatch,
-    IntegrityIssue,
     ReadError,
     _check_contract_field_mismatch,
     run_validate,
@@ -46,12 +52,9 @@ def test_run_validate_reports_schema_violations() -> None:
 def test_run_validate_reports_contract_field_mismatches() -> None:
     report = run_validate(FIXTURES / "field_mismatch")
     assert report.field_mismatches, "expected at least one field mismatch"
-    # The contract declares verification_type=file_exists but also includes
-    # `command` and `expected_exit_code` (which belong to verification_type=command).
     by_field = {fm.field_name: fm for fm in report.field_mismatches}
     assert by_field["command"].owning_verification_type == "command"
     assert by_field["expected_exit_code"].owning_verification_type == "command"
-    # No schema violations are expected on this fixture (Codex re-review item 7).
     assert not report.schema_issues, report.schema_issues
 
 
@@ -76,37 +79,6 @@ def test_run_validate_files_checked_order_is_stable() -> None:
     report = run_validate(FIXTURES / "valid")
     schema_order = [name for _, name in report.files_checked]
     assert schema_order == ["config", "policy", "req-meta", "contract", "contract"]
-
-
-# ---- integrity ------------------------------------------------------------
-
-
-def test_run_validate_reports_missing_required_files() -> None:
-    """Codex review #2: missing config.json / policy.json must be flagged."""
-    report = run_validate(FIXTURES / "missing_required")
-    kinds = sorted(ii.kind for ii in report.integrity_issues)
-    assert "missing_file" in kinds, [ii.message for ii in report.integrity_issues]
-    files = sorted(ii.file.name for ii in report.integrity_issues)
-    assert "config.json" in files
-    assert "policy.json" in files
-
-
-def test_run_validate_reports_dangling_contract_ref_and_unknown_stage_id() -> None:
-    """Codex review #2: REQ meta pointing at missing contract / unknown stage."""
-    report = run_validate(FIXTURES / "dangling_ref")
-    kinds = sorted(ii.kind for ii in report.integrity_issues)
-    assert "dangling_contract_ref" in kinds, [ii.message for ii in report.integrity_issues]
-    assert "unknown_stage_id" in kinds, [ii.message for ii in report.integrity_issues]
-
-
-def test_run_validate_reports_misplaced_contract() -> None:
-    """Contracts must live at contracts/<REQ>/<stage>.json, not deeper."""
-    report = run_validate(FIXTURES / "misplaced_contract")
-    misplaced = [ii for ii in report.integrity_issues if ii.kind == "misplaced_contract"]
-    assert misplaced, [ii.message for ii in report.integrity_issues]
-    # The deep contract file should also NOT be enumerated as a checked file.
-    checked = [str(p) for p, _ in report.files_checked]
-    assert not any("stages" in str(p) for p in checked), checked
 
 
 # ---- contract field policy ------------------------------------------------
@@ -138,7 +110,7 @@ def test_check_contract_field_mismatch_unknown_verification_type_skipped() -> No
 
 
 def test_check_contract_field_mismatch_flags_foreign_typed_field() -> None:
-    """Codex review #3: only fields owned by a *different* known type are flagged."""
+    """§F-005: only fields owned by a *different* known type are flagged."""
     payload = {
         "schema_version": "1.0",
         "req_id": "REQ-APP-001",
@@ -159,7 +131,7 @@ def test_check_contract_field_mismatch_flags_foreign_typed_field() -> None:
 
 
 def test_check_contract_field_mismatch_accepts_forward_compatible_field() -> None:
-    """Codex review #3: fields not owned by any known type are forward-compatible.
+    """§F-005: fields not owned by any known type are forward-compatible.
 
     NOTE: "description" already belongs to manual_check, so it would be
     flagged on a non-manual contract. Truly forward-compatible fields are
@@ -212,7 +184,6 @@ def test_cli_validate_on_valid_project_exits_zero(
     assert "OK:" in captured.out
     assert "Schema violations" not in captured.out
     assert "Contract field mismatches" not in captured.out
-    assert "Integrity issues" not in captured.out
 
 
 def test_cli_validate_on_schema_violation_exits_not_ready(
@@ -231,16 +202,6 @@ def test_cli_validate_on_field_mismatch_exits_not_ready(
     captured = capsys.readouterr()
     assert exit_code == EXIT_NOT_READY
     assert "Contract field mismatches" in captured.err
-
-
-def test_cli_validate_on_dangling_ref_exits_not_ready(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = main(["validate", "--path", str(FIXTURES / "dangling_ref")])
-    captured = capsys.readouterr()
-    assert exit_code == EXIT_NOT_READY
-    assert "Integrity issues" in captured.err
-    assert "dangling_contract_ref" in captured.err
 
 
 def test_cli_validate_on_invalid_json_exits_not_ready(
@@ -265,7 +226,7 @@ def test_cli_validate_with_nonexistent_path_exits_usage(
 def test_cli_validate_with_file_path_exits_usage(
     capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    """Codex review #1: --path must point at a directory, not a regular file."""
+    """--path must point at a project directory, not a regular file."""
     f = tmp_path / "some.json"
     f.write_text("{}", encoding="utf-8")
     exit_code = main(["validate", "--path", str(f)])
@@ -300,8 +261,7 @@ def test_cli_validate_json_output_on_valid(
     assert payload["summary"]["schema_issues"] == 0
     assert payload["summary"]["field_mismatches"] == 0
     assert payload["summary"]["read_errors"] == 0
-    assert payload["summary"]["integrity_issues"] == 0
-    # Codex review #7: --json must not pollute stderr with diagnostic text.
+    # --json must not pollute stderr with diagnostic text.
     assert captured.err == "", f"stderr should be empty when --json is used, got: {captured.err!r}"
 
 
@@ -320,27 +280,11 @@ def test_cli_validate_json_output_on_field_mismatch(
         payload["summary"]["schema_issues"]
         + payload["summary"]["field_mismatches"]
         + payload["summary"]["read_errors"]
-        + payload["summary"]["integrity_issues"]
     )
     flagged = {item["field"]: item for item in payload["field_mismatches"]}
     assert "command" in flagged
     assert flagged["command"]["owning_verification_type"] == "command"
     assert captured.err == ""
-
-
-def test_cli_validate_json_output_on_integrity_issues(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = main(
-        ["validate", "--path", str(FIXTURES / "dangling_ref"), "--json"]
-    )
-    captured = capsys.readouterr()
-    assert exit_code == EXIT_NOT_READY
-    payload = json.loads(captured.out)
-    assert payload["summary"]["integrity_issues"] >= 2
-    kinds = {item["kind"] for item in payload["integrity_issues"]}
-    assert "dangling_contract_ref" in kinds
-    assert "unknown_stage_id" in kinds
 
 
 # ---- subprocess smoke ----------------------------------------------------
@@ -389,11 +333,3 @@ def test_subprocess_validate_json_output() -> None:
     assert payload["ok"] is True
     # JSON mode must not write diagnostic text to stderr.
     assert result.stderr == "", f"stderr should be empty, got: {result.stderr!r}"
-
-
-def test_unused_imports_are_still_used() -> None:
-    """Sanity assertion that the public exports we import are still referenced.
-
-    This guards against ruff F401 hiding because we use them through pytest.
-    """
-    assert IntegrityIssue.__name__ == "IntegrityIssue"

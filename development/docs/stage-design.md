@@ -260,12 +260,14 @@ $ qgb design-stages --revise
 
 ## 11. policy 設計検査器（`qgb validate-policy`）
 
-思想憲章の制約を機械的に強制する。
+思想憲章の制約を機械的に強制する。`qgb validate` (個別 JSON 仕様ファイルがスキーマに従っているか) とは別の責務として、正本ツリー全体の整合性と設計品質を見る。
 
 ### Phase 1 必須検査項目
 
 | 検査 | 種別 | 思想根拠 |
 |---|---|---|
+| 必須正本ファイル `.quality-system/config.json` が存在する | error | P7 |
+| 必須正本ファイル `.quality-system/policy.json` が存在する | error | P7 |
 | stage id の重複なし | error | P9 |
 | `depends_on` が DAG（循環なし） | error | P9 |
 | `depends_on` の参照先がすべて定義済み stage id | error | P9 |
@@ -273,6 +275,7 @@ $ qgb design-stages --revise
 | 各 stage に `verification_type` が定義済み列挙値 | error | P9 |
 | REQ メタの `stage_id` が policy.json に存在する | error | P9 |
 | REQ メタの `contract_ref` が指す contract が存在する | error | P7 |
+| contract が canonical layout (`contracts/<REQ>/<stage>.json`) に従う | error | P7 |
 | contract.json に `required_contract_fields` がすべて含まれる | error | P9 |
 | `required: true` の stage 集合が空でない REQ | error | P1 |
 | `manual_check` のみで構成される REQ は警告 | warning | P6 |

@@ -18,6 +18,11 @@ Phase 1 scope is a Python CLI MVP plus an install manual — not PyPI distributi
 
 These are load-bearing decisions from the spec. Diverging from them silently will break the design's coherence:
 
+- **Per-command single responsibility (P9).** Each CLI verb owns one slice of validation:
+  - `qgb validate` — does each existing JSON spec file conform to its bundled schema, and does each contract avoid foreign-type fields per §F-005? **Out of scope:** cross-file integrity, missing top-level files, tree-shape problems.
+  - `qgb validate-policy` (Step 6) — required-file presence (`config.json` / `policy.json`), `contract_ref` resolution, `stage_id` ∈ policy, DAG of `depends_on`, canonical contract layout, `manual_check`-only REQs.
+  - `qgb run` preflight (Step 5) — combined READY/NOT_READY judgement that calls the above plus Phase 1's `manual_check` rejection.
+  Don't merge these responsibilities. Cross-file integrity in `qgb validate` was tried once (commit `dccdf4a`) and rolled back; the rationale is that schema conformance and tree integrity are different failure modes and should produce different fixes.
 - **Two languages, kept separate**: `qgb` itself is Python (Phase 1). The *target* project can be anything (Python, Node, Go, Rust, .NET, Java, PHP, generic). Target-specific logic lives in `qgb/adapters/`, never in `core/`.
 - **JSON is the machine source of truth.** `config.json`, `policy.json`, `contract.json`, `gate.json`, `*.meta.json`, `source-index.json`, knowledge schemas. YAML is explicitly rejected (§6.8, C-005).
 - **Markdown is for humans only**: REQ bodies, `summary.md`, `project-context.md`, the install manual. Never treat Markdown as machine-readable input.

@@ -449,16 +449,20 @@ Phase 1 で対応する検査種別：
 
 #### F-009: 段階の機械検査
 
-`qgb validate-policy` は段階設計の品質を機械検査する。検査項目は `stage-design.md` 第 11 節を参照。
+`qgb validate-policy` は段階設計の品質と正本ツリーの整合性を機械検査する。検査項目は `stage-design.md` 第 11 節を参照。
 
 Phase 1 必須検査の例：
 
+- 必須正本ファイルの存在 (`.quality-system/config.json` と `.quality-system/policy.json`)
 - stage id の重複なし
 - `depends_on` が DAG
 - 各 stage に `responsibility` が存在
 - REQ メタの `stage_id` が policy に存在
 - `contract_ref` の指す contract が存在
+- contract が canonical layout (`contracts/<REQ>/<stage>.json`) に従う
 - `manual_check` のみで構成される REQ は警告
+
+これらは `qgb validate` (個別 JSON 仕様ファイルのスキーマ準拠検査) とは別の責務である。`qgb validate` は「対象プロジェクトに展開された評価システム仕様の JSON が、qgb の機械正本契約 (スキーマ) に従っているか」を見るのに対し、`qgb validate-policy` は「JSON 群が表現する評価システム設計が、思想憲章 P6 / P7 / P9 に沿った整合的な構造になっているか」を見る。両者の責務分離は思想憲章 P9 (単一責任原則) に従う。
 
 #### F-010: 証跡出力
 

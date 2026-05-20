@@ -51,14 +51,13 @@ def _handle_not_implemented(args: argparse.Namespace) -> int:
 
 
 def _print_validate_text(report: ValidateReport, stream) -> None:
-    if not report.files_checked and not report.integrity_issues:
+    if not report.files_checked:
         print("No .quality-system/ files were found to validate.", file=stream)
         return
 
-    if report.files_checked:
-        print(f"Checked {len(report.files_checked)} file(s):", file=stream)
-        for path, schema_name in report.files_checked:
-            print(f"  - {path} (schema: {schema_name})", file=stream)
+    print(f"Checked {len(report.files_checked)} file(s):", file=stream)
+    for path, schema_name in report.files_checked:
+        print(f"  - {path} (schema: {schema_name})", file=stream)
 
     if not report.has_problems():
         print("OK: all JSON sources of truth are valid.", file=stream)
@@ -89,15 +88,6 @@ def _print_validate_text(report: ValidateReport, stream) -> None:
         for fm in report.field_mismatches:
             print(f"  - {fm.as_message()}", file=stream)
 
-    if report.integrity_issues:
-        print("", file=stream)
-        print(
-            f"Integrity issues ({len(report.integrity_issues)}):",
-            file=stream,
-        )
-        for ii in report.integrity_issues:
-            print(f"  - [{ii.kind}] {ii.message}", file=stream)
-
 
 def _report_to_json(report: ValidateReport) -> dict[str, object]:
     return {
@@ -127,21 +117,12 @@ def _report_to_json(report: ValidateReport) -> dict[str, object]:
         "read_errors": [
             {"file": str(re.file), "message": re.message} for re in report.read_errors
         ],
-        "integrity_issues": [
-            {
-                "kind": ii.kind,
-                "file": str(ii.file),
-                "message": ii.message,
-            }
-            for ii in report.integrity_issues
-        ],
         "summary": {
             "ok": not report.has_problems(),
             "files": len(report.files_checked),
             "schema_issues": len(report.schema_issues),
             "field_mismatches": len(report.field_mismatches),
             "read_errors": len(report.read_errors),
-            "integrity_issues": len(report.integrity_issues),
             "total_problems": report.total_problems(),
         },
     }
@@ -212,11 +193,17 @@ def build_parser() -> QgbArgumentParser:
     # validate: real handler (Step 2).
     validate_p = subparsers.add_parser(
         "validate",
-        help="validate JSON sources of truth under .quality-system/",
+        help="validate existing spec JSON files under .quality-system/",
         description=(
-            "Validate config.json, policy.json, REQ meta JSON, and contract JSON "
-            "files against the bundled schemas. Returns 0 on success, "
-            "2 (NOT_READY) on any violation, 64 on usage errors."
+            "Validate each existing JSON spec file under .quality-system/ "
+            "(config.json, policy.json, REQ meta, contract JSON) against the "
+            "bundled schemas, and reject contract field mismatches per "
+            "requirements doc section F-005. "
+            "Out of scope: cross-file integrity (contract_ref / stage_id / DAG), "
+            "missing top-level files, and tree-shape problems. Those are "
+            "handled by 'qgb validate-policy' and 'qgb run' preflight. "
+            "Returns 0 on success, 2 (NOT_READY) on any violation, "
+            "64 on usage errors."
         ),
     )
     validate_p.add_argument(
