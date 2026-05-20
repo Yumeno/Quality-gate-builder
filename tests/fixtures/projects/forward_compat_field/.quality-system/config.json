@@ -1,0 +1,5 @@
+{
+  "schema_version": "1.0",
+  "project": { "name": "forward-compat-field-fixture" },
+  "qgb": { "core_language": "python", "version": "0.1.0" }
+}

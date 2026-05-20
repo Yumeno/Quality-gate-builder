@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-APP-001",
+  "stage_id": "S1",
+  "verification_type": "file_exists",
+  "target": "target/sample.txt",
+  "tags": ["smoke"],
+  "notes": "Forward-compatible common fields not owned by any verification_type yet."
+}

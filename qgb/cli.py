@@ -51,13 +51,14 @@ def _handle_not_implemented(args: argparse.Namespace) -> int:
 
 
 def _print_validate_text(report: ValidateReport, stream) -> None:
-    if not report.files_checked:
+    if not report.files_checked and not report.integrity_issues:
         print("No .quality-system/ files were found to validate.", file=stream)
         return
 
-    print(f"Checked {len(report.files_checked)} file(s):", file=stream)
-    for path, schema_name in report.files_checked:
-        print(f"  - {path} (schema: {schema_name})", file=stream)
+    if report.files_checked:
+        print(f"Checked {len(report.files_checked)} file(s):", file=stream)
+        for path, schema_name in report.files_checked:
+            print(f"  - {path} (schema: {schema_name})", file=stream)
 
     if not report.has_problems():
         print("OK: all JSON sources of truth are valid.", file=stream)
@@ -66,8 +67,8 @@ def _print_validate_text(report: ValidateReport, stream) -> None:
     if report.read_errors:
         print("", file=stream)
         print(f"Read errors ({len(report.read_errors)}):", file=stream)
-        for path, message in report.read_errors:
-            print(f"  - {path}: {message}", file=stream)
+        for re in report.read_errors:
+            print(f"  - {re.file}: {re.message}", file=stream)
 
     if report.schema_issues:
         print("", file=stream)
@@ -88,9 +89,19 @@ def _print_validate_text(report: ValidateReport, stream) -> None:
         for fm in report.field_mismatches:
             print(f"  - {fm.as_message()}", file=stream)
 
+    if report.integrity_issues:
+        print("", file=stream)
+        print(
+            f"Integrity issues ({len(report.integrity_issues)}):",
+            file=stream,
+        )
+        for ii in report.integrity_issues:
+            print(f"  - [{ii.kind}] {ii.message}", file=stream)
+
 
 def _report_to_json(report: ValidateReport) -> dict[str, object]:
     return {
+        "ok": not report.has_problems(),
         "files_checked": [
             {"path": str(p), "schema": s} for p, s in report.files_checked
         ],
@@ -109,17 +120,29 @@ def _report_to_json(report: ValidateReport) -> dict[str, object]:
                 "file": str(fm.file),
                 "verification_type": fm.verification_type,
                 "field": fm.field_name,
+                "owning_verification_type": fm.owning_verification_type,
             }
             for fm in report.field_mismatches
         ],
         "read_errors": [
-            {"file": str(p), "message": msg} for p, msg in report.read_errors
+            {"file": str(re.file), "message": re.message} for re in report.read_errors
+        ],
+        "integrity_issues": [
+            {
+                "kind": ii.kind,
+                "file": str(ii.file),
+                "message": ii.message,
+            }
+            for ii in report.integrity_issues
         ],
         "summary": {
+            "ok": not report.has_problems(),
             "files": len(report.files_checked),
             "schema_issues": len(report.schema_issues),
             "field_mismatches": len(report.field_mismatches),
             "read_errors": len(report.read_errors),
+            "integrity_issues": len(report.integrity_issues),
+            "total_problems": report.total_problems(),
         },
     }
 
@@ -128,6 +151,12 @@ def _handle_validate(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     if not root.exists():
         print(f"qgb validate: path does not exist: {root}", file=sys.stderr)
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb validate: --path must point at a project directory, not a file: {root}",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
 
     report = run_validate(root)

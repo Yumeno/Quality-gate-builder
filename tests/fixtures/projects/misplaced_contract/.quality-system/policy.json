@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "ファイル存在",
+      "responsibility": "target ファイルが存在する",
+      "depends_on": [],
+      "verification_type": "file_exists",
+      "required_contract_fields": ["target"]
+    }
+  ]
+}
