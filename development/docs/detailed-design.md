@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.3 (Phase 1 Step 0〜3 確定範囲、Codex レビュー反映済み)
+# quality-gate-builder 詳細設計 v0.4 (Phase 1 Step 0〜4 確定範囲)
 
 ## 1. 本書の位置づけ
 
@@ -72,6 +72,8 @@ quality-gate-builder/
     test_cli_smoke.py
     test_schemas.py
     test_validate.py
+    test_init.py
+    test_examples.py
     fixtures/
       schemas/                          # JSON Schema 用 success/failure fixture
       projects/                         # .quality-system/ ツリーの fixture
@@ -80,9 +82,22 @@ quality-gate-builder/
         field_mismatch/
         forward_compat_field/
         invalid_json/
+
+  examples/
+    generic-minimal/                    # Step 4: 入門用最小サンプル (2 段階、file_exists + substring_match)
+      README.md
+      design-notes.md
+      .gitignore
+      target/sample.txt
+      .quality-system/
+        config.json
+        policy.json
+        req/REQ-APP-001.{md,meta.json}
+        contracts/REQ-APP-001/{S1,S2}.json
+        evidence/REQ-APP-001/latest/{gate.json,summary.md}
 ```
 
-`skills/source/`、`tools/`、`dist/skills/`、`examples/` は Phase 1 中盤以降 / Phase 5 で追加予定。
+`skills/source/`、`tools/`、`dist/skills/` は Phase 5 で追加予定。`examples/` には Step 8 で `python-cli-pytest/` と `markdown-docs/` を追加する。
 
 ## 3. CLI 体系の確定事項
 
@@ -410,7 +425,59 @@ Initialisation errors (M):
 
 テスト `test_init.py::test_init_output_passes_validate` でこのラウンドトリップを毎回検証。
 
-## 7. Python 実装規約 (Step 0〜2 確定)
+## 7. 設計例パック (Step 4 確定範囲)
+
+### 7.1 examples/generic-minimal/
+
+Phase 1 で初めて整備された設計例 (Issue #19)。**入門用最小サンプル**として位置づけ、実プロジェクトでこのまま流用するのは推奨しない。
+
+#### 構成
+
+- 段階数: 2 (S1: file_exists, S2: substring_match)
+- 段階数は推奨レンジ (3-7) **の外** だが、入門用に意図的に縮めている
+- 言語非依存 (Generic)、対象は単一テキストファイル
+
+#### 含まれるもの
+
+- `README.md`: サンプルの全体像
+- `design-notes.md`: 設計判断メモ
+- `.gitignore`: `.quality-system/artifacts/` を除外
+- `target/sample.txt`: 検査対象テキスト
+- `.quality-system/{config,policy}.json`: qgb の正本
+- `.quality-system/req/REQ-APP-001.{md,meta.json}`: REQ 1 件
+- `.quality-system/contracts/REQ-APP-001/{S1,S2}.json`: 各段階の contract
+- `.quality-system/evidence/REQ-APP-001/latest/{gate.json,summary.md}`: **手書き** の期待 ALLOW 出力
+
+`.quality-system/artifacts/` ディレクトリは作らない (空ディレクトリは git に乗らない & 揮発側は実行時に init/run が生成する)。
+
+#### Step 5 への意味
+
+`evidence/REQ-APP-001/latest/gate.json` は Step 5 で実装する `qgb run` のターゲット仕様。Step 5 完了時に同等の構造の gate.json が自動生成される必要がある。
+
+### 7.2 design-notes.md の必須項目 (今後の examples すべてに適用)
+
+Issue #12 議論で確定:
+
+1. 対象系の特徴 (他の例と何が違うか)
+2. 段階数の決定根拠 (推奨レンジ外なら理由)
+3. 採用した段階と理由
+4. **採用しなかった段階と理由 (← 最も価値ある情報、スキルの学習材料)**
+5. 思想憲章のどの項目が特に効くか
+6. 段階間の依存関係 (DAG 図)
+7. 既知の限界
+
+### 7.3 整合性テスト
+
+`tests/test_examples.py` で以下を保証:
+
+- `examples/<name>/` の `.quality-system/` が `qgb validate` を通る
+- `evidence/.../gate.json` が curated gate schema (strict) を満たす
+- contract が claim する内容が実際の target ファイルで成立 (substring_match なら実際に文字列が含まれる、など)
+- design-notes.md が必須項目を含む (推奨レンジ言及、採用しなかった段階セクション)
+
+これにより、設計例の腐敗を CI で検出できる。
+
+## 8. Python 実装規約 (Step 0〜2 確定)
 
 ### 6.1 依存
 
@@ -527,7 +594,6 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 
 | 項目 | 確定予定 Step |
 |---|---|
-| `examples/generic-minimal/` の段階定義と contract 構造 | Step 4 |
 | gate.json 生成ロジック (timestamp 生成、basis 列挙、stages[] 構造) | Step 5 |
 | 採用 / 揮発の 2 系統パス分離 (`evidence/` と `artifacts/`) | Step 5 |
 | `QGB_KEEP_RUNS` の動作 | Step 5 |
@@ -550,3 +616,4 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 0.1 | 2026-05-21 | Phase 1 Step 0〜2 確定範囲を初版として記録 |
 | 0.2 | 2026-05-21 | Phase 1 Step 3 (qgb init) を反映。§6 を新設 |
 | 0.3 | 2026-05-21 | Step 3 補修 (Codex レビュー反映): InitError / NOT_READY 化 / 構造化 JSON 置換 / .gitignore 端処理を §6.3, §6.5 に反映 |
+| 0.4 | 2026-05-21 | Phase 1 Step 4 (examples/generic-minimal/) を反映。§7 を新設、§2 リポジトリ構造に examples/ を追加 |

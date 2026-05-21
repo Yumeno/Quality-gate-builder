@@ -1,0 +1,2 @@
+hello, generic-minimal!
+This file is the verification target for REQ-APP-001.
