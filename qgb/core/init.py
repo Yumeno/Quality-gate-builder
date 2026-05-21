@@ -1,6 +1,6 @@
 """Initialize a fresh .quality-system/ tree in the target project.
 
-Responsibility (matches requirements doc §B-004, §3.6, F-002, F-003):
+Responsibility (matches requirements doc B-004 / 3.6 / F-002 / F-003):
 
 * Create the canonical .quality-system/ directory layout.
 * Write minimal config.json and policy.json templates. The policy starts with
@@ -17,12 +17,16 @@ Out of scope (delegated elsewhere):
 * Designing stages for the target -> `qgb design-stages` (Step 6).
 * Generating REQ scaffolding -> `qgb scaffold` (Step 6).
 
-Idempotency:
+Idempotency and integrity:
 
 * Default behaviour does NOT overwrite existing files. Each file is reported
   as ``created`` or ``skipped (already exists)``.
-* `force=True` overwrites existing files. Directories are always preserved.
-* `.gitignore` is appended (not rewritten) when the artifacts line is absent.
+* ``force=True`` overwrites existing files. Directories are always preserved.
+* ``.gitignore`` is appended (not rewritten) when the artifacts line is absent.
+* When the target tree contains type collisions (a regular file at a path
+  that must be a directory, or vice versa, or a non-file ``.gitignore``),
+  ``run_init`` records an ``InitError`` and refuses to corrupt the tree.
+  The CLI surfaces these as ``NOT_READY`` (exit 2).
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ import json
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+from typing import Literal
 
 from qgb import __version__
 
@@ -46,14 +51,33 @@ _QS_DIRS: tuple[str, ...] = (
 _GITIGNORE_HEADER = "# qgb volatile artifacts"
 _GITIGNORE_ENTRY = ".quality-system/artifacts/"
 
+# Literal type aliases used by the report dataclasses.
+FileAction = Literal["created", "skipped", "overwritten"]
+GitignoreAction = Literal["created", "appended", "already-present", "skipped"]
+ErrorKind = Literal[
+    "path_is_file_expected_dir",
+    "path_is_dir_expected_file",
+    "gitignore_not_a_regular_file",
+    "gitignore_unreadable",
+]
+
 
 @dataclass(frozen=True)
 class FileOutcome:
     """What happened to a single file during init."""
 
     path: Path
-    action: str   # "created" | "skipped" | "overwritten"
+    action: FileAction
     note: str = ""
+
+
+@dataclass(frozen=True)
+class InitError:
+    """A structural problem that prevented init from completing safely."""
+
+    kind: ErrorKind
+    path: Path
+    message: str
 
 
 @dataclass
@@ -63,7 +87,11 @@ class InitReport:
     project_root: Path
     file_outcomes: list[FileOutcome] = field(default_factory=list)
     dirs_ensured: list[Path] = field(default_factory=list)
-    gitignore_action: str = ""   # "created" | "appended" | "already-present" | "skipped"
+    gitignore_action: GitignoreAction | None = None
+    errors: list[InitError] = field(default_factory=list)
+
+    def has_problems(self) -> bool:
+        return bool(self.errors)
 
 
 def _read_template(name: str) -> str:
@@ -74,13 +102,17 @@ def _read_template(name: str) -> str:
 
 
 def _materialise_config(project_name: str) -> str:
-    raw = _read_template("config.initial.json")
-    # Lightweight substitution; templates are small and JSON-shaped.
-    populated = raw.replace("{project_name}", project_name).replace(
-        "{qgb_version}", __version__
-    )
-    # Round-trip through json to normalise whitespace and catch broken templates early.
-    return json.dumps(json.loads(populated), ensure_ascii=False, indent=2) + "\n"
+    """Produce the initial config.json text with structured assignment.
+
+    String interpolation into JSON would let exotic project names (with
+    quotes, backslashes, or newlines) break the document. Parse the template
+    first, then assign the project name and qgb version through Python
+    objects so json.dumps performs the escaping.
+    """
+    data = json.loads(_read_template("config.initial.json"))
+    data["project"]["name"] = project_name
+    data["qgb"]["version"] = __version__
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
 def _materialise_policy() -> str:
@@ -92,6 +124,24 @@ def _materialise_project_context() -> str:
     return _read_template("project-context.initial.md")
 
 
+def _ensure_dir(path: Path, report: InitReport) -> bool:
+    """Ensure a directory exists. Returns True on success, False on collision."""
+    if path.exists() and not path.is_dir():
+        report.errors.append(
+            InitError(
+                kind="path_is_file_expected_dir",
+                path=path,
+                message=(
+                    f"expected directory at {path}, but a non-directory entry exists"
+                ),
+            )
+        )
+        return False
+    path.mkdir(parents=True, exist_ok=True)
+    report.dirs_ensured.append(path)
+    return True
+
+
 def _write_file(
     path: Path,
     content: str,
@@ -99,40 +149,99 @@ def _write_file(
     force: bool,
     report: InitReport,
 ) -> None:
+    if path.exists() and not path.is_file():
+        report.errors.append(
+            InitError(
+                kind="path_is_dir_expected_file",
+                path=path,
+                message=(
+                    f"expected file at {path}, but a non-file entry "
+                    f"(directory or other) exists"
+                ),
+            )
+        )
+        return
     if path.exists():
         if not force:
             report.file_outcomes.append(
                 FileOutcome(path=path, action="skipped", note="file already exists")
             )
             return
-        action = "overwritten"
+        action: FileAction = "overwritten"
     else:
         action = "created"
+    # Parent dir may be a freshly-created directory or an existing one; either
+    # is fine. If parent is somehow a non-dir we'd have caught it in
+    # _ensure_dir already, since every spec file lives under .quality-system/.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     report.file_outcomes.append(FileOutcome(path=path, action=action))
 
 
-def _ensure_dir(path: Path, report: InitReport) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    report.dirs_ensured.append(path)
+def _gitignore_lines_match_entry(existing: str) -> bool:
+    """Detect whether the artifacts entry is already present.
+
+    Treats trailing slash as optional so '.quality-system/artifacts' and
+    '.quality-system/artifacts/' are considered the same ignore rule.
+    """
+    target = _GITIGNORE_ENTRY.rstrip("/")
+    for raw in existing.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.rstrip("/") == target:
+            return True
+    return False
 
 
 def _update_gitignore(project_root: Path, report: InitReport) -> None:
-    """Append the qgb artifacts entry to .gitignore (idempotent)."""
+    """Append the qgb artifacts entry to .gitignore (idempotent and safe)."""
     gitignore = project_root / ".gitignore"
+    if gitignore.exists() and not gitignore.is_file():
+        report.errors.append(
+            InitError(
+                kind="gitignore_not_a_regular_file",
+                path=gitignore,
+                message=(
+                    f"{gitignore} exists but is not a regular file; "
+                    f"qgb init will not modify it"
+                ),
+            )
+        )
+        report.gitignore_action = "skipped"
+        return
+
     if gitignore.exists():
-        existing = gitignore.read_text(encoding="utf-8")
-        existing_lines = {line.strip() for line in existing.splitlines()}
-        if _GITIGNORE_ENTRY in existing_lines:
+        try:
+            existing = gitignore.read_text(encoding="utf-8")
+        except OSError as exc:
+            report.errors.append(
+                InitError(
+                    kind="gitignore_unreadable",
+                    path=gitignore,
+                    message=f"failed to read {gitignore}: {exc}",
+                )
+            )
+            report.gitignore_action = "skipped"
+            return
+
+        if _gitignore_lines_match_entry(existing):
             report.gitignore_action = "already-present"
             return
-        # Ensure a trailing newline before appending.
-        suffix = "" if existing.endswith("\n") or not existing else "\n"
+
+        if existing == "":
+            gitignore.write_text(
+                f"{_GITIGNORE_HEADER}\n{_GITIGNORE_ENTRY}\n", encoding="utf-8"
+            )
+            report.gitignore_action = "appended"
+            return
+
+        suffix = "" if existing.endswith("\n") else "\n"
         addition = f"{suffix}\n{_GITIGNORE_HEADER}\n{_GITIGNORE_ENTRY}\n"
         gitignore.write_text(existing + addition, encoding="utf-8")
         report.gitignore_action = "appended"
         return
+
     gitignore.write_text(
         f"{_GITIGNORE_HEADER}\n{_GITIGNORE_ENTRY}\n", encoding="utf-8"
     )
@@ -150,6 +259,10 @@ def run_init(
     ``project_name`` defaults to the basename of ``project_root``. Pass an
     explicit value when initialising under a directory whose name does not
     match the desired project identifier.
+
+    Path-type collisions (e.g. a regular file where a directory is required)
+    are recorded as ``InitError`` entries on the returned report rather than
+    raising; the CLI surfaces this as exit code 2 (NOT_READY).
     """
     project_root = project_root.resolve()
     if project_name is None:
@@ -158,9 +271,15 @@ def run_init(
     report = InitReport(project_root=project_root)
 
     qs = project_root / ".quality-system"
-    _ensure_dir(qs, report)
+    if not _ensure_dir(qs, report):
+        # Cannot proceed if the top-level directory cannot be created.
+        return report
+
     for sub in _QS_DIRS:
         _ensure_dir(qs / sub, report)
+    # Even if a subdir collides, we continue trying to write files; each
+    # _write_file does its own collision check. This keeps the report
+    # comprehensive instead of bailing on the first issue.
 
     _write_file(qs / "config.json", _materialise_config(project_name), force=force, report=report)
     _write_file(qs / "policy.json", _materialise_policy(), force=force, report=report)

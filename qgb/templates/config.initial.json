@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0",
   "project": {
-    "name": "{project_name}"
+    "name": ""
   },
   "qgb": {
     "core_language": "python",
-    "version": "{qgb_version}"
+    "version": ""
   },
   "commands": {}
 }

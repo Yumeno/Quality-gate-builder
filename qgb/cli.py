@@ -156,7 +156,13 @@ def _handle_validate(args: argparse.Namespace) -> int:
 
 
 def _print_init_text(report: InitReport, stream) -> None:
-    print(f"Initialised .quality-system/ at {report.project_root}", file=stream)
+    if report.has_problems():
+        print(
+            f"qgb init: refused to corrupt existing tree at {report.project_root}",
+            file=stream,
+        )
+    else:
+        print(f"Initialised .quality-system/ at {report.project_root}", file=stream)
     if report.dirs_ensured:
         print(f"  Ensured {len(report.dirs_ensured)} directories.", file=stream)
     for outcome in report.file_outcomes:
@@ -167,12 +173,18 @@ def _print_init_text(report: InitReport, stream) -> None:
         }.get(outcome.action, "?")
         note = f" ({outcome.note})" if outcome.note else ""
         print(f"  {marker} {outcome.action:11s} {outcome.path}{note}", file=stream)
-    if report.gitignore_action:
+    if report.gitignore_action is not None:
         print(f"  .gitignore: {report.gitignore_action}", file=stream)
+    if report.errors:
+        print("", file=stream)
+        print(f"Initialisation errors ({len(report.errors)}):", file=stream)
+        for err in report.errors:
+            print(f"  - [{err.kind}] {err.message}", file=stream)
 
 
 def _init_report_to_json(report: InitReport) -> dict[str, object]:
     return {
+        "ok": not report.has_problems(),
         "project_root": str(report.project_root),
         "dirs_ensured": [str(p) for p in report.dirs_ensured],
         "files": [
@@ -180,6 +192,16 @@ def _init_report_to_json(report: InitReport) -> dict[str, object]:
             for o in report.file_outcomes
         ],
         "gitignore_action": report.gitignore_action,
+        "errors": [
+            {"kind": e.kind, "path": str(e.path), "message": e.message}
+            for e in report.errors
+        ],
+        "summary": {
+            "ok": not report.has_problems(),
+            "dirs_ensured": len(report.dirs_ensured),
+            "files": len(report.file_outcomes),
+            "errors": len(report.errors),
+        },
     }
 
 
@@ -201,9 +223,12 @@ def _handle_init(args: argparse.Namespace) -> int:
         json.dump(_init_report_to_json(report), sys.stdout, ensure_ascii=False, indent=2)
         sys.stdout.write("\n")
     else:
-        _print_init_text(report, sys.stdout)
+        _print_init_text(
+            report,
+            sys.stdout if not report.has_problems() else sys.stderr,
+        )
 
-    return EXIT_OK
+    return EXIT_NOT_READY if report.has_problems() else EXIT_OK
 
 
 # ---- parser --------------------------------------------------------------
@@ -269,7 +294,13 @@ def build_parser() -> QgbArgumentParser:
     init_p.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite existing .quality-system/ files instead of skipping them",
+        help=(
+            "Overwrite existing .quality-system/ files (config.json, policy.json, "
+            "knowledge/knowledge.jsonl, knowledge/project-context.md) instead of "
+            "skipping them. Path-type collisions (file where a directory is "
+            "expected, etc.) are NOT bypassed by --force; they still cause "
+            "NOT_READY (exit 2)."
+        ),
     )
     init_p.add_argument(
         "--json",

@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.2 (Phase 1 Step 0〜3 確定範囲)
+# quality-gate-builder 詳細設計 v0.3 (Phase 1 Step 0〜3 確定範囲、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -328,12 +328,14 @@ verification_type 別の必須/任意フィールド：
 | `.quality-system/knowledge/knowledge.jsonl` | 空ファイル |
 | `.quality-system/knowledge/project-context.md` | 雛形 Markdown |
 
-### 6.3 idempotent 規約
+### 6.3 idempotent / 衝突安全規約
 
 - 既存ファイルは **skipped** (上書きしない)
 - `--force` フラグで **overwritten**
 - ディレクトリは常に `mkdir(parents=True, exist_ok=True)` で確保 (壊さない)
-- 二重実行で副作用なし
+- 二重実行で副作用なし。`.gitignore` も byte-for-byte 不変
+- **パス種別衝突 (例: 期待がディレクトリの場所にファイル / 期待がファイルの場所にディレクトリ)** は `InitError` として記録し、`exit 2 (NOT_READY)` で停止。`--force` でもバイパスしない
+- 衝突対象は `.quality-system` 自身、`.quality-system/<subdir>/`、各正本ファイル、`.gitignore`
 
 ### 6.4 `.gitignore` 自動追記の規約
 
@@ -359,19 +361,41 @@ Initialised .quality-system/ at <abspath>
   + created     <path>
   - skipped     <path> (file already exists)
   * overwritten <path>
-  .gitignore: created | appended | already-present
+  .gitignore: created | appended | already-present | skipped
+```
+
+衝突検出時 (NOT_READY):
+
+```
+qgb init: refused to corrupt existing tree at <abspath>
+  Ensured N directories.
+  ...
+Initialisation errors (M):
+  - [path_is_file_expected_dir] expected directory at ..., but a non-directory entry exists
+  - [path_is_dir_expected_file] expected file at ..., but a non-file entry exists
+  - [gitignore_not_a_regular_file] ... exists but is not a regular file; qgb init will not modify it
 ```
 
 #### `--json` モード
 
 ```json
 {
+  "ok": true | false,
   "project_root": "...",
   "dirs_ensured": ["..."],
   "files": [{"path": "...", "action": "created" | "skipped" | "overwritten", "note": ""}],
-  "gitignore_action": "created" | "appended" | "already-present"
+  "gitignore_action": "created" | "appended" | "already-present" | "skipped" | null,
+  "errors": [{"kind": "path_is_file_expected_dir" | "path_is_dir_expected_file" | "gitignore_not_a_regular_file" | "gitignore_unreadable", "path": "...", "message": "..."}],
+  "summary": {
+    "ok": bool,
+    "dirs_ensured": N,
+    "files": N,
+    "errors": M
+  }
 }
 ```
+
+`ok` は問題なし時 true。errors[] に何か入ると false。CLI exit code は ok=true で 0、false で 2 (NOT_READY)。
 
 ### 6.6 やらないこと (他コマンドの責務)
 
@@ -525,3 +549,4 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 |---|---|---|
 | 0.1 | 2026-05-21 | Phase 1 Step 0〜2 確定範囲を初版として記録 |
 | 0.2 | 2026-05-21 | Phase 1 Step 3 (qgb init) を反映。§6 を新設 |
+| 0.3 | 2026-05-21 | Step 3 補修 (Codex レビュー反映): InitError / NOT_READY 化 / 構造化 JSON 置換 / .gitignore 端処理を §6.3, §6.5 に反映 |
