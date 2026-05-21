@@ -9,7 +9,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from qgb import __version__
+from qgb.core import evidence as evidence_mod
+from qgb.core.decision import decide
+from qgb.core.evidence import write_evidence
 from qgb.core.init import InitReport, run_init
+from qgb.core.preflight import PreflightReport, run_preflight
+from qgb.core.runner import run_stages
 from qgb.core.validate import ValidateReport, run_validate
 
 EXIT_OK = 0
@@ -231,6 +236,119 @@ def _handle_init(args: argparse.Namespace) -> int:
     return EXIT_NOT_READY if report.has_problems() else EXIT_OK
 
 
+# ---- run -----------------------------------------------------------------
+
+
+def _format_preflight_text(report: PreflightReport) -> str:
+    lines: list[str] = []
+    lines.append(f"NOT_READY: preflight rejected {len(report.issues)} issue(s).")
+    for issue in report.issues:
+        lines.append(f"  - [{issue.kind}] {issue.where}")
+        lines.append(f"      {issue.message}")
+    return "\n".join(lines) + "\n"
+
+
+def _preflight_to_json(report: PreflightReport, req_id: str) -> dict[str, object]:
+    return {
+        "ok": False,
+        "req_id": req_id,
+        "status": "NOT_READY",
+        "issues": [
+            {"kind": i.kind, "where": i.where, "message": i.message}
+            for i in report.issues
+        ],
+    }
+
+
+def _run_result_to_json(gate: dict[str, object]) -> dict[str, object]:
+    return {
+        "ok": gate["status"] == "ALLOW",
+        "req_id": gate["req_id"],
+        "status": gate["status"],
+        "failed_stage": gate["failed_stage"],
+        "phase": gate["phase"],
+        "gate": gate,
+    }
+
+
+def _print_run_text(gate: dict[str, object], stream) -> None:
+    status = gate["status"]
+    print(
+        f"{status}: {gate['req_id']} (phase={gate['phase']})",
+        file=stream,
+    )
+    print(f"  meaning: {gate['decision']['meaning']}", file=stream)  # type: ignore[index]
+    print(f"  run_dir: {gate['paths']['run_dir']}", file=stream)  # type: ignore[index]
+    print(
+        f"  curated_latest_dir: {gate['paths']['curated_latest_dir']}",  # type: ignore[index]
+        file=stream,
+    )
+    if status == "DENY":
+        print(f"  failed_stage: {gate['failed_stage']}", file=stream)
+    print("  stages:", file=stream)
+    for stage in gate["stages"]:  # type: ignore[index]
+        print(
+            f"    - {stage['id']} ({stage['verification_type']}): {stage['result']}",
+            file=stream,
+        )
+
+
+def _handle_run(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(f"qgb run: path does not exist: {root}", file=sys.stderr)
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb run: --path must point at a project directory, not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    req_id: str = args.req_id
+    phase: str = args.phase
+
+    preflight = run_preflight(root, req_id)
+    if not preflight.ready():
+        if args.json:
+            json.dump(
+                _preflight_to_json(preflight, req_id),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            sys.stderr.write(_format_preflight_text(preflight))
+        return EXIT_NOT_READY
+
+    timestamps = evidence_mod.make_timestamps()
+    results = run_stages(root, preflight.adopted_stages)
+    decision = decide(preflight.adopted_stages, results, phase)
+    write = write_evidence(
+        project_root=root,
+        req_id=req_id,
+        phase=phase,
+        timestamps=timestamps,
+        decision=decision,
+        adopted=preflight.adopted_stages,
+        results=results,
+        policy=preflight.policy,
+    )
+
+    gate = json.loads(write.gate_path_curated.read_text(encoding="utf-8"))
+    if args.json:
+        json.dump(_run_result_to_json(gate), sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        _print_run_text(
+            gate,
+            sys.stdout if decision.status == "ALLOW" else sys.stderr,
+        )
+
+    return EXIT_OK if decision.status == "ALLOW" else EXIT_DENY
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -263,7 +381,6 @@ def build_parser() -> QgbArgumentParser:
         ("scaffold", "(not yet implemented) scaffold a new REQ"),
         ("validate-policy", "(not yet implemented) validate stage design quality"),
         ("verify", "(not yet implemented) run lightweight checks (volatile artifacts only)"),
-        ("run", "(not yet implemented) run the gate and update curated evidence"),
     )
     for name, help_text in stub_commands:
         sub = subparsers.add_parser(name, help=help_text)
@@ -336,6 +453,45 @@ def build_parser() -> QgbArgumentParser:
         help="Emit a machine-readable JSON report to stdout instead of text",
     )
     validate_p.set_defaults(handler=_handle_validate)
+
+    # run: real handler (Step 5).
+    run_p = subparsers.add_parser(
+        "run",
+        help="execute a REQ's adopted stages and write curated / volatile evidence",
+        description=(
+            "Run the adopted stages of <REQ-ID>, producing gate.json + summary.md "
+            "+ per-stage logs in two trees: the volatile artifacts run-dir "
+            "(.quality-system/artifacts/<REQ>/runs/<timestamp>/) and the "
+            "curated evidence latest dir (.quality-system/evidence/<REQ>/latest/). "
+            "Returns 0 on ALLOW, 1 on DENY, 2 on NOT_READY (preflight rejected "
+            "the inputs without running any stage), 64 on usage errors."
+        ),
+    )
+    run_p.add_argument(
+        "req_id",
+        metavar="REQ-ID",
+        help="The REQ id whose adopted stages will be executed (e.g. REQ-APP-001)",
+    )
+    run_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root containing .quality-system/ (default: current directory)",
+    )
+    run_p.add_argument(
+        "--phase",
+        default="verify",
+        choices=["red", "green", "refactor", "verify"],
+        help=(
+            "TDD phase tag recorded in gate.json. Phase 1 wires only 'verify' "
+            "semantics; 'red' expected-failure handling is Step 7."
+        ),
+    )
+    run_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    run_p.set_defaults(handler=_handle_run)
 
     return parser
 

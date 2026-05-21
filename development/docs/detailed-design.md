@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.5 (Phase 1 Step 0〜4 確定範囲、Codex レビュー反映済み)
+# quality-gate-builder 詳細設計 v0.6 (Phase 1 Step 0〜5 確定範囲、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -39,6 +39,11 @@ quality-gate-builder/
       schema.py                         # スキーマ読み込み + Draft 2020-12 検証 + RFC3339 date-time format checker
       validate.py                       # qgb validate の本体
       init.py                           # qgb init の本体
+      loader.py                         # policy/req-meta/contract/config の I/O (Step 5)
+      preflight.py                      # qgb run の READY/NOT_READY 判定 (Step 5)
+      runner.py                         # file_exists / substring_match 実行 (Step 5)
+      decision.py                       # ALLOW/DENY 判定 (Step 5)
+      evidence.py                       # gate.json/summary.md/log の 2 系統書き出し (Step 5)
     adapters/__init__.py               # Phase 1 では空
     schemas/                            # バンドルされる JSON Schema 群
       README.md
@@ -115,12 +120,12 @@ quality-gate-builder/
 |---|---|---|---|
 | `validate` | 2 | **実装済み** | 個別 JSON 仕様ファイルがスキーマに準拠しているか + §F-005 contract field 混在 |
 | `init` | 3 | **実装済み** | `.quality-system/` 初期化、空 stages の policy.json と空 knowledge.jsonl、`.gitignore` 追記 |
+| `run` | 5 | **実装済み** | 採用判定 (preflight + ALLOW/DENY 出力 + 採用/揮発 2 系統への証跡書き出し) |
 | `detect` | 6 | parser 登録のみ | 対象系の言語/フレームワーク推定 |
 | `design-stages` | 6 | parser 登録のみ | 段階設計フェーズ |
 | `scaffold` | 6 | parser 登録のみ | REQ + contract + テスト雛形 |
 | `validate-policy` | 6 | parser 登録のみ | 段階設計の品質 + 正本ツリー整合性 |
 | `verify` | 6 | parser 登録のみ | 軽量チェック (揮発側のみ) |
-| `run` | 5 | parser 登録のみ | 採用判定 (preflight + ALLOW/DENY 出力) |
 
 未実装サブコマンド呼び出しは `_handle_not_implemented` 共通 stub が EXIT_USAGE (=64) を返す。各 subparser に `set_defaults(handler=...)` を仕込んであり、Step ごとに stub を実 handler に差し替える設計。
 
@@ -528,7 +533,153 @@ Issue #12 議論で確定:
 
 Step 7 の knowledge 連携 (`waived` 段階の knowledge.jsonl 参照など) ではここに `KNOWLEDGE-<id>` も加わる予定。
 
-## 8. Python 実装規約 (Step 0〜2 確定)
+## 8. qgb run の責務 (Step 5 確定)
+
+### 8.1 縦串構成 (モジュール分割)
+
+`qgb run` は 5 つの責務を持つモジュールに分割される。各モジュールは P9 (単一責任) を実装側に降ろした単位:
+
+| モジュール | 責務 |
+|---|---|
+| `qgb/core/loader.py` | `config.json` / `policy.json` / `<REQ>.meta.json` / `<contract>.json` の存在確認 + JSON parse。スキーマ検証は行わない |
+| `qgb/core/preflight.py` | READY/NOT_READY 判定。スキーマ違反 (validate を内部呼び出し) + 必須正本欠落 + `stage_id` 解決 + `contract_ref` 解決 + `verification_type` の一致 + `depends_on` DAG + `manual_check` の required 段階拒否 + Phase 1 で runnable な type 限定 |
+| `qgb/core/runner.py` | 採用段階を 1 件ずつ実行し `StageResult` を返す。`depends_on` 失敗時は実行スキップ (failed 記録) |
+| `qgb/core/decision.py` | 採用段階の結果から `ALLOW` / `DENY` + `failed_stage` (最初の失敗 required 段階) を決定 + phase 別の `decision.meaning` を選択 |
+| `qgb/core/evidence.py` | `gate.json` + `summary.md` + `stages/<id>.log` を採用側と揮発側の両方へ書き出し。`build_basis()` と `make_timestamps()` を提供。`QGB_KEEP_RUNS` による prune |
+
+CLI (`qgb/cli.py`) はこれらを直列に呼ぶだけのオーケストレータ。各モジュールは互いに直接結合せず、`AdoptedStage` / `StageResult` / `Decision` / `Timestamps` のデータクラスで疎結合する。
+
+### 8.2 入力
+
+```
+python -m qgb run <REQ-ID> [--path DIR] [--phase {red,green,refactor,verify}] [--json]
+```
+
+- `REQ-ID` 必須位置引数
+- `--path` default `.`、存在しない / ファイル指定 → exit 64
+- `--phase` default `verify`。Phase 1 では verify 以外も `decision.meaning` のテンプレートだけ切り替わる (実セマンティクスは Step 7 で `red` を本実装)
+- `--json` 指定時は機械可読 JSON を stdout、stderr は完全に空
+
+### 8.3 終了コード
+
+| コード | 意味 | 出力 |
+|---|---|---|
+| 0 | ALLOW | curated + volatile gate.json/summary.md/log を書き出し、stdout に要約 |
+| 1 | DENY | 同上 (status=DENY)、stderr に要約 |
+| 2 | NOT_READY (preflight rejected) | gate.json を **生成しない**。stderr に preflight issues を列挙 |
+| 64 | CLI usage error (path 不在等) | stderr のみ |
+
+NOT_READY が curated を上書きしないことは、Step 5 受入テスト `test_run_returns_not_ready_when_contract_ref_missing` で保証している (例の手書き `gate.json` の `timestamp_utc` が変化しないことを確認)。
+
+### 8.4 preflight 検査内容 (Phase 1 必須)
+
+`qgb run` が走る前に必ず通る。Step 6 `qgb validate-policy` でも同じモジュールを共有することを想定:
+
+1. `qgb.core.validate.run_validate` 実行 (スキーマ違反 + §F-005 contract field 混在)
+2. `.quality-system/config.json` / `policy.json` の存在
+3. `<REQ-ID>.meta.json` の存在
+4. policy.stages の `depends_on` が DAG (dangling reference + cycle 検出)
+5. REQ meta の `stage_id` が policy.stages に存在
+6. REQ meta の `contract_ref` が実ファイルに resolve (project_root 外への escape は拒否)
+7. contract の `verification_type` が policy の同段階と一致
+8. `manual_check` を `required: true` で含む REQ は拒否 (P6)
+9. Phase 1 runnable: `file_exists` / `substring_match` のみ。他は `unsupported_verification_type` で拒否
+10. 採用 required 段階が 1 件以上存在 (P1)
+
+報告は `PreflightIssue.kind` で機械分類:
+`schema_violation` / `missing_required_file` / `invalid_json` / `unknown_stage_id` / `missing_contract` / `depends_on_unknown` / `depends_on_cycle` / `unsupported_verification_type` / `manual_check_required` / `no_required_stages` / `verification_type_mismatch`
+
+### 8.5 verification_type 実装
+
+#### file_exists
+
+- `contract.target` を `project_root` 相対で resolve
+- `Path.is_file()` で判定 (シンボリックリンク先がファイルなら True)
+- 結果ログに `resolved:` 絶対パスを記録 (P7 再現可能な証跡)
+
+#### substring_match
+
+- `contract.target` を UTF-8 で読み込み
+- `contract.must_contain` (list[str]) の各要素について包含確認
+- 各 keyword の `byte offset` をログに記録 (`hello: found at byte offset 0` 形式)
+- UTF-8 decode 失敗時は failed
+
+両 type とも `exit_code` は `null` (外部プロセス非起動)。
+
+### 8.6 depends_on の扱い (Phase 1)
+
+- 採用段階を REQ meta 宣言順で実行
+- 各段階の実行前に `depends_on` のうち failed なものがあれば、その段階を実行せず `failed` 記録 (log 中に `skipped: predecessor stage <id> failed` と明示)
+- これにより gate.schema.json の DENY 制約 (「少なくとも 1 stage が failed」) が自然に満たされる
+- DAG 検査は preflight で済んでいるので runner はトポロジカルソート不要 (REQ meta 順 = 設計者の意図順)
+
+### 8.7 timestamp 生成 (詳細)
+
+`qgb.core.evidence.make_timestamps()`:
+
+- 単一の `datetime.now(timezone.utc).replace(microsecond=0)` から両形式を生成
+- `compact` = `%Y-%m-%dT%H%M%SZ` (Windows でパス segment に使えるよう `:` を含まない)
+- `rfc3339` = `%Y-%m-%dT%H:%M:%SZ` (ツール互換)
+- `paths.run_dir` の最末尾サフィックスは必ず `compact` と一致 (`test_examples.py::test_gate_timestamps_are_mutually_consistent` で CI 検証)
+- テストでは `monkeypatch.setattr(evidence, "make_timestamps", ...)` で固定値注入が可能
+
+### 8.8 basis[] の生成 (詳細)
+
+`qgb.core.evidence.build_basis(req_id, policy, adopted)`:
+
+```python
+[
+    req_id,                                          # "REQ-APP-001"
+    f"POLICY-{policy.get('policy_id', 'default')}",  # "POLICY-default"
+    *(f"CONTRACT-{req_id}-{stage.stage_id}"          # 採用段階順
+      for stage in adopted),
+]
+```
+
+- `policy_id` が無い / 文字列でない場合は `default` フォールバック
+- Step 7 で `KNOWLEDGE-<id>` 追加予定 (`waived` 段階で参照した knowledge エントリ)
+
+### 8.9 2 系統出力の規約
+
+| 系統 | パス | 書き手 | コミット対象 |
+|---|---|---|---|
+| 揮発 | `.quality-system/artifacts/<REQ>/runs/<compact>/` | `qgb run` / `qgb verify` (Step 6) | **No** (`.gitignore`) |
+| 採用 | `.quality-system/evidence/<REQ>/latest/` | `qgb run` のみ | **Yes** |
+
+両系統に書く内容:
+
+- `gate.json` (採用は strict schema、揮発は permissive runtime schema)
+- `summary.md` (両者同一内容)
+- `stages/<stage_id>.log` (両者同一内容)
+
+Phase 1 では揮発と採用の gate.json は **byte-for-byte 等価**。違いは置く場所だけ。次のステップで揮発側に追加情報 (full environment dump 等) を載せる余地のために schema は permissive。
+
+採用側の `stages/` ディレクトリは **書き出し前に内容を消す**。以前の run で存在し今回採用されなくなった段階のログが取り残されることを防ぐ。
+
+### 8.10 QGB_KEEP_RUNS
+
+- 環境変数で揮発側 `runs/<compact>/` の保持件数を制御
+- default: 10
+- 不正値 / 未設定 → default、min 1
+- `<runs_dir>` を timestamp 名で lexical sort = chronological sort なので、古い順に削除
+- 採用側は対象外 (常に最新 1 件)
+
+### 8.11 例: generic-minimal で ALLOW が出る縦串
+
+```text
+$ python -m qgb run REQ-APP-001 --path examples/generic-minimal
+ALLOW: REQ-APP-001 (phase=verify)
+  meaning: Defined checks passed. This is not proof of total correctness.
+  run_dir: .quality-system/artifacts/REQ-APP-001/runs/2026-05-21T120000Z
+  curated_latest_dir: .quality-system/evidence/REQ-APP-001/latest
+  stages:
+    - S1 (file_exists): passed
+    - S2 (substring_match): passed
+```
+
+`examples/generic-minimal/` の手書き `gate.json` は Step 4 で固定された **リファレンス出力**。Step 5 完了時点で生成される `gate.json` は、timestamp 部分を除いて構造的に同等であることを `tests/test_run_generic_minimal.py::test_curated_gate_matches_reference_structure` で検証している。
+
+## 9. Python 実装規約 (Step 0〜2 確定)
 
 ### 6.1 依存
 
@@ -583,17 +734,20 @@ select = ["E", "W", "F", "I", "B", "UP"]
 - fixture: `tests/fixtures/schemas/` (Schema 用) と `tests/fixtures/projects/` (`.quality-system/` ツリー用)
 - assertion: 「壊れたら落ちる」ではなく「狙った schema path で落ちる」を検証 (Codex 指摘対応)
 
-## 7. テスト規約 (Step 0〜2 確定)
+## 10. テスト規約 (Step 0〜5 確定)
 
-### 7.1 テスト件数の現状
+### 10.1 テスト件数の現状
 
 - Step 0: 11 件 (CLI smoke + subprocess)
 - Step 1: 51 件追加 (Schema 検証)
 - Step 2: 37 件追加 (validate コマンド) → 巻き戻し後 24 件
+- Step 3: 20 件追加 (qgb init)
+- Step 4: 18 件追加 (examples/generic-minimal 整合性)
+- Step 5: 17 件追加 (qgb run 縦串)
 
-合計 **99 件、全成功、ruff 警告ゼロ**。
+合計 **173 件、全成功、ruff 警告ゼロ**。
 
-### 7.2 fixture の責務分離
+### 10.2 fixture の責務分離
 
 | ディレクトリ | 用途 |
 |---|---|
@@ -607,7 +761,7 @@ select = ["E", "W", "F", "I", "B", "UP"]
 
 Step 6 で `missing_required/` `dangling_ref/` `misplaced_contract/` を復活させる（巻き戻し前にあったもの）。
 
-### 7.3 subprocess テストの規約
+### 10.3 subprocess テストの規約
 
 ```python
 def _run_qgb(*args: str) -> subprocess.CompletedProcess[str]:
@@ -626,41 +780,40 @@ def _run_qgb(*args: str) -> subprocess.CompletedProcess[str]:
 
 Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reader thread を壊さないために必須。
 
-## 8. 思想憲章との対応マトリクス (Step 0〜2 範囲)
+## 11. 思想憲章との対応マトリクス (Step 0〜5 範囲)
 
 | 思想項目 | 実装での機械化 |
 |---|---|
-| P1 品質=要求を満たすこと | REQ メタの schema が `req_id` と `stages[]` を必須化 |
-| P5 ALLOW/DENY の意味の限定 | gate.schema.json で `decision.meaning` を必須化、if/then で `status` × `decision.result` × `failed_stage` × `stages[].result` の整合性を強制 |
-| P7 再現可能な証跡 | gate.schema.json で `runner.name/version`、`timestamp_utc`、`timestamp_rfc3339`、`stages[].contract_ref`、`stages[].log_ref`、`basis[]` を必須化 |
+| P1 品質=要求を満たすこと | REQ メタの schema が `req_id` と `stages[]` を必須化。preflight で `no_required_stages` を拒否 |
+| P5 ALLOW/DENY の意味の限定 | gate.schema.json で `decision.meaning` を必須化、if/then で `status` × `decision.result` × `failed_stage` × `stages[].result` の整合性を強制。`decision.py` で phase 別の `meaning` テンプレートを限定供給 |
+| P6 LLM 単独 ALLOW 禁止 | preflight が `verification_type=manual_check` を required 段階で含む REQ を `manual_check_required` で NOT_READY に落とす (Step 5) |
+| P7 再現可能な証跡 | gate.schema.json で `runner.name/version`、`timestamp_utc`、`timestamp_rfc3339`、`stages[].contract_ref`、`stages[].log_ref`、`basis[]` を必須化。`evidence.py` で採用/揮発の 2 系統に書き出し、`make_timestamps` を単一 datetime から両形式生成 |
 | P8 外部取得コンテンツはプロンプトでない | knowledge.schema.json の `requires_human_review` フィールド |
-| P9 単一責任原則 | policy.schema.json で `responsibility` 必須化。CLI コマンド体系でも `validate` / `validate-policy` / `run preflight` の責務分離を維持 (Step 2 巻き戻しの根拠) |
-| NF-004 可搬性 | UTF-8 強制 (subprocess test)、非 ASCII を CLI help から除去 |
-| NF-007 安全性 | contract.schema.json の `command` を argv 配列限定 |
-| NF-010 依存最小化 | jsonschema 以外を runtime 依存に加えない。date-time format checker を `rfc3339-validator` ではなく stdlib (`re` + `datetime`) で自前実装 |
+| P9 単一責任原則 | policy.schema.json で `responsibility` 必須化。CLI コマンド体系でも `validate` / `validate-policy` / `run preflight` の責務分離を維持 (Step 2 巻き戻しの根拠)。Step 5 で `loader` / `preflight` / `runner` / `decision` / `evidence` の 5 モジュール分割 |
+| NF-004 可搬性 | UTF-8 強制 (subprocess test)、非 ASCII を CLI help から除去。`timestamp_utc` を `%H%M%S` で組み立て Windows パス segment 互換 |
+| NF-007 安全性 | contract.schema.json の `command` を argv 配列限定。`loader.load_contract` で project_root 外への path escape を拒否 |
+| NF-010 依存最小化 | jsonschema 以外を runtime 依存に加えない。date-time format checker を `rfc3339-validator` ではなく stdlib (`re` + `datetime`) で自前実装。Step 5 runner も stdlib のみで実装 |
 
-## 9. 未確定 / Step 3 以降で確定する事項
+## 12. 未確定 / Step 6 以降で確定する事項
 
 以下は本書時点では未確定。各 Step で確定し、本書を改訂する。
 
 | 項目 | 確定予定 Step |
 |---|---|
-| gate.json 生成ロジック (timestamp 生成、basis 列挙、stages[] 構造) | Step 5 |
-| 採用 / 揮発の 2 系統パス分離 (`evidence/` と `artifacts/`) | Step 5 |
-| `QGB_KEEP_RUNS` の動作 | Step 5 |
-| `qgb run` 実行前の確認プロンプト (`--yes` フラグ) | Step 5 |
-| `qgb verify` と `qgb run` の差分 | Step 5 |
-| `qgb validate-policy` の実装と `qgb/core/policy_checks.py` 共有モジュール | Step 6 |
+| `qgb run --yes` フラグ (実行前確認プロンプト) | Step 6 |
+| `qgb verify` (揮発側のみで gate.json を更新しない軽量チェック) | Step 6 |
+| `qgb validate-policy` の実装と preflight モジュール共有 | Step 6 |
 | `qgb detect` の対象系推定ロジック | Step 6 |
 | `qgb design-stages` 提案フェーズと採用フェーズの分離 | Step 6 |
 | `qgb scaffold` の REQ + contract + テスト雛形生成 | Step 6 |
-| TDD phase (red / green / refactor / verify) の実装 | Step 7 |
-| `manual_check` の Phase 1 NOT_READY 化 | Step 7 |
-| `waived` 段階の knowledge.jsonl 記録 | Step 7 |
+| TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
+| `command` / `json_schema` verification_type | Step 7 / 8 |
+| `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 |
+| `waived` 段階の knowledge.jsonl 記録 + `basis[]` への `KNOWLEDGE-*` 追加 | Step 7 |
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
 
-## 10. 改訂履歴
+## 13. 改訂履歴
 
 | 版 | 日付 | 内容 |
 |---|---|---|
@@ -669,3 +822,4 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 0.3 | 2026-05-21 | Step 3 補修 (Codex レビュー反映): InitError / NOT_READY 化 / 構造化 JSON 置換 / .gitignore 端処理を §6.3, §6.5 に反映 |
 | 0.4 | 2026-05-21 | Phase 1 Step 4 (examples/generic-minimal/) を反映。§7 を新設、§2 リポジトリ構造に examples/ を追加 |
 | 0.5 | 2026-05-21 | Step 4 補修 (Codex レビュー反映): log_ref 実体追加 / REQ-design-notes 矛盾解消 / 整合性テスト 5 層化 / §7.4 timestamp 規約と §7.5 basis 規約を Step 5 申し送りとして明文化 |
+| 0.6 | 2026-05-21 | Phase 1 Step 5 (qgb run 縦串) を反映。§8 を新設し loader/preflight/runner/decision/evidence の 5 モジュール責務、preflight 検査、verification_type 実装、timestamp/basis 生成、2 系統出力、QGB_KEEP_RUNS を確定。§10 テスト件数 173 件に更新、§11 思想憲章マトリクスに P6 機械化を追加 |
