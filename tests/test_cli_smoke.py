@@ -45,7 +45,8 @@ def test_main_without_args_prints_help(capsys: pytest.CaptureFixture[str]) -> No
 def test_main_with_unimplemented_subcommand_returns_usage_code(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    exit_code = main(["init"])
+    # `detect` is still a stub in Step 3; it shares the not-yet-implemented handler.
+    exit_code = main(["detect"])
     captured = capsys.readouterr()
     assert exit_code == EXIT_USAGE
     assert "not implemented" in captured.err.lower()
@@ -120,6 +121,7 @@ def test_subprocess_unknown_command_exits_64() -> None:
 
 
 def test_subprocess_unimplemented_subcommand_exits_64() -> None:
-    result = _run_qgb("init")
+    # Use a stub subcommand (Step 3 has wired init/validate to real handlers).
+    result = _run_qgb("detect")
     assert result.returncode == EXIT_USAGE
     assert "not implemented" in result.stderr.lower()

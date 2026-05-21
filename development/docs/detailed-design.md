@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.1 (Phase 1 Step 0〜2 確定範囲)
+# quality-gate-builder 詳細設計 v0.2 (Phase 1 Step 0〜3 確定範囲)
 
 ## 1. 本書の位置づけ
 
@@ -38,6 +38,7 @@ quality-gate-builder/
       __init__.py
       schema.py                         # スキーマ読み込み + Draft 2020-12 検証 + RFC3339 date-time format checker
       validate.py                       # qgb validate の本体
+      init.py                           # qgb init の本体
     adapters/__init__.py               # Phase 1 では空
     schemas/                            # バンドルされる JSON Schema 群
       README.md
@@ -48,8 +49,10 @@ quality-gate-builder/
       gate.schema.json                  # 採用判定証跡用 (strict)
       gate.runtime.schema.json          # 揮発側 (permissive)
       knowledge.schema.json
-    templates/                          # Phase 1 中盤以降で使用予定
-      .gitkeep
+    templates/                          # qgb init の雛形 (Step 3 追加)
+      config.initial.json
+      policy.initial.json
+      project-context.initial.md
 
   development/docs/
     philosophy.md                       # 思想憲章 v1.0 (P1〜P11)
@@ -93,7 +96,7 @@ quality-gate-builder/
 | サブコマンド | Step | 状態 | 役割 |
 |---|---|---|---|
 | `validate` | 2 | **実装済み** | 個別 JSON 仕様ファイルがスキーマに準拠しているか + §F-005 contract field 混在 |
-| `init` | 3 | parser 登録のみ | `.quality-system/` 初期化 |
+| `init` | 3 | **実装済み** | `.quality-system/` 初期化、空 stages の policy.json と空 knowledge.jsonl、`.gitignore` 追記 |
 | `detect` | 6 | parser 登録のみ | 対象系の言語/フレームワーク推定 |
 | `design-stages` | 6 | parser 登録のみ | 段階設計フェーズ |
 | `scaffold` | 6 | parser 登録のみ | REQ + contract + テスト雛形 |
@@ -290,7 +293,100 @@ verification_type 別の必須/任意フィールド：
 - 問題あり → 2 (NOT_READY)
 - パス不在 / ファイル指定 → 64
 
-## 6. Python 実装規約 (Step 0〜2 確定)
+## 6. qgb init の責務 (Step 3 確定)
+
+### 6.1 入力
+
+- `--path <dir>` (default: `.`): プロジェクトルートのディレクトリ
+  - 存在しない → exit 64
+  - ファイル指定 → exit 64
+- `--name <project_name>`: `config.json` の `project.name` に書き込む値 (default: ディレクトリ名)
+- `--force`: 既存ファイルを上書き
+- `--json`: 機械可読出力
+
+### 6.2 生成するもの
+
+ディレクトリ:
+
+```
+<root>/.quality-system/
+  req/
+  contracts/
+  knowledge/
+  evidence/
+  artifacts/
+```
+
+`evidence/` と `artifacts/` は Step 5 の `qgb run` で実際に使われる予約スペース。Step 3 では空ディレクトリとして生成しておく。
+
+ファイル:
+
+| パス | 内容 |
+|---|---|
+| `.quality-system/config.json` | `{schema_version, project.name, qgb.{core_language, version}, commands: {}}` |
+| `.quality-system/policy.json` | `{schema_version, policy_id: "default", stages: []}` |
+| `.quality-system/knowledge/knowledge.jsonl` | 空ファイル |
+| `.quality-system/knowledge/project-context.md` | 雛形 Markdown |
+
+### 6.3 idempotent 規約
+
+- 既存ファイルは **skipped** (上書きしない)
+- `--force` フラグで **overwritten**
+- ディレクトリは常に `mkdir(parents=True, exist_ok=True)` で確保 (壊さない)
+- 二重実行で副作用なし
+
+### 6.4 `.gitignore` 自動追記の規約
+
+- 既存 `.gitignore` があれば追記
+- なければ新規作成
+- 既に `.quality-system/artifacts/` が含まれていれば何もしない (`already-present`)
+- 末尾改行が無い既存ファイルにも安全に追記する
+
+追記される内容:
+
+```text
+# qgb volatile artifacts
+.quality-system/artifacts/
+```
+
+### 6.5 出力
+
+#### text モード (デフォルト)
+
+```
+Initialised .quality-system/ at <abspath>
+  Ensured N directories.
+  + created     <path>
+  - skipped     <path> (file already exists)
+  * overwritten <path>
+  .gitignore: created | appended | already-present
+```
+
+#### `--json` モード
+
+```json
+{
+  "project_root": "...",
+  "dirs_ensured": ["..."],
+  "files": [{"path": "...", "action": "created" | "skipped" | "overwritten", "note": ""}],
+  "gitignore_action": "created" | "appended" | "already-present"
+}
+```
+
+### 6.6 やらないこと (他コマンドの責務)
+
+- 対象系の言語/フレームワーク推定 → `qgb detect` (Step 6)
+- 段階設計の中身 → `qgb design-stages` (Step 6)
+- REQ + contract 雛形 → `qgb scaffold` (Step 6)
+- 初期状態の整合性チェック → `qgb validate` (Step 2) と `qgb validate-policy` (Step 6) で必要に応じて
+
+### 6.7 init → validate ラウンドトリップ保証
+
+`qgb init` 直後の `.quality-system/` ツリーは `qgb validate` で必ず OK 判定 (exit 0) になる。Step 4 の `examples/generic-minimal/` 構築や Step 5 の `qgb run` 前提として、この保証は重要。
+
+テスト `test_init.py::test_init_output_passes_validate` でこのラウンドトリップを毎回検証。
+
+## 7. Python 実装規約 (Step 0〜2 確定)
 
 ### 6.1 依存
 
@@ -407,8 +503,6 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 
 | 項目 | 確定予定 Step |
 |---|---|
-| `.quality-system/` 初期化時の雛形内容 (config.json / policy.json の初期値) | Step 3 |
-| `.gitignore` 自動追記の方針 | Step 3 |
 | `examples/generic-minimal/` の段階定義と contract 構造 | Step 4 |
 | gate.json 生成ロジック (timestamp 生成、basis 列挙、stages[] 構造) | Step 5 |
 | 採用 / 揮発の 2 系統パス分離 (`evidence/` と `artifacts/`) | Step 5 |
@@ -430,3 +524,4 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 版 | 日付 | 内容 |
 |---|---|---|
 | 0.1 | 2026-05-21 | Phase 1 Step 0〜2 確定範囲を初版として記録 |
+| 0.2 | 2026-05-21 | Phase 1 Step 3 (qgb init) を反映。§6 を新設 |

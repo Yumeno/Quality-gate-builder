@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from qgb import __version__
+from qgb.core.init import InitReport, run_init
 from qgb.core.validate import ValidateReport, run_validate
 
 EXIT_OK = 0
@@ -151,6 +152,60 @@ def _handle_validate(args: argparse.Namespace) -> int:
     return EXIT_NOT_READY if report.has_problems() else EXIT_OK
 
 
+# ---- init ----------------------------------------------------------------
+
+
+def _print_init_text(report: InitReport, stream) -> None:
+    print(f"Initialised .quality-system/ at {report.project_root}", file=stream)
+    if report.dirs_ensured:
+        print(f"  Ensured {len(report.dirs_ensured)} directories.", file=stream)
+    for outcome in report.file_outcomes:
+        marker = {
+            "created": "+",
+            "overwritten": "*",
+            "skipped": "-",
+        }.get(outcome.action, "?")
+        note = f" ({outcome.note})" if outcome.note else ""
+        print(f"  {marker} {outcome.action:11s} {outcome.path}{note}", file=stream)
+    if report.gitignore_action:
+        print(f"  .gitignore: {report.gitignore_action}", file=stream)
+
+
+def _init_report_to_json(report: InitReport) -> dict[str, object]:
+    return {
+        "project_root": str(report.project_root),
+        "dirs_ensured": [str(p) for p in report.dirs_ensured],
+        "files": [
+            {"path": str(o.path), "action": o.action, "note": o.note}
+            for o in report.file_outcomes
+        ],
+        "gitignore_action": report.gitignore_action,
+    }
+
+
+def _handle_init(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(f"qgb init: path does not exist: {root}", file=sys.stderr)
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb init: --path must point at a project directory, not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    report = run_init(root, project_name=args.name, force=args.force)
+
+    if args.json:
+        json.dump(_init_report_to_json(report), sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        _print_init_text(report, sys.stdout)
+
+    return EXIT_OK
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -178,7 +233,6 @@ def build_parser() -> QgbArgumentParser:
     # Phase 1 commands. Handlers are wired in incrementally; not-yet-implemented
     # commands share a single stub handler that returns EXIT_USAGE.
     stub_commands: tuple[tuple[str, str], ...] = (
-        ("init", "(not yet implemented) initialize .quality-system/ in the target project"),
         ("detect", "(not yet implemented) detect target language and framework"),
         ("design-stages", "(not yet implemented) propose verification stages for the target"),
         ("scaffold", "(not yet implemented) scaffold a new REQ"),
@@ -189,6 +243,40 @@ def build_parser() -> QgbArgumentParser:
     for name, help_text in stub_commands:
         sub = subparsers.add_parser(name, help=help_text)
         sub.set_defaults(handler=_handle_not_implemented)
+
+    # init: real handler (Step 3).
+    init_p = subparsers.add_parser(
+        "init",
+        help="initialise .quality-system/ in the target project",
+        description=(
+            "Create the canonical .quality-system/ directory layout, write minimal "
+            "config.json and policy.json (stages: []), seed knowledge/, and append "
+            ".quality-system/artifacts/ to .gitignore. Idempotent: existing files "
+            "are skipped unless --force is passed. Subsequent steps "
+            "(qgb design-stages, qgb scaffold) populate the policy and REQ files."
+        ),
+    )
+    init_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root in which to create .quality-system/ (default: current directory)",
+    )
+    init_p.add_argument(
+        "--name",
+        default=None,
+        help="Override the project name written into config.json (default: basename of --path)",
+    )
+    init_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing .quality-system/ files instead of skipping them",
+    )
+    init_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    init_p.set_defaults(handler=_handle_init)
 
     # validate: real handler (Step 2).
     validate_p = subparsers.add_parser(
