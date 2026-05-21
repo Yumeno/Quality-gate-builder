@@ -2,17 +2,19 @@
 
 qgb の **入門用最小サンプル**。言語非依存 (Generic) で、`file_exists` と `substring_match` の 2 段階だけで構成される。
 
+設計判断の根拠は `design-notes.md` を参照。本 README はサンプルの構成と使い方の入口に限定する。
+
 ## このサンプルが示すこと
 
-- `qgb init` から `qgb validate` までのラウンドトリップが動くこと
+- 最小の `.quality-system/` ツリーが `qgb validate` を通ること
 - 段階を 2 個だけ宣言した場合の最小構造
-- gate.json の採用判定証跡の見た目
+- gate.json の採用判定証跡の見た目 (Step 5 の `qgb run` リファレンス)
 
 ## このサンプルが示さないこと
 
-- 推奨段階数 (3〜7) の例 → `examples/python-cli-pytest/` (Step 8)
-- 非プログラミング対象の例 → `examples/markdown-docs/` (Step 8)
-- 外部コマンド呼び出し (verification_type: command) の例 → 上記 Python 例
+- 推奨段階数 (3〜7) の例 → `examples/python-cli-pytest/` (Step 8 で追加予定)
+- 非プログラミング対象の例 → `examples/markdown-docs/` (Step 8 で追加予定)
+- 外部コマンド呼び出し (verification_type: command) の例 → 上記 Python 例 (Step 8 で追加予定)
 
 ## ファイル構成
 

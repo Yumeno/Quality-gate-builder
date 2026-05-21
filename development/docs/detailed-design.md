@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.4 (Phase 1 Step 0〜4 確定範囲)
+# quality-gate-builder 詳細設計 v0.5 (Phase 1 Step 0〜4 確定範囲、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -94,7 +94,10 @@ quality-gate-builder/
         policy.json
         req/REQ-APP-001.{md,meta.json}
         contracts/REQ-APP-001/{S1,S2}.json
-        evidence/REQ-APP-001/latest/{gate.json,summary.md}
+        evidence/REQ-APP-001/latest/
+          gate.json
+          summary.md
+          stages/{S1,S2}.log               # log_ref が指す stage 実行ログ
 ```
 
 `skills/source/`、`tools/`、`dist/skills/` は Phase 5 で追加予定。`examples/` には Step 8 で `python-cli-pytest/` と `markdown-docs/` を追加する。
@@ -468,14 +471,62 @@ Issue #12 議論で確定:
 
 ### 7.3 整合性テスト
 
-`tests/test_examples.py` で以下を保証:
+`tests/test_examples.py` で 5 層の不変条件を保証:
 
-- `examples/<name>/` の `.quality-system/` が `qgb validate` を通る
+**Layer 1: schema validity**
+- `examples/<name>/.quality-system/` が `qgb validate` を通る
+
+**Layer 2: curated gate.json conformance**
 - `evidence/.../gate.json` が curated gate schema (strict) を満たす
-- contract が claim する内容が実際の target ファイルで成立 (substring_match なら実際に文字列が含まれる、など)
-- design-notes.md が必須項目を含む (推奨レンジ言及、採用しなかった段階セクション)
 
-これにより、設計例の腐敗を CI で検出できる。
+**Layer 3: cross-file integrity (Step 5 が破ってはならない契約)**
+- `req-meta.stages[].stage_id` ⊂ `policy.stages[].id`
+- `req-meta.contract_ref` が実在
+- 各 contract の `req_id` / `stage_id` / `verification_type` が policy / meta と一致
+- contract が policy の `required_contract_fields` をすべて含む
+- `gate.stages[]` が REQ メタの段階選択順と同じ
+- `gate.stages[].verification_type` が policy と一致
+- `gate.stages[].contract_ref` が REQ メタと一致
+- `gate.status == gate.decision.result` (ALLOW/DENY 同期)
+- ALLOW のとき `failed_stage == ""` かつ全 stage `passed`
+- `basis[]` が `REQ-*` + `POLICY-<policy_id>` + 各 `CONTRACT-<REQ>-<stage>` を含む
+- `paths.run_dir` の末尾 timestamp が `timestamp_utc` と一致
+- `timestamp_utc` (compact) と `timestamp_rfc3339` (`:` あり) が同一時刻
+- `paths.curated_latest_dir` が canonical layout
+- `stages[].log_ref` が実在ファイル
+
+**Layer 4: contract claims hold on actual target**
+- `verification_type: file_exists` の `target` が実在
+- `verification_type: substring_match` の `must_contain[]` が target に実際に含まれる
+
+**Layer 5: design-notes.md required content**
+- 推奨レンジ言及、採用しなかった段階セクション
+- 必須トップレベル見出し: 対象系の特徴 / 段階数の決定根拠 / 採用した段階と理由 / 採用しなかった段階と理由 / 思想憲章のどの項目が特に効くか / 段階間の依存関係 / 既知の限界
+
+これにより設計例の腐敗を CI で検出できる。Layer 3 は Step 5 で qgb run を実装するときに守るべき契約でもある。
+
+### 7.4 gate.json 内 timestamp 規約 (Step 5 への申し送り)
+
+| フィールド | 形式 | 用途 |
+|---|---|---|
+| `timestamp_utc` | `YYYY-MM-DDTHHMMSSZ` (`:` なし、Z 終端) | `paths.run_dir` パスのサフィックス、ファイル名互換 |
+| `timestamp_rfc3339` | `YYYY-MM-DDTHH:MM:SSZ` (`:` あり) | ツール互換、解析しやすい |
+
+両者は **同一時刻** を表現する。Step 5 の実装では：
+
+- 単一の `datetime.now(timezone.utc)` 呼び出しから両形式を生成
+- `paths.run_dir` のサフィックスは `timestamp_utc` と必ず一致
+- `tests/test_examples.py::test_gate_timestamps_are_mutually_consistent` が CI で検証
+
+### 7.5 basis[] 規約 (Step 5 への申し送り)
+
+`basis[]` は採用判定の根拠となる文書群の id を列挙する。Phase 1 の最小形式:
+
+- `REQ-<...>`: 採用 REQ id (要件定義書 §F-011 の REQ id 形式)
+- `POLICY-<policy_id>`: `policy.json` の `policy_id` (デフォルトは `POLICY-default`)
+- `CONTRACT-<REQ>-<stage_id>`: 各採用段階の contract (`req-meta` の `stages[].stage_id` ごとに 1 件)
+
+Step 7 の knowledge 連携 (`waived` 段階の knowledge.jsonl 参照など) ではここに `KNOWLEDGE-<id>` も加わる予定。
 
 ## 8. Python 実装規約 (Step 0〜2 確定)
 
@@ -617,3 +668,4 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 0.2 | 2026-05-21 | Phase 1 Step 3 (qgb init) を反映。§6 を新設 |
 | 0.3 | 2026-05-21 | Step 3 補修 (Codex レビュー反映): InitError / NOT_READY 化 / 構造化 JSON 置換 / .gitignore 端処理を §6.3, §6.5 に反映 |
 | 0.4 | 2026-05-21 | Phase 1 Step 4 (examples/generic-minimal/) を反映。§7 を新設、§2 リポジトリ構造に examples/ を追加 |
+| 0.5 | 2026-05-21 | Step 4 補修 (Codex レビュー反映): log_ref 実体追加 / REQ-design-notes 矛盾解消 / 整合性テスト 5 層化 / §7.4 timestamp 規約と §7.5 basis 規約を Step 5 申し送りとして明文化 |

@@ -14,7 +14,7 @@
 ## 受入条件
 
 - `qgb validate` がスキーマ準拠を確認し OK 判定を出す
-- `qgb validate-policy` が段階設計と参照整合性を確認し問題なしと判定する (Step 6 以降)
+- `qgb validate-policy` が参照整合性 (contract_ref / stage_id 等) を確認し error を出さない (Step 6 以降)。段階数 2 は推奨レンジ (3〜7) 外のため warning は許容する (design intent として `design-notes.md` に明記)
 - `qgb run REQ-APP-001` が `ALLOW` を出力する (Step 5 以降)
 
 ## 検証

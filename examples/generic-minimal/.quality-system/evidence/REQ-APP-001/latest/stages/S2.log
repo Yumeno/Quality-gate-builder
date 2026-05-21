@@ -1,0 +1,13 @@
+stage_id: S2
+name: キーワード包含
+verification_type: substring_match
+contract_ref: .quality-system/contracts/REQ-APP-001/S2.json
+target: target/sample.txt
+must_contain: ["hello"]
+
+check: every entry of must_contain[] occurs in target file
+- "hello": found at byte offset 0
+result: passed
+
+(This log is a hand-written reference for Step 4. When Step 5 implements
+qgb run, the runner writes the actual log of the substring_match check here.)

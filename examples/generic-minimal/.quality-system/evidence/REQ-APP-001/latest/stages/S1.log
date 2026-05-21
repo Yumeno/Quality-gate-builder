@@ -1,0 +1,11 @@
+stage_id: S1
+name: sample ファイル存在
+verification_type: file_exists
+contract_ref: .quality-system/contracts/REQ-APP-001/S1.json
+target: target/sample.txt
+
+check: target/sample.txt exists as a regular file
+result: passed
+
+(This log is a hand-written reference for Step 4. When Step 5 implements
+qgb run, the runner writes the actual log of the file_exists check here.)
