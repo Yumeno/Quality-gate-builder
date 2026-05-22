@@ -92,6 +92,12 @@
 4. **複数 REQ の例ではない**: REQ-APP-001 だけ。複数 REQ の例は python-cli-pytest (Step 8) で扱う
 5. **TDD フェーズの例ではない**: 全段階 ALLOW を前提。phase=red の例は Step 7 以降で扱う
 
+## リファレンス出力の場所 (Step 5 補修)
+
+手書きの期待出力は `evidence-reference/REQ-APP-001/latest/` に置いてある。`.quality-system/evidence/` は `qgb run` の destination であり、コミット対象の手書きリファレンスとは分離されている。
+
+これは P7 (再現可能な証跡) と P9 (単一責任) の両方に沿った配置: 同じパスに「source of truth」と「runner の出力先」を同居させると、`qgb run` の destination がリファレンスを上書きしてしまう。Step 5 当初は同居させていたが、Codex レビューを受けて分離した。
+
 ## 関連
 
 - 段階設計仕様 (`stage-design.md`) §9: 段階数の推奨レンジ

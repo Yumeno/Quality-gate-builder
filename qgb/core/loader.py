@@ -104,15 +104,23 @@ def load_req_meta(project_root: Path, req_id: str) -> dict[str, Any]:
     return _expect_dict(_read_json(path), path)
 
 
-def load_contract(project_root: Path, contract_ref: str) -> dict[str, Any]:
-    """Resolve ``contract_ref`` relative to the project root and load it.
+def resolve_project_relative(
+    project_root: Path, ref: str, field_name: str
+) -> Path:
+    """Resolve ``ref`` relative to ``project_root`` and reject path escapes.
 
-    REQ meta records ``contract_ref`` as a project-rooted relative path
-    (e.g. ``.quality-system/contracts/REQ-APP-001/S1.json``). The loader is
-    careful not to interpret absolute paths or path-escape attempts: a
-    contract_ref that resolves outside the project root is rejected.
+    Shared safety boundary for any project-rooted path coming from a JSON
+    spec file (``contract_ref``, ``contract.target``, ``contract.schema``,
+    etc.). Rejecting escapes here protects the runner from ever reading
+    files outside the target project, which matters for both correctness
+    (P7: the basis must only cite project-internal evidence) and safety
+    (NF-007: a contract must not be able to point ``qgb run`` at
+    arbitrary filesystem locations).
+
+    Raises :class:`LoaderError` (kind=``wrong_type``) on either an
+    absolute path or a path that resolves outside the project root.
     """
-    candidate = (project_root / contract_ref).resolve()
+    candidate = (project_root / ref).resolve()
     root_resolved = project_root.resolve()
     try:
         candidate.relative_to(root_resolved)
@@ -121,7 +129,19 @@ def load_contract(project_root: Path, contract_ref: str) -> dict[str, Any]:
             kind="wrong_type",
             path=candidate,
             message=(
-                f"contract_ref {contract_ref!r} resolves outside the project root"
+                f"{field_name} {ref!r} resolves outside the project root"
             ),
         ) from exc
+    return candidate
+
+
+def load_contract(project_root: Path, contract_ref: str) -> dict[str, Any]:
+    """Resolve ``contract_ref`` relative to the project root and load it.
+
+    REQ meta records ``contract_ref`` as a project-rooted relative path
+    (e.g. ``.quality-system/contracts/REQ-APP-001/S1.json``). The loader is
+    careful not to interpret absolute paths or path-escape attempts: a
+    contract_ref that resolves outside the project root is rejected.
+    """
+    candidate = resolve_project_relative(project_root, contract_ref, "contract_ref")
     return _expect_dict(_read_json(candidate), candidate)

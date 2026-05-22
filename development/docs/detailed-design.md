@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.6 (Phase 1 Step 0〜5 確定範囲、Codex レビュー反映済み)
+# quality-gate-builder 詳細設計 v0.7 (Phase 1 Step 0〜5 + 補修確定範囲、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -449,18 +449,18 @@ Phase 1 で初めて整備された設計例 (Issue #19)。**入門用最小サ�
 
 - `README.md`: サンプルの全体像
 - `design-notes.md`: 設計判断メモ
-- `.gitignore`: `.quality-system/artifacts/` を除外
+- `.gitignore`: `.quality-system/artifacts/` と `.quality-system/evidence/` を除外
 - `target/sample.txt`: 検査対象テキスト
 - `.quality-system/{config,policy}.json`: qgb の正本
 - `.quality-system/req/REQ-APP-001.{md,meta.json}`: REQ 1 件
 - `.quality-system/contracts/REQ-APP-001/{S1,S2}.json`: 各段階の contract
-- `.quality-system/evidence/REQ-APP-001/latest/{gate.json,summary.md}`: **手書き** の期待 ALLOW 出力
+- `evidence-reference/REQ-APP-001/latest/{gate.json, summary.md, stages/{S1,S2}.log}`: **手書き** の期待 ALLOW 出力 (Step 5 補修で `.quality-system/evidence/` から外に退避)
 
-`.quality-system/artifacts/` ディレクトリは作らない (空ディレクトリは git に乗らない & 揮発側は実行時に init/run が生成する)。
+`.quality-system/artifacts/` と `.quality-system/evidence/` は git 管理外 (前者は揮発側 destination、後者は採用側 destination)。両方とも `qgb run` 実行時に動的に生成される。
 
-#### Step 5 への意味
+#### Step 5 への意味と reference 退避 (Step 5 補修)
 
-`evidence/REQ-APP-001/latest/gate.json` は Step 5 で実装する `qgb run` のターゲット仕様。Step 5 完了時に同等の構造の gate.json が自動生成される必要がある。
+`evidence-reference/REQ-APP-001/latest/gate.json` は `qgb run` のターゲット仕様。同じパスに `qgb run` の destination (`.quality-system/evidence/`) を置くと、in-repo 実行で手書きリファレンスが上書きされる事故が起きるため、reference は `evidence-reference/` 配下に分離した。テスト (`tests/test_examples.py`) は `evidence-reference/` を読みに行く。
 
 ### 7.2 design-notes.md の必須項目 (今後の examples すべてに適用)
 
@@ -593,18 +593,21 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 
 #### file_exists
 
-- `contract.target` を `project_root` 相対で resolve
+- `contract.target` を `loader.resolve_project_relative()` で resolve (project_root 配下に限定)
 - `Path.is_file()` で判定 (シンボリックリンク先がファイルなら True)
 - 結果ログに `resolved:` 絶対パスを記録 (P7 再現可能な証跡)
+- project_root 外への path escape は failed として記録 (Step 5 補修 R1)
 
 #### substring_match
 
-- `contract.target` を UTF-8 で読み込み
+- `contract.target` を `loader.resolve_project_relative()` で resolve
+- UTF-8 で読み込み
 - `contract.must_contain` (list[str]) の各要素について包含確認
-- 各 keyword の `byte offset` をログに記録 (`hello: found at byte offset 0` 形式)
+- 各 keyword の char offset をログに記録 (`hello: found at byte offset 0` 形式、※将来的に正確な byte offset 表記に修正予定)
 - UTF-8 decode 失敗時は failed
+- project_root 外への path escape は failed として記録 (Step 5 補修 R1)
 
-両 type とも `exit_code` は `null` (外部プロセス非起動)。
+両 type とも `exit_code` は `null` (外部プロセス非起動)。target の root escape チェックは `loader.resolve_project_relative()` を `contract_ref` と共有することで、契約パスと検査対象パスの両方が「project 内部のみ」という不変条件を一箇所で守る (P9 / NF-007)。
 
 ### 8.6 depends_on の扱い (Phase 1)
 
@@ -622,6 +625,16 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 - `rfc3339` = `%Y-%m-%dT%H:%M:%SZ` (ツール互換)
 - `paths.run_dir` の最末尾サフィックスは必ず `compact` と一致 (`test_examples.py::test_gate_timestamps_are_mutually_consistent` で CI 検証)
 - テストでは `monkeypatch.setattr(evidence, "make_timestamps", ...)` で固定値注入が可能
+
+#### 同一秒衝突回避 (Step 5 補修 R2)
+
+`evidence._resolve_run_dir(runs_root, timestamps)` が `write_evidence` の前段で動く:
+
+- `runs_root/<compact>/` が既存なら 1 秒ずつ進めた synthetic timestamp に切り替え (最大 60 秒前進)
+- 戻り値は `(確定 run_dir, 確定 Timestamps)` のタプルで、gate.json には確定後の値が焼き込まれる
+- 60 秒連続で衝突が続いた場合は `microsecond` をサフィックスにしたフォールバック (compact pattern からは外れるが、揮発側 schema は permissive なので OK)
+
+これにより同一プロセスから 3 回連続で `qgb run` を叩いても、各 run_dir が独立し過去 run の証跡が上書きされない (P7)。`timestamp_utc` と `paths.run_dir` のサフィックス一致は維持される。
 
 ### 8.8 basis[] の生成 (詳細)
 
@@ -744,8 +757,9 @@ select = ["E", "W", "F", "I", "B", "UP"]
 - Step 3: 20 件追加 (qgb init)
 - Step 4: 18 件追加 (examples/generic-minimal 整合性)
 - Step 5: 17 件追加 (qgb run 縦串)
+- Step 5 補修: 5 件追加 (R1 root escape × 2、R2 同秒衝突 × 2、R3 optional ALLOW × 1)
 
-合計 **173 件、全成功、ruff 警告ゼロ**。
+合計 **178 件、全成功、ruff 警告ゼロ**。
 
 ### 10.2 fixture の責務分離
 
@@ -802,7 +816,7 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 |---|---|
 | `qgb run --yes` フラグ (実行前確認プロンプト) | Step 6 |
 | `qgb verify` (揮発側のみで gate.json を更新しない軽量チェック) | Step 6 |
-| `qgb validate-policy` の実装と preflight モジュール共有 | Step 6 |
+| `qgb validate-policy` の実装と preflight モジュール分割 (下記) | Step 6 |
 | `qgb detect` の対象系推定ロジック | Step 6 |
 | `qgb design-stages` 提案フェーズと採用フェーズの分離 | Step 6 |
 | `qgb scaffold` の REQ + contract + テスト雛形生成 | Step 6 |
@@ -812,6 +826,30 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | `waived` 段階の knowledge.jsonl 記録 + `basis[]` への `KNOWLEDGE-*` 追加 | Step 7 |
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
+
+### Step 6 への申し送り (Codex Step 5 レビュー由来)
+
+#### preflight モジュールの再分割
+
+`qgb run` の preflight をそのまま validate-policy の中核にすると責務が混ざる。validate-policy は「設計品質と整合性を診断する」コマンドであり、`manual_check_required` / `unsupported_verification_type` は run 側 blocker だが validate-policy 側では「Phase 1 runtime 未対応」という別ランクの診断に過ぎない。Step 6 で次のように分割する想定:
+
+```python
+validate_schema_sources(project_root)        # 既存 run_validate
+inspect_policy_graph(policy)                  # DAG / dangling / topological order
+resolve_adopted_stages(root, req, policy, meta)  # REQ 固有
+check_runtime_support(adopted)                # qgb run 固有 (manual_check / unsupported)
+run_preflight()                               # 上記を組み合わせる薄い orchestration
+```
+
+加えて `PreflightIssue.severity` を導入し、`blockers` と `warnings` を分けて validate-policy の警告 (推奨段階数レンジ外など) を載せられる構造にする。
+
+#### Step 5 補修で扱いきれなかった残課題
+
+- **REQ meta 実行順がトポロジカル順を満たすか未検証** (Codex M1): `[S2, S1]` の順で書かれた場合に S2 が S1 未実行で走るリスク。`resolve_adopted_stages` の責務として Step 6 で実装
+- **`_replace_dir_contents()` が非 atomic** (Codex M4 / M5): `gate.json` と `stages/` の不整合や stale log 残存。`latest.tmp-<ts>` で書いて rename する方式が望ましい
+- **byte offset 表記** (Codex L2): substring_match のログは現状 code point index。`char offset` 表記に変えるか、UTF-8 byte offset を計算する
+- **`LoaderError.wrong_type` の preflight 側分類**: `invalid_json` 扱いに混ざる箇所がある (Codex L3)
+- **`QGB_KEEP_RUNS` 不正値の silent default** (Codex L4): stderr warning か JSON report に warning を出す
 
 ## 13. 改訂履歴
 
@@ -823,3 +861,4 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 0.4 | 2026-05-21 | Phase 1 Step 4 (examples/generic-minimal/) を反映。§7 を新設、§2 リポジトリ構造に examples/ を追加 |
 | 0.5 | 2026-05-21 | Step 4 補修 (Codex レビュー反映): log_ref 実体追加 / REQ-design-notes 矛盾解消 / 整合性テスト 5 層化 / §7.4 timestamp 規約と §7.5 basis 規約を Step 5 申し送りとして明文化 |
 | 0.6 | 2026-05-21 | Phase 1 Step 5 (qgb run 縦串) を反映。§8 を新設し loader/preflight/runner/decision/evidence の 5 モジュール責務、preflight 検査、verification_type 実装、timestamp/basis 生成、2 系統出力、QGB_KEEP_RUNS を確定。§10 テスト件数 173 件に更新、§11 思想憲章マトリクスに P6 機械化を追加 |
+| 0.7 | 2026-05-22 | Step 5 補修 (Codex レビュー反映): R1 contract.target の root escape 防止 (loader.resolve_project_relative を共通化)、R2 同一秒 run_dir 衝突回避、R3 optional stage と ALLOW schema の矛盾解消 (全 adopted stage を判定対象に)、reference gate.json の `evidence-reference/` 退避、§12 に Step 6 申し送り (preflight 再分割 / severity / topological order / atomic write / byte offset / loader error / QGB_KEEP_RUNS warning) を追加 |

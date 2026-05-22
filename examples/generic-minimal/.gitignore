@@ -1,2 +1,6 @@
-# qgb volatile artifacts (Step 5 onwards generates timestamped run dirs here)
+# qgb volatile artifacts (Step 5 onwards generates timestamped run dirs here).
 .quality-system/artifacts/
+
+# qgb run の採用判定 destination。in-repo 実行で生成された証跡は
+# コミットしない (手書きリファレンスは evidence-reference/ にある)。
+.quality-system/evidence/

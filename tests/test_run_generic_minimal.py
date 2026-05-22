@@ -38,10 +38,16 @@ def _copy_generic_minimal(dest: Path) -> Path:
     """Copy the generic-minimal example tree to ``dest``.
 
     Returns the project root inside ``dest``. The volatile ``artifacts/``
-    directory is created so ``qgb run`` has somewhere to write runs.
+    and any leftover ``evidence/`` (both ``.gitignore``'d) from prior
+    in-repo runs are deliberately stripped so tests always start from a
+    clean fixture state.
     """
     target = dest / "generic-minimal"
-    shutil.copytree(GENERIC_MINIMAL, target)
+    shutil.copytree(
+        GENERIC_MINIMAL,
+        target,
+        ignore=shutil.ignore_patterns("artifacts", "evidence"),
+    )
     (target / ".quality-system" / "artifacts").mkdir(exist_ok=True)
     return target
 
@@ -253,16 +259,15 @@ def test_run_returns_not_ready_when_contract_ref_missing(
     exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
-    # No curated gate.json should be written for a NOT_READY run.
+    # A NOT_READY run must not write any curated gate.json. Step 5 補修:
+    # the in-repo example no longer ships a hand-written gate.json under
+    # .quality-system/evidence/, so the destination should still be empty
+    # after a rejected preflight.
     curated_gate = (
         project / ".quality-system" / "evidence" / "REQ-APP-001" / "latest" / "gate.json"
     )
-    # The reference gate.json is part of the example tree, so it exists, but
-    # qgb run must not have overwritten it; we check by reading the timestamp
-    # and asserting it equals the hand-written reference.
-    gate = _read_json(curated_gate)
-    assert gate["timestamp_utc"] == "2026-05-21T120000Z", (
-        "NOT_READY runs must not overwrite curated gate.json"
+    assert not curated_gate.exists(), (
+        "NOT_READY runs must not create or overwrite curated gate.json"
     )
 
 
@@ -360,19 +365,175 @@ def test_run_keep_runs_prunes_old_runs(
     assert len(children) == 2, [c.name for c in children]
 
 
+# ---- R3: every adopted stage counts (no required=False ALLOW escape) -----
+
+
+def test_run_failing_optional_adopted_stage_still_denies(tmp_path: Path) -> None:
+    """A failing adopted stage marked required=False still produces DENY.
+
+    The curated gate.schema.json's ALLOW constraint requires every entry
+    of stages[] to have result=passed. Honouring an optional flag at the
+    decision layer would emit ALLOW with a failed stage and produce a
+    schema-invalid gate document. Phase 1: every adopted stage is
+    judgement material.
+    """
+    project = _copy_generic_minimal(tmp_path)
+
+    # Mark S2 (substring_match) as required=False, then make it fail.
+    meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
+    meta = _read_json(meta_path)
+    for stage in meta["stages"]:
+        if stage["stage_id"] == "S2":
+            stage["required"] = False
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    (project / "target" / "sample.txt").write_text("no greeting\n", encoding="utf-8")
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+
+    gate = _gate(project)
+    assert gate["status"] == "DENY"
+    assert gate["failed_stage"] == "S2"
+    # Schema invariant: ALLOW would have been schema-invalid.
+    issues = schema_validate(gate, "gate")
+    assert not issues, [(i.path, i.message) for i in issues]
+
+
+# ---- R2: same-second runs must not collide -------------------------------
+
+
+def test_run_same_second_does_not_overwrite_run_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three runs forced onto the same wall-clock second must keep three run-dirs.
+
+    Without collision-avoidance, the second and third runs would silently
+    overwrite the first run's volatile evidence, violating P7 ("each run
+    leaves a reproducible trace"). The runner must walk the timestamp
+    forward instead.
+    """
+    from datetime import datetime, timezone
+
+    from qgb.core import evidence as evidence_mod
+
+    project = _copy_generic_minimal(tmp_path)
+    runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
+
+    fixed = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        evidence_mod,
+        "make_timestamps",
+        lambda now=None: evidence_mod._timestamps_from_instant(fixed),
+    )
+    # Keep enough runs that pruning doesn't remove them.
+    monkeypatch.setenv("QGB_KEEP_RUNS", "10")
+
+    for _ in range(3):
+        assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
+
+    children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
+    assert len(children) == 3, children
+    # First run keeps the requested timestamp; subsequent runs walk forward.
+    assert children[0] == "2026-01-01T120000Z"
+    assert children[1] == "2026-01-01T120001Z"
+    assert children[2] == "2026-01-01T120002Z"
+
+
+def test_run_same_second_gate_paths_stay_in_lockstep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """timestamp_utc and paths.run_dir must agree even after a collision walk."""
+    from datetime import datetime, timezone
+
+    from qgb.core import evidence as evidence_mod
+
+    project = _copy_generic_minimal(tmp_path)
+
+    fixed = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        evidence_mod,
+        "make_timestamps",
+        lambda now=None: evidence_mod._timestamps_from_instant(fixed),
+    )
+
+    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--path", str(project)])
+
+    gate = _gate(project)  # curated = latest = second run
+    assert gate["timestamp_utc"] == "2026-01-01T120001Z"
+    assert gate["paths"]["run_dir"].endswith("2026-01-01T120001Z")
+    assert gate["timestamp_rfc3339"] == "2026-01-01T12:00:01Z"
+
+
+# ---- R1: contract.target must not escape project root --------------------
+
+
+def test_run_target_escape_is_rejected_as_failed(tmp_path: Path) -> None:
+    """A contract.target that resolves outside project_root must not be read.
+
+    The runner records the stage as ``failed`` (not as a happy "file does
+    not exist") so the resulting gate is DENY, and crucially the basis
+    never claims a file outside the project as evidence (P7, NF-007).
+    """
+    project = _copy_generic_minimal(tmp_path)
+    # Drop a file outside the project root and try to point S1 at it.
+    outside = tmp_path / "outside.txt"
+    outside.write_text("contains hello\n", encoding="utf-8")
+
+    s1_path = project / ".quality-system" / "contracts" / "REQ-APP-001" / "S1.json"
+    s1 = _read_json(s1_path)
+    s1["target"] = "../outside.txt"
+    s1_path.write_text(json.dumps(s1, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+
+    gate = _gate(project)
+    assert gate["status"] == "DENY"
+    s1_stage = next(s for s in gate["stages"] if s["id"] == "S1")
+    assert s1_stage["result"] == "failed"
+    # log must explain the rejection, not pretend the file is missing.
+    log_text = (
+        project / ".quality-system" / "evidence" / "REQ-APP-001" / "latest" / "stages" / "S1.log"
+    ).read_text(encoding="utf-8")
+    assert "outside the project root" in log_text
+
+
+def test_run_substring_match_target_escape_is_rejected(tmp_path: Path) -> None:
+    project = _copy_generic_minimal(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("hello\n", encoding="utf-8")
+
+    s2_path = project / ".quality-system" / "contracts" / "REQ-APP-001" / "S2.json"
+    s2 = _read_json(s2_path)
+    s2["target"] = "../outside.txt"
+    s2_path.write_text(json.dumps(s2, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    gate = _gate(project)
+    s2_stage = next(s for s in gate["stages"] if s["id"] == "S2")
+    assert s2_stage["result"] == "failed"
+
+
 # ---- existing examples test must still pass ------------------------------
 
 
 def test_running_does_not_break_existing_examples_test(tmp_path: Path) -> None:
-    """Sanity: qgb run on a copy must not touch the in-repo example tree."""
+    """Sanity: qgb run on a copy must not touch the in-repo example tree.
+
+    Step 5 補修: the hand-written reference now lives under
+    ``examples/generic-minimal/evidence-reference/``, separate from
+    ``.quality-system/evidence/`` (which is the destination ``qgb run``
+    writes to). This test asserts the reference still has its frozen
+    timestamp, proving the run executed elsewhere.
+    """
     project = _copy_generic_minimal(tmp_path)
     main(["run", "REQ-APP-001", "--path", str(project)])
 
-    # The in-repo example must still match its committed reference gate.
     ref_gate = _read_json(
         GENERIC_MINIMAL
-        / ".quality-system"
-        / "evidence"
+        / "evidence-reference"
         / "REQ-APP-001"
         / "latest"
         / "gate.json"

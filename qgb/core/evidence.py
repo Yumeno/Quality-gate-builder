@@ -71,9 +71,55 @@ def make_timestamps(now: datetime | None = None) -> Timestamps:
     instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
         microsecond=0
     )
+    return _timestamps_from_instant(instant)
+
+
+def _timestamps_from_instant(instant: datetime) -> Timestamps:
+    instant = instant.astimezone(timezone.utc).replace(microsecond=0)
     compact = instant.strftime("%Y-%m-%dT%H%M%SZ")
     rfc3339 = instant.strftime("%Y-%m-%dT%H:%M:%SZ")
     return Timestamps(compact=compact, rfc3339=rfc3339)
+
+
+def _parse_compact(compact: str) -> datetime:
+    """Inverse of the compact-timestamp formatter."""
+    return datetime.strptime(compact, "%Y-%m-%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+
+
+_RUN_DIR_COLLISION_LIMIT = 60  # walk forward at most one minute to find a free slot.
+
+
+def _resolve_run_dir(
+    runs_root: Path, timestamps: Timestamps
+) -> tuple[Path, Timestamps]:
+    """Pick a run_dir that does not collide with an existing one.
+
+    Two ``qgb run`` invocations inside the same wall-clock second would
+    otherwise share a directory, and the second run would overwrite the
+    first's volatile evidence (P7 violation: every run must have its own
+    durable trace until ``QGB_KEEP_RUNS`` decides to prune it).
+
+    Strategy: if ``runs_root/<compact>`` already exists, walk the timestamp
+    forward in one-second steps until we find a free slot. The resulting
+    ``Timestamps`` is the one that gets baked into ``gate.json``, so
+    ``paths.run_dir`` and ``timestamp_utc`` always stay in lockstep.
+    """
+    candidate_dir = runs_root / timestamps.compact
+    if not candidate_dir.exists():
+        return candidate_dir, timestamps
+
+    instant = _parse_compact(timestamps.compact)
+    for _ in range(_RUN_DIR_COLLISION_LIMIT):
+        instant = instant.replace(microsecond=0)
+        instant = instant.fromtimestamp(instant.timestamp() + 1, tz=timezone.utc)
+        next_ts = _timestamps_from_instant(instant)
+        next_dir = runs_root / next_ts.compact
+        if not next_dir.exists():
+            return next_dir, next_ts
+    # If we somehow saw 60 consecutive collisions, fall back to a microsecond
+    # suffix so we still write *something* rather than silently overwriting.
+    fallback = timestamps.compact + f"-{datetime.now(timezone.utc).microsecond:06d}"
+    return runs_root / fallback, Timestamps(compact=fallback, rfc3339=timestamps.rfc3339)
 
 
 def build_basis(
@@ -238,7 +284,7 @@ def write_evidence(
     qs = project_root / ".quality-system"
     artifacts = qs / "artifacts" / req_id / "runs"
     artifacts.mkdir(parents=True, exist_ok=True)
-    run_dir = artifacts / timestamps.compact
+    run_dir, timestamps = _resolve_run_dir(artifacts, timestamps)
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "stages").mkdir(parents=True, exist_ok=True)
 

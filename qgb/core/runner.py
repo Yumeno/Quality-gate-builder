@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from qgb.core.loader import LoaderError, resolve_project_relative
 from qgb.core.preflight import AdoptedStage
 
 StageOutcome = Literal["passed", "failed"]
@@ -142,7 +143,19 @@ def _run_file_exists(project_root: Path, stage: AdoptedStage) -> StageResult:
             log_text="\n".join(log_lines) + "\n",
         )
 
-    full = (project_root / target).resolve()
+    try:
+        full = resolve_project_relative(project_root, target, "contract.target")
+    except LoaderError as exc:
+        log_lines.append(f"result: failed ({exc.message})")
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
     is_regular_file = full.is_file()
     log_lines.append(
         f"resolved: {full}"
@@ -203,7 +216,19 @@ def _run_substring_match(project_root: Path, stage: AdoptedStage) -> StageResult
             log_text="\n".join(log_lines) + "\n",
         )
 
-    full = (project_root / target).resolve()
+    try:
+        full = resolve_project_relative(project_root, target, "contract.target")
+    except LoaderError as exc:
+        log_lines.append(f"result: failed ({exc.message})")
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
     if not full.is_file():
         log_lines.append(f"resolved: {full}")
         log_lines.append("result: failed (target file does not exist)")

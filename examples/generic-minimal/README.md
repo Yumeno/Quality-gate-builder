@@ -34,22 +34,30 @@ examples/generic-minimal/
     contracts/REQ-APP-001/
       S1.json                                 # file_exists contract
       S2.json                                 # substring_match contract
-    evidence/REQ-APP-001/latest/
-      gate.json                               # 手書きの期待 ALLOW 出力 (Step 5 のリファレンス)
-      summary.md                              # 人間向け要約
+    evidence/                                 # qgb run の採用判定証跡 destination (repo には empty)
+  evidence-reference/REQ-APP-001/latest/      # 手書きの期待出力 (Step 5 のリファレンス、コミット対象)
+    gate.json                                 # 期待 ALLOW gate.json
+    summary.md                                # 人間向け要約
+    stages/
+      S1.log
+      S2.log
 ```
 
-`.quality-system/artifacts/` ディレクトリ自体は git に含まれない。実際に `qgb run` を実行すると `.quality-system/artifacts/REQ-APP-001/runs/<timestamp>/` 配下に揮発側証跡が生成される (Step 5 で実装予定)。
+Step 5 補修: 手書きの期待出力は `evidence-reference/` に分離してある。`.quality-system/evidence/` 自体は `qgb run` の destination 専用とし、リポジトリには空ディレクトリ (または非存在) のまま保つ。これにより `python -m qgb run REQ-APP-001 --path examples/generic-minimal` をリポジトリ内で直接実行しても、コミット済みのリファレンス出力は上書きされない。
+
+`.quality-system/artifacts/` ディレクトリは git に含まれない (`.gitignore` で除外)。`qgb run` 実行時に `.quality-system/artifacts/REQ-APP-001/runs/<timestamp>/` 配下に揮発側証跡が生成される。
 
 ## 使い方
 
-このサンプルは「動かす」のではなく「読む」前提。Step 5 の `qgb run` が実装された後に、ここで動作確認できる：
+このサンプルは「動かす」のではなく「読む」前提。Step 5 の `qgb run` が実装済みなので、ここで動作確認できる：
 
 ```bash
 cd examples/generic-minimal
 python -m qgb validate           # OK: all JSON sources of truth are valid.
-python -m qgb run REQ-APP-001    # ALLOW (Step 5 以降)
+python -m qgb run REQ-APP-001    # ALLOW
 ```
+
+`qgb run` 実行後、`.quality-system/evidence/REQ-APP-001/latest/gate.json` と `.quality-system/artifacts/REQ-APP-001/runs/<timestamp>/` に生成された証跡を、手書きリファレンス (`evidence-reference/REQ-APP-001/latest/gate.json`) と見比べると Step 5 の挙動が理解しやすい。
 
 それまでは `qgb validate` でスキーマ準拠だけ確認可能：
 

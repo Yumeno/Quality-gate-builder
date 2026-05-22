@@ -9,6 +9,12 @@ Phase 1 currently ships one hand-written example (Step 4):
 
 (3) is the contract that Step 5's ``qgb run`` implementation must keep
 honouring; if a future change drifts one of these files, CI fails here.
+
+Step 5 補修 (R reference): the hand-written reference gate.json /
+summary.md / stages logs live under ``evidence-reference/`` (not
+``.quality-system/evidence/``). The latter is the destination
+``qgb run`` writes to and must stay empty in the repo; the former is
+the source of truth a Step 5 run must reproduce.
 """
 
 from __future__ import annotations
@@ -24,6 +30,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO_ROOT / "examples"
 GENERIC_MINIMAL = EXAMPLES / "generic-minimal"
 QS = GENERIC_MINIMAL / ".quality-system"
+# Step 5 補修: the hand-written reference lives outside .quality-system/ so
+# `qgb run --path examples/generic-minimal` cannot overwrite it.
+REFERENCE_LATEST = (
+    GENERIC_MINIMAL / "evidence-reference" / "REQ-APP-001" / "latest"
+)
 
 
 def _read_json(path: Path) -> dict:
@@ -44,9 +55,7 @@ def _contracts() -> dict[str, dict]:
 
 
 def _gate() -> dict:
-    return _read_json(
-        QS / "evidence" / "REQ-APP-001" / "latest" / "gate.json"
-    )
+    return _read_json(REFERENCE_LATEST / "gate.json")
 
 
 # ---- Layer 1: schema validity --------------------------------------------
@@ -182,13 +191,19 @@ def test_gate_paths_curated_dir_matches_actual_layout() -> None:
 
 
 def test_gate_stage_log_refs_resolve_to_files() -> None:
-    """Codex review item 1: log_ref must point at a real file under latest/."""
-    latest_dir = QS / "evidence" / "REQ-APP-001" / "latest"
+    """Codex review item 1: log_ref must point at a real file alongside gate.json.
+
+    log_ref in the curated reference is a path *relative to the directory
+    that holds gate.json*, so the test resolves it under the reference
+    directory rather than under ``.quality-system/evidence/.../latest/``.
+    A Step 5 ``qgb run`` writes the same log files alongside its own
+    gate.json (in both the curated and volatile trees).
+    """
     for stage in _gate()["stages"]:
-        log_path = latest_dir / stage["log_ref"]
+        log_path = REFERENCE_LATEST / stage["log_ref"]
         assert log_path.is_file(), (
             f"log_ref does not resolve to an actual file: "
-            f"{stage['log_ref']} (looked under {latest_dir})"
+            f"{stage['log_ref']} (looked under {REFERENCE_LATEST})"
         )
 
 

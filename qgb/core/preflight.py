@@ -341,12 +341,15 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
             )
         )
 
-    if not any(a.required for a in adopted) and not report.issues:
+    # Phase 1 treats every adopted stage as judgement material (see
+    # decision.py for the rationale). An REQ with zero adopted stages
+    # after preflight has nothing to judge and must be NOT_READY.
+    if not adopted and not report.issues:
         report.issues.append(
             PreflightIssue(
                 kind="no_required_stages",
                 where=str(meta_path),
-                message="no required stages remain after preflight",
+                message="no adopted stages remain after preflight",
             )
         )
 
