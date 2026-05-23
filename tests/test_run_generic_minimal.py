@@ -320,6 +320,11 @@ def test_preflight_helpers_are_individually_callable(tmp_path: Path) -> None:
     policy = load_policy(project)
     policy_stages = inspect_policy_graph(policy, report)
     assert {sid for sid in policy_stages} == {"S1", "S2"}
+    # Step 6a Commit 2: generic-minimal has 2 stages which is below the
+    # recommended 3..7 range, so inspect_policy_graph emits a single
+    # stage_count_out_of_range warning. The structure is otherwise clean.
+    assert {i.kind for i in report.blocking_issues()} == set()
+    assert {i.kind for i in report.warnings()} == {"stage_count_out_of_range"}
 
     req_meta = load_req_meta(project, "REQ-APP-001")
     adopted = resolve_adopted_stages(
@@ -329,16 +334,22 @@ def test_preflight_helpers_are_individually_callable(tmp_path: Path) -> None:
 
     runnable = check_runtime_support(adopted, report)
     assert [a.stage_id for a in runnable] == ["S1", "S2"]
-    assert not report.issues
+    # Only the previously-recorded warning should remain; no blocker added.
+    assert not report.has_blockers()
 
 
 def test_preflight_issue_defaults_to_blocker_severity(tmp_path: Path) -> None:
-    """Step 5 三次補修 (B 部分前倒し): PreflightIssue.severity defaults to blocker.
+    """Step 5 三次補修 (B 部分前倒し) + Step 6a Commit 2 拡張: PreflightIssue.severity 既定値。
 
-    Step 5 introduces severity as a future-compatible field. Until Step 6
-    validate-policy starts emitting warnings, the runner treats every
-    issue as a blocker, so the default is verified here directly on the
-    in-process preflight call.
+    Step 5 では severity を future-compatible として導入し全件 blocker だった。
+    Step 6a Commit 2 で stage_count_out_of_range が初の warning として乗る
+    (generic-minimal は 2 段階で推奨レンジ 3〜7 の外側)。本テストは:
+
+    * generic-minimal の warning 1 件は stage_count_out_of_range のみであること
+    * 強制 NOT_READY (S1.json 削除) が blocker を増やすこと
+    * blocker と warning が severity フィールドで区別できていること
+
+    を併せてロックする。
     """
     from qgb.core.preflight import run_preflight
 
@@ -348,8 +359,22 @@ def test_preflight_issue_defaults_to_blocker_severity(tmp_path: Path) -> None:
 
     report = run_preflight(project, "REQ-APP-001")
     assert report.issues, "preflight should have produced at least one issue"
-    for issue in report.issues:
-        assert issue.severity == "blocker", (issue.kind, issue.severity)
+
+    blockers = report.blocking_issues()
+    warnings_ = report.warnings()
+    assert blockers, "removing S1.json must produce at least one blocker"
+
+    expected_warning_kinds = {"stage_count_out_of_range"}
+    actual_warning_kinds = {w.kind for w in warnings_}
+    assert actual_warning_kinds <= expected_warning_kinds, (
+        f"unexpected warning kinds: {actual_warning_kinds - expected_warning_kinds}"
+    )
+
+    # All blocker entries really are blockers, all warnings really are warnings.
+    for issue in blockers:
+        assert issue.severity == "blocker"
+    for issue in warnings_:
+        assert issue.severity == "warning"
 
 
 def test_preflight_report_diagnostic_api(tmp_path: Path) -> None:
