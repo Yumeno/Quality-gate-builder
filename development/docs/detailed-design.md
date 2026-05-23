@@ -835,12 +835,10 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 
 | 項目 | 確定予定 Step |
 |---|---|
-| `qgb run --yes` フラグ (実行前確認プロンプト) | Step 6 |
-| `qgb verify` (揮発側のみで gate.json を更新しない軽量チェック) | Step 6 |
-| `qgb validate-policy` の実装と preflight モジュール分割 (下記) | Step 6 |
-| `qgb detect` の対象系推定ロジック | Step 6 |
-| `qgb design-stages` 提案フェーズと採用フェーズの分離 | Step 6 |
-| `qgb scaffold` の REQ + contract + テスト雛形生成 | Step 6 |
+| `qgb validate-policy` 本体 + preflight 診断 API + fixture 復活 | Step 6a |
+| `qgb verify` / `qgb run --yes` / runner/evidence 構造化 | Step 6b |
+| `qgb detect` + adapters/python + adapters/generic | Step 6c |
+| `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
 | `command` / `json_schema` verification_type | Step 7 / 8 |
 | `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 |
@@ -848,24 +846,68 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
 
-### Step 6 への申し送り (Codex Step 5 系レビュー由来、三次補修で残ったもの)
+### Step 6 サブステップ計画 (Codex 計画レビュー 2026-05-23 採用版)
 
-Step 5 三次補修で「採用判定・証跡生成」関連の構造課題は片付け済み (run_id 導入、preflight 5 関数分割、REQ meta トポロジカル順検証、severity フィールド準備)。以下は「設計フェーズ系コマンド」のスコープと密接に絡むため、Step 6 で扱う:
+Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステップに分割して進める。各サブステップ完了時に Codex レビュー → 補修サイクル。
 
-#### preflight 5 関数 API の妥当性検証 (validate-policy 視点)
+着手順は **6a → 6b → 6c → 6d**。理由は「validate-policy が後続全部の検査土台で、API が確定しないと verify / design-stages も書けない」「6a の preflight 既存資産が一番多く新規実装が少ない」。
 
-Step 5 三次補修で関数分割そのものは仮置きしたが、`validate-policy` の中核として十分かは Step 6 で実コードで揉む必要がある。具体的に:
+ただし Codex 計画レビューの指摘により、6a を「API 確定の巨大ステップ」にしすぎないことに注意する: `verify` (6b) が preflight API の最初の消費者になるため、6a 完了後に小修正が出るのを許容する。
 
-- `check_runtime_support` の `manual_check_required` / `unsupported_verification_type` を `qgb run` では blocker、`validate-policy` では warning として扱う severity 切り替えポイントを実装する
-- `inspect_policy_graph` を `validate-policy` の段階数推奨レンジ (3〜7) チェックと組み合わせる
-- 必要なら 5 関数の境界を再調整 (Step 5 では「仮置き」で凍結していない)
+#### Step 6a — validate-policy / preflight 診断 API
 
-#### Step 5 補修で扱いきれなかった runner / evidence 残課題
+**スコープ:**
 
-- **`_replace_dir_contents()` が非 atomic** (Codex M4 / M5): `gate.json` と `stages/` の不整合や stale log 残存。`latest.tmp-<ts>` で書いて rename する方式が望ましい
-- **byte offset 表記** (Codex L2): substring_match のログは現状 code point index。`char offset` 表記に変えるか、UTF-8 byte offset を計算する
-- **`LoaderError.wrong_type` の preflight 側分類**: `invalid_json` 扱いに混ざる箇所がある (Codex L3)
-- **`QGB_KEEP_RUNS` 不正値の silent default** (Codex L4): stderr warning か JSON report に warning を出す
+- `qgb validate-policy` 本体 (stage-design.md §11 の検査表すべて。error は exit 2、warning は exit 0 + stderr 通知)
+- preflight 診断 API:
+  - 主 API は **severity filter 付き iteration** (`report.iter_issues(severity=...)`)
+  - 便利メソッドとして `report.blocking_issues()` / `report.warnings()` / `report.has_blockers()`
+  - `report.ready_for_run()` は run 用の意味を含むので runner 専用、validate-policy では `has_blockers()` を使う (P9)
+- `check_runtime_support` の severity 切り替え: `qgb run` では `manual_check_required` / `unsupported_verification_type` を blocker、`validate-policy` では warning
+- `inspect_policy_graph` に段階数推奨レンジ (3〜7) チェックを追加 (warning)
+- fixture 復活: `missing_required/` `dangling_ref/` `misplaced_contract/` を **validate-policy の仕様固定装置** として位置づけ、各 fixture が `kind` と `severity` を期待通り返すことを 6a の完了条件にする
+- Step 5 残課題のうち診断品質に直結するもの:
+  - `LoaderError.wrong_type` の preflight 側分類 (Codex L3)
+  - substring_match の byte offset / char offset 表記 (Codex L2)
+
+#### Step 6b — verify / run 周辺
+
+**スコープ (実装順):**
+
+1. `qgb verify` (validate-policy + 軽量 run。揮発側のみで gate.json は更新しない) — preflight API の最初の消費者として 6b の最初に実装。ここで 6a の API 過不足が早期に見える
+2. `qgb run --yes` (実行前確認プロンプト)
+3. `_replace_dir_contents()` の atomic 化 (Codex M4 / M5): `latest.tmp-<ts>` で書いて rename
+4. `QGB_KEEP_RUNS` 不正値の warning (Codex L4)
+
+#### Step 6c — detect / adapters
+
+**スコープ:**
+
+- adapters/python, adapters/generic の 2 種で起動
+- adapter base 規約 (`detect()` の返り値型を含む)
+- `DetectedProjectProfile` 的なデータ境界を固定: `language` / `framework` / `test_runner` / `confidence` / `evidence[]`
+- **重要 (P9 維持):** `validate-policy` は「採用済み policy が妥当か」を見る、`detect` は「候補 stage を提案する材料」を返す。両者のロジックを混ぜない
+
+#### Step 6d — design-stages / scaffold
+
+**スコープ:**
+
+- `qgb design-stages` 提案フェーズ (Phase 1: ルールベース推定 + ユーザー確認、stage-design.md §10.1)
+- `qgb design-stages --commit` 採用フェーズ (`policy.json` に書き込み + `validate-policy` を内部で呼ぶ)
+- `qgb scaffold REQ-APP-001` (REQ + contract + テスト雛形生成)
+- examples は最小 1 件のみ (重い設計例パック化は Step 7 / 8 送り)
+- 既存ファイルがある場合の挙動 (idempotency) を 6d の完了条件に含める
+
+#### 規模感 (Step 5 を 1.0 とした相対値、Codex 計画レビュー反映後)
+
+| サブステップ | 規模 | コミット予想 |
+|---|---|---|
+| 6a 検査強化 | 0.9〜1.1 | 本体 + 補修 1〜2 |
+| 6b 実行系小修正 | 0.5〜0.7 | 本体 + 補修 1 |
+| 6c 検出系 | 0.6〜0.8 | 本体 + 補修 1 |
+| 6d 生成系 | **0.9〜1.2** | 本体 + 補修 1〜2 |
+
+6d は生成系の「出力仕様の納得感」「既存 docs との整合」「idempotency」「既存ファイルがある場合の挙動」で補修が出やすいため、Claude 当初見積もり (0.7) より厚めに見る。
 
 ## 13. 改訂履歴
 
@@ -881,3 +923,4 @@ Step 5 三次補修で関数分割そのものは仮置きしたが、`validate-
 | 0.8 | 2026-05-23 | Step 5 二次補修 (Codex 二次レビュー反映): RR1 run_dir 予約を atomic 化 (mkdir(exist_ok=False) ループ + 60 秒 fallback を廃止)、MR2 resolve_project_relative() で absolute path を明示拒否、MR3 req-meta.schema.json の `required` を `const: true` で固定 (Phase 1 では false を schema レベルでブロック)、symlink escape テスト追加。§12 Step 6 申し送りに「timestamp と run_id の責務分離」(RR2 + MR1) を追加。テスト 184 件 |
 | 0.9 | 2026-05-23 | Step 5 三次補修 (Step 6 スコープ整理 + Codex 三次レビュー前準備): C 部分 (gate schema に `run_id` 導入、`timestamp_*` を wall-clock truth に、`paths.run_dir` を `<compact>-<run_id>` に、REQ meta トポロジカル順検証 M1) を完全前倒し。B 部分 (preflight の 5 関数分割: validate_schema_sources / inspect_policy_graph / resolve_adopted_stages / check_runtime_support / run_preflight、`PreflightIssue.severity` フィールド追加で Phase 1 は全件 blocker) も型・構造のみ前倒し。§4.2 識別子規約、§7.4 timestamp/run_id 規約、§8.1 モジュール責務、§8.7 同秒衝突回避を新仕様に。§12 Step 6 申し送りから完了項目を削除し validate-policy 視点の残課題のみ残す。テスト 196 件 |
 | 0.10 | 2026-05-23 | Step 5 四次補修 (Codex 三次レビュー反映、Step 5 完結): RRR1 `r0000` を予約値として schema レベルで拒否 (`gate.schema.json` / `gate.runtime.schema.json` 両方に `not: {const: "r0000"}` 追加、`_RUN_ID_MIN = 1` と一致)、RRR2 `paths.run_dir` の末尾形状を schema `pattern` で `<timestamp_utc>-<run_id>` に固定 (任意外部 payload の防衛線を一段強化)。§4.2 run_id 説明、§7.4 規約表、§8.7 同秒衝突回避を四次補修反映に更新。テスト 204 件。**Step 5 系は本版で完結** (Codex 三次レビュー判定: 残課題 atomic write / byte offset / loader error / QGB_KEEP_RUNS warning は Step 6 と一緒に扱う) |
+| 0.11 | 2026-05-23 | Step 6 計画確定 (Codex 計画レビュー反映): §12 を 4 サブステップ (6a 検査強化 / 6b 実行系小修正 / 6c 検出系 / 6d 生成系) に再編。preflight 診断 API を `iter_issues(severity)` を主 API として確定、`ready_for_run()` を runner 専用に限定し validate-policy では `has_blockers()` を使う方針を明文化 (P9)。Step 5 残課題を性質別に分散 (loader_error / byte offset → 6a、atomic write / QGB_KEEP_RUNS → 6b)。fixture 復活を「validate-policy の仕様固定装置」として 6a 完了条件化。`qgb verify` を 6b の最初に実装 (preflight API の最初の消費者として 6a の過不足を早期に見る)。adapters/ は 6c で `DetectedProjectProfile` データ境界を固定し validate-policy 経路と混ざらないようにする (P9)。6d 規模見積もりを 0.7 → 0.9〜1.2 に上方修正 (生成系の出力仕様整合・idempotency で補修が出やすいため) |
