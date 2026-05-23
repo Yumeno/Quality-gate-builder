@@ -295,6 +295,36 @@ def test_gate_timestamp_utc_regex_rejects_bogus_values(bogus_value: str) -> None
     assert _has_instance_path(issues, "/timestamp_utc")
 
 
+@pytest.mark.parametrize(
+    "bogus_run_id",
+    [
+        "",                # empty
+        "0001",            # missing 'r' prefix
+        "r1",              # too short
+        "r000",            # 3 hex digits
+        "r00001",          # 5 hex digits
+        "R0001",           # uppercase prefix
+        "r000Z",           # non-hex char
+        "rgggg",           # non-hex char
+    ],
+)
+def test_gate_run_id_regex_rejects_bogus_values(bogus_run_id: str) -> None:
+    """Step 5 三次補修: run_id must obey ^r[0-9a-f]{4}$."""
+    payload = _load_fixture("gate.allow.success.json")
+    payload["run_id"] = bogus_run_id
+    issues = validate(payload, "gate")
+    assert issues, f"run_id must reject {bogus_run_id!r}"
+    assert _has_instance_path(issues, "/run_id")
+
+
+def test_gate_missing_run_id_rejected() -> None:
+    """Step 5 三次補修: run_id is required in the curated gate schema."""
+    payload = _load_fixture("gate.allow.success.json")
+    del payload["run_id"]
+    issues = validate(payload, "gate")
+    assert issues, "run_id must be required"
+
+
 def test_gate_stage_requires_contract_ref_and_log_ref() -> None:
     """Codex review item 3: curated gate requires contract_ref and log_ref per stage."""
     payload = _load_fixture("gate.allow.success.json")

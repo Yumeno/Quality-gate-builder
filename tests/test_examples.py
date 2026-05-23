@@ -163,14 +163,22 @@ def test_gate_basis_contains_expected_ids() -> None:
 
 
 def test_gate_timestamps_are_mutually_consistent() -> None:
-    """timestamp_utc (compact), timestamp_rfc3339, and paths.run_dir must agree."""
+    """timestamp_utc, timestamp_rfc3339, run_id, and paths.run_dir must agree.
+
+    Step 5 三次補修: paths.run_dir now ends with ``<timestamp_utc>-<run_id>``;
+    the timestamp itself is wall-clock truth (no synthetic forwarding),
+    and same-second collisions are absorbed by run_id alone.
+    """
     gate = _gate()
     utc = gate["timestamp_utc"]            # YYYY-MM-DDTHHMMSSZ
     rfc = gate["timestamp_rfc3339"]        # YYYY-MM-DDTHH:MM:SSZ
+    run_id = gate["run_id"]                # r0001..rffff
     run_dir = gate["paths"]["run_dir"]
 
-    # The compact form must end the run_dir path.
-    assert run_dir.endswith(utc), (run_dir, utc)
+    # run_dir ends in <timestamp_utc>-<run_id> exactly.
+    assert run_dir.endswith(f"{utc}-{run_id}"), (run_dir, utc, run_id)
+    # run_id obeys its schema pattern.
+    assert re.fullmatch(r"r[0-9a-f]{4}", run_id), run_id
     # Both timestamps must describe the same wall-clock instant.
     m = re.fullmatch(
         r"(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z", utc

@@ -139,6 +139,7 @@ def test_curated_gate_matches_reference_structure(tmp_path: Path) -> None:
         "req_id",
         "timestamp_utc",
         "timestamp_rfc3339",
+        "run_id",
         "phase",
         "status",
         "failed_stage",
@@ -152,9 +153,13 @@ def test_curated_gate_matches_reference_structure(tmp_path: Path) -> None:
 
     assert gate["req_id"] == "REQ-APP-001"
     assert gate["runner"]["name"] == "qgb"
-    # paths.run_dir suffix equals timestamp_utc (Step 5 contract, §7.4).
+    # paths.run_dir suffix equals <timestamp_utc>-<run_id> (Step 5 三次補修).
     run_dir = gate["paths"]["run_dir"]
-    assert run_dir.endswith(gate["timestamp_utc"]), (run_dir, gate["timestamp_utc"])
+    assert run_dir.endswith(f"{gate['timestamp_utc']}-{gate['run_id']}"), (
+        run_dir,
+        gate["timestamp_utc"],
+        gate["run_id"],
+    )
     assert (
         gate["paths"]["curated_latest_dir"]
         == ".quality-system/evidence/REQ-APP-001/latest"
@@ -289,6 +294,87 @@ def test_run_returns_not_ready_when_req_meta_stage_id_unknown(tmp_path: Path) ->
     assert exit_code == EXIT_NOT_READY
 
 
+def test_preflight_helpers_are_individually_callable(tmp_path: Path) -> None:
+    """Step 5 三次補修 (B 部分前倒し): the 5 helpers are usable independently.
+
+    ``qgb validate-policy`` (Step 6) will compose these helpers in a
+    different order, so we lock down their individual contracts here.
+    The composite ``run_preflight`` is exercised throughout the rest of
+    this module, so we only need to confirm direct invocation here.
+    """
+    from qgb.core.loader import load_policy, load_req_meta
+    from qgb.core.preflight import (
+        PreflightReport,
+        check_runtime_support,
+        inspect_policy_graph,
+        resolve_adopted_stages,
+        validate_schema_sources,
+    )
+
+    project = _copy_generic_minimal(tmp_path)
+
+    report = PreflightReport()
+    validate_schema_sources(project, report)
+    assert not report.issues, report.issues
+
+    policy = load_policy(project)
+    policy_stages = inspect_policy_graph(policy, report)
+    assert {sid for sid in policy_stages} == {"S1", "S2"}
+
+    req_meta = load_req_meta(project, "REQ-APP-001")
+    adopted = resolve_adopted_stages(
+        project, "REQ-APP-001", policy_stages, req_meta, report
+    )
+    assert [a.stage_id for a in adopted] == ["S1", "S2"]
+
+    runnable = check_runtime_support(adopted, report)
+    assert [a.stage_id for a in runnable] == ["S1", "S2"]
+    assert not report.issues
+
+
+def test_preflight_issue_defaults_to_blocker_severity(tmp_path: Path) -> None:
+    """Step 5 三次補修 (B 部分前倒し): PreflightIssue.severity defaults to blocker.
+
+    Step 5 introduces severity as a future-compatible field. Until Step 6
+    validate-policy starts emitting warnings, the runner treats every
+    issue as a blocker, so the default is verified here directly on the
+    in-process preflight call.
+    """
+    from qgb.core.preflight import run_preflight
+
+    project = _copy_generic_minimal(tmp_path)
+    # Force a NOT_READY: remove the S1 contract file.
+    (project / ".quality-system" / "contracts" / "REQ-APP-001" / "S1.json").unlink()
+
+    report = run_preflight(project, "REQ-APP-001")
+    assert report.issues, "preflight should have produced at least one issue"
+    for issue in report.issues:
+        assert issue.severity == "blocker", (issue.kind, issue.severity)
+
+
+def test_run_returns_not_ready_when_req_meta_order_violates_depends_on(
+    tmp_path: Path,
+) -> None:
+    """Step 5 三次補修 (M1): REQ meta order must respect policy depends_on.
+
+    policy.json declares S2 depends_on [S1]. If REQ meta writes the
+    stages in the order [S2, S1], the runner would otherwise execute S2
+    before S1 has run, producing misleading results. Preflight catches
+    the order violation as NOT_READY.
+    """
+    project = _copy_generic_minimal(tmp_path)
+    meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
+    meta = _read_json(meta_path)
+    # Reverse the stage order.
+    meta["stages"] = list(reversed(meta["stages"]))
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_NOT_READY
+
+
 def test_run_returns_not_ready_for_unknown_req(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
     exit_code = main(["run", "REQ-APP-999", "--path", str(project)])
@@ -413,10 +499,10 @@ def test_run_same_second_does_not_overwrite_run_dir(
 ) -> None:
     """Three runs forced onto the same wall-clock second must keep three run-dirs.
 
-    Without collision-avoidance, the second and third runs would silently
-    overwrite the first run's volatile evidence, violating P7 ("each run
-    leaves a reproducible trace"). The runner must walk the timestamp
-    forward instead.
+    Step 5 三次補修: collisions are now absorbed by ``run_id`` instead of
+    walking ``timestamp_utc`` forward. All three runs keep the same
+    timestamp (wall-clock truth) but receive distinct run_ids r0001,
+    r0002, r0003.
     """
     from datetime import datetime, timezone
 
@@ -431,7 +517,6 @@ def test_run_same_second_does_not_overwrite_run_dir(
         "make_timestamps",
         lambda now=None: evidence_mod._timestamps_from_instant(fixed),
     )
-    # Keep enough runs that pruning doesn't remove them.
     monkeypatch.setenv("QGB_KEEP_RUNS", "10")
 
     for _ in range(3):
@@ -439,10 +524,9 @@ def test_run_same_second_does_not_overwrite_run_dir(
 
     children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
     assert len(children) == 3, children
-    # First run keeps the requested timestamp; subsequent runs walk forward.
-    assert children[0] == "2026-01-01T120000Z"
-    assert children[1] == "2026-01-01T120001Z"
-    assert children[2] == "2026-01-01T120002Z"
+    assert children[0] == "2026-01-01T120000Z-r0001"
+    assert children[1] == "2026-01-01T120000Z-r0002"
+    assert children[2] == "2026-01-01T120000Z-r0003"
 
 
 def test_run_reserves_run_dir_atomically(
@@ -450,14 +534,9 @@ def test_run_reserves_run_dir_atomically(
 ) -> None:
     """RR1: run_dir reservation must survive a concurrent pre-claim.
 
-    The previous implementation used ``exists()`` then ``mkdir(exist_ok=True)``,
-    a non-atomic check-then-create pair. Two parallel processes that called
-    it inside the same wall-clock second would both observe a free slot and
-    both ``mkdir`` it — destroying P7's "each run leaves its own trace".
-
-    Simulating the race here: pre-create the timestamp's run_dir before
-    calling ``qgb run``. The reservation must walk forward instead of
-    happily writing into the pre-existing directory.
+    Step 5 三次補修: a process that pre-claims ``<ts>-r0001`` must not
+    cause a parallel ``qgb run`` to overwrite it. The reservation walks
+    forward to ``r0002`` instead.
     """
     from datetime import datetime, timezone
 
@@ -466,8 +545,8 @@ def test_run_reserves_run_dir_atomically(
     project = _copy_generic_minimal(tmp_path)
     runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    # Pre-claim the slot a parallel sibling would have taken.
-    (runs_dir / "2026-01-01T120000Z").mkdir()
+    # Pre-claim the first run_id a parallel sibling would have taken.
+    (runs_dir / "2026-01-01T120000Z-r0001").mkdir()
 
     fixed = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
@@ -479,10 +558,9 @@ def test_run_reserves_run_dir_atomically(
     assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
 
     children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
-    # Pre-claimed slot stays empty (still on disk), real run lands in the next slot.
-    assert "2026-01-01T120000Z" in children
-    assert "2026-01-01T120001Z" in children
-    pre_claimed = runs_dir / "2026-01-01T120000Z"
+    assert "2026-01-01T120000Z-r0001" in children
+    assert "2026-01-01T120000Z-r0002" in children
+    pre_claimed = runs_dir / "2026-01-01T120000Z-r0001"
     assert not list(pre_claimed.iterdir()), (
         f"pre-claimed run_dir was overwritten: {list(pre_claimed.iterdir())}"
     )
@@ -491,12 +569,11 @@ def test_run_reserves_run_dir_atomically(
 def test_run_reservation_failure_raises_when_all_slots_taken(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """RR1: if every collision slot is taken, reservation must raise, not silently overwrite.
+    """RR1: if every run_id slot for the second is taken, reservation must raise.
 
-    The previous fallback used a microsecond-suffix compact string, which
-    would have produced a ``timestamp_utc`` that breaks gate.schema.json's
-    regex (^...([0-5][0-9]){2}Z$). Failing loudly is the correct outcome
-    here — silent schema-invalid gate.json is worse than a runtime error.
+    Step 5 三次補修: silent schema-invalid gate.json is worse than a
+    runtime error. Pre-claim every r0001..rffff slot for the target
+    second and confirm RunDirReservationError fires.
     """
     from datetime import datetime, timezone
 
@@ -505,20 +582,21 @@ def test_run_reservation_failure_raises_when_all_slots_taken(
     project = _copy_generic_minimal(tmp_path)
     runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    # Pre-claim every slot in the next 61 seconds (limit is 60 attempts).
-    base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    for offset in range(evidence_mod._RUN_DIR_COLLISION_LIMIT + 1):
-        instant = datetime.fromtimestamp(base.timestamp() + offset, tz=timezone.utc)
-        ts = evidence_mod._timestamps_from_instant(instant)
-        (runs_dir / ts.compact).mkdir()
+
+    fixed = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = evidence_mod._timestamps_from_instant(fixed)
+
+    # Patch the run_id space down to two slots, then pre-claim both.
+    monkeypatch.setattr(evidence_mod, "_RUN_ID_MAX", 2)
+    (runs_dir / f"{ts.compact}-r0001").mkdir()
+    (runs_dir / f"{ts.compact}-r0002").mkdir()
 
     monkeypatch.setattr(
         evidence_mod,
         "make_timestamps",
-        lambda now=None: evidence_mod._timestamps_from_instant(base),
+        lambda now=None: evidence_mod._timestamps_from_instant(fixed),
     )
 
-    # The CLI surfaces an internal error rather than a happy ALLOW.
     with pytest.raises(evidence_mod.RunDirReservationError):
         main(["run", "REQ-APP-001", "--path", str(project)])
 
@@ -526,7 +604,7 @@ def test_run_reservation_failure_raises_when_all_slots_taken(
 def test_run_same_second_gate_paths_stay_in_lockstep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """timestamp_utc and paths.run_dir must agree even after a collision walk."""
+    """timestamp stays as wall-clock truth; run_id alone disambiguates."""
     from datetime import datetime, timezone
 
     from qgb.core import evidence as evidence_mod
@@ -544,9 +622,10 @@ def test_run_same_second_gate_paths_stay_in_lockstep(
     main(["run", "REQ-APP-001", "--path", str(project)])
 
     gate = _gate(project)  # curated = latest = second run
-    assert gate["timestamp_utc"] == "2026-01-01T120001Z"
-    assert gate["paths"]["run_dir"].endswith("2026-01-01T120001Z")
-    assert gate["timestamp_rfc3339"] == "2026-01-01T12:00:01Z"
+    assert gate["timestamp_utc"] == "2026-01-01T120000Z"  # NOT advanced.
+    assert gate["timestamp_rfc3339"] == "2026-01-01T12:00:00Z"
+    assert gate["run_id"] == "r0002"
+    assert gate["paths"]["run_dir"].endswith("2026-01-01T120000Z-r0002")
 
 
 # ---- R1: contract.target must not escape project root --------------------
@@ -731,3 +810,4 @@ def test_running_does_not_break_existing_examples_test(tmp_path: Path) -> None:
         / "gate.json"
     )
     assert ref_gate["timestamp_utc"] == "2026-05-21T120000Z"
+    assert ref_gate["run_id"] == "r0001"

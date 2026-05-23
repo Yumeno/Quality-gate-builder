@@ -53,6 +53,7 @@ PreflightIssueKind = Literal[
     "missing_contract",
     "depends_on_unknown",
     "depends_on_cycle",
+    "depends_on_order_violation",
     "unsupported_verification_type",
     "manual_check_required",
     "no_required_stages",
@@ -60,13 +61,25 @@ PreflightIssueKind = Literal[
 ]
 
 
+PreflightSeverity = Literal["blocker", "warning"]
+
+
 @dataclass(frozen=True)
 class PreflightIssue:
-    """A single READY/NOT_READY blocker."""
+    """A single preflight finding.
+
+    ``severity`` distinguishes a hard blocker (``qgb run`` must return
+    NOT_READY) from an advisory warning (Step 6 ``qgb validate-policy``
+    surfaces it but the run could still proceed). Step 5 三次補修
+    introduces the field as a future-compatible default of ``"blocker"``;
+    no Phase 1 caller emits ``"warning"`` yet, and the runner treats any
+    non-empty issue list as NOT_READY regardless of severity.
+    """
 
     kind: PreflightIssueKind
     where: str
     message: str
+    severity: PreflightSeverity = "blocker"
 
 
 @dataclass
@@ -109,19 +122,26 @@ _SUPPORTED_RUNTIME_TYPES: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
+# Step 5 三次補修 (B partial): preflight is decomposed into five
+# functions so that ``qgb validate-policy`` (Step 6) can reuse the same
+# building blocks under a different orchestration. ``run_preflight``
+# becomes a thin orchestrator that wires them in the order
+# ``qgb run`` needs. The function boundaries are *provisional* in
+# Phase 1; Step 6 may adjust them as validate-policy's needs come into
+# focus. Each helper appends to a passed-in :class:`PreflightReport`
+# rather than returning issues, so callers can layer multiple stages
+# into the same report without losing earlier findings.
+# ---------------------------------------------------------------------------
 
 
-def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
-    """Decide whether ``qgb run <req_id>`` may proceed.
+def validate_schema_sources(
+    project_root: Path, report: PreflightReport
+) -> None:
+    """Schema-validate every spec file under ``.quality-system/``.
 
-    The report's ``issues`` list is empty exactly when execution is safe.
-    Callers that want NOT_READY semantics should map ``ready() is False``
-    to exit code 2 without writing any gate.json.
+    Maps :class:`qgb.core.validate.ValidateReport` problems onto
+    preflight issue kinds so the caller sees a single homogeneous list.
     """
-    report = PreflightReport()
-
-    # 1) Schema validation of all existing spec files. We run this first so
-    #    structural problems do not hide behind integrity issues.
     validate_report = run_validate(project_root)
     for fi in validate_report.schema_issues:
         report.issues.append(
@@ -150,8 +170,6 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
             )
         )
 
-    # 2) Required top-level files. validate is permissive about absence (it
-    #    walks "files that exist"), so the missing-file check belongs here.
     qs = quality_system_root(project_root)
     if not (qs / "config.json").is_file():
         report.issues.append(
@@ -170,44 +188,19 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
             )
         )
 
-    # If anything fundamental is broken, do not try to interpret the policy.
-    # Reporting more issues on top of a broken base file is noise.
-    if any(
-        i.kind in ("missing_required_file", "invalid_json", "schema_violation")
-        for i in report.issues
-    ):
-        return report
 
-    # 3) Load policy + REQ meta. Loader errors surface as preflight issues.
-    try:
-        policy = load_policy(project_root)
-        report.policy = policy
-    except LoaderError as exc:
-        report.issues.append(
-            PreflightIssue(
-                kind="invalid_json" if exc.kind == "invalid_json" else "missing_required_file",
-                where=str(exc.path),
-                message=exc.message,
-            )
-        )
-        return report
+def inspect_policy_graph(
+    policy: dict[str, Any], report: PreflightReport
+) -> dict[str, dict[str, Any]]:
+    """Check the policy's depends_on graph for dangling refs and cycles.
 
-    meta_path = req_meta_path(project_root, req_id)
-    try:
-        req_meta = load_req_meta(project_root, req_id)
-        report.req_meta = req_meta
-    except LoaderError as exc:
-        report.issues.append(
-            PreflightIssue(
-                kind="missing_required_file" if exc.kind == "missing_file" else "invalid_json",
-                where=str(meta_path),
-                message=exc.message,
-            )
-        )
-        return report
-
-    # 4) Policy DAG: dangling depends_on or cycles inside policy.json.
-    policy_stages = {s["id"]: s for s in policy.get("stages", []) if isinstance(s, dict)}
+    Returns a ``stage_id -> stage_dict`` map so the caller can keep
+    using policy stages without re-walking the list. The report
+    accumulates ``depends_on_unknown`` and ``depends_on_cycle`` issues.
+    """
+    policy_stages = {
+        s["id"]: s for s in policy.get("stages", []) if isinstance(s, dict)
+    }
     for sid, stage in policy_stages.items():
         for dep in stage.get("depends_on", []) or []:
             if dep not in policy_stages:
@@ -215,7 +208,9 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
                     PreflightIssue(
                         kind="depends_on_unknown",
                         where=f"policy.stages[{sid}].depends_on",
-                        message=f"stage {sid!r} depends on unknown stage id {dep!r}",
+                        message=(
+                            f"stage {sid!r} depends on unknown stage id {dep!r}"
+                        ),
                     )
                 )
 
@@ -225,11 +220,31 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
             PreflightIssue(
                 kind="depends_on_cycle",
                 where="policy.stages",
-                message=f"depends_on graph contains a cycle: {' -> '.join(cycle)}",
+                message=(
+                    f"depends_on graph contains a cycle: {' -> '.join(cycle)}"
+                ),
             )
         )
 
-    # 5) Walk REQ meta stages and build the adopted-stage list.
+    return policy_stages
+
+
+def resolve_adopted_stages(
+    project_root: Path,
+    req_id: str,
+    policy_stages: dict[str, dict[str, Any]],
+    req_meta: dict[str, Any],
+    report: PreflightReport,
+) -> list[AdoptedStage]:
+    """Resolve REQ meta entries to (policy, contract) triples.
+
+    Records ``unknown_stage_id`` / ``missing_contract`` /
+    ``verification_type_mismatch`` issues per entry and skips bad ones.
+    Also checks REQ meta order against ``depends_on`` (Step 5 三次補修
+    M1) and emits ``depends_on_order_violation`` when a stage appears
+    before one of its adopted predecessors.
+    """
+    meta_path = req_meta_path(project_root, req_id)
     adopted_raw = req_meta.get("stages", []) or []
     if not isinstance(adopted_raw, list) or not adopted_raw:
         report.issues.append(
@@ -239,7 +254,7 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
                 message="REQ meta declares no stages; nothing to judge",
             )
         )
-        return report
+        return []
 
     adopted: list[AdoptedStage] = []
     for entry in adopted_raw:
@@ -255,8 +270,8 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
                     kind="unknown_stage_id",
                     where=f"{meta_path}::stage_id={stage_id!r}",
                     message=(
-                        f"REQ meta references stage id {stage_id!r} which is not "
-                        f"defined in policy.json"
+                        f"REQ meta references stage id {stage_id!r} which is "
+                        f"not defined in policy.json"
                     ),
                 )
             )
@@ -287,43 +302,15 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
             )
             continue
 
-        # Contract's verification_type must agree with policy's.
         if contract.get("verification_type") != vtype:
             report.issues.append(
                 PreflightIssue(
                     kind="verification_type_mismatch",
                     where=contract_ref,
                     message=(
-                        f"contract verification_type {contract.get('verification_type')!r} "
-                        f"does not match policy stage {stage_id!r} "
-                        f"({vtype!r})"
-                    ),
-                )
-            )
-            continue
-
-        # manual_check in any required adopted stage means NOT_READY (P6).
-        if vtype == "manual_check" and required:
-            report.issues.append(
-                PreflightIssue(
-                    kind="manual_check_required",
-                    where=f"policy.stages[{stage_id}]",
-                    message=(
-                        "stage uses verification_type=manual_check; Phase 1 forbids "
-                        "manual_check from being a required ALLOW basis (P6)"
-                    ),
-                )
-            )
-            continue
-
-        if vtype not in _SUPPORTED_RUNTIME_TYPES:
-            report.issues.append(
-                PreflightIssue(
-                    kind="unsupported_verification_type",
-                    where=f"policy.stages[{stage_id}]",
-                    message=(
-                        f"verification_type {vtype!r} is not runnable in Phase 1; "
-                        f"only {sorted(_SUPPORTED_RUNTIME_TYPES)} are supported"
+                        f"contract verification_type "
+                        f"{contract.get('verification_type')!r} does not match "
+                        f"policy stage {stage_id!r} ({vtype!r})"
                     ),
                 )
             )
@@ -340,6 +327,143 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
                 required=required,
             )
         )
+
+    # M1: REQ meta order must satisfy depends_on among adopted stages.
+    adopted_ids = {a.stage_id for a in adopted}
+    seen: set[str] = set()
+    for adopted_stage in adopted:
+        for dep in adopted_stage.depends_on:
+            if dep not in policy_stages:
+                continue
+            if dep not in adopted_ids:
+                continue
+            if dep not in seen:
+                report.issues.append(
+                    PreflightIssue(
+                        kind="depends_on_order_violation",
+                        where=(
+                            f"{meta_path}::stage_id={adopted_stage.stage_id}"
+                        ),
+                        message=(
+                            f"stage {adopted_stage.stage_id!r} appears before "
+                            f"its adopted dependency {dep!r} in REQ meta; "
+                            f"reorder stages[] so dependencies come first"
+                        ),
+                    )
+                )
+        seen.add(adopted_stage.stage_id)
+
+    return adopted
+
+
+def check_runtime_support(
+    adopted: list[AdoptedStage], report: PreflightReport
+) -> list[AdoptedStage]:
+    """Drop stages ``qgb run`` cannot execute in Phase 1.
+
+    This is the boundary where ``qgb run`` and ``qgb validate-policy``
+    diverge: for ``qgb run`` an unsupported verification_type is a
+    blocker (we can't actually run it); for ``qgb validate-policy``
+    (Step 6) the same finding will be a warning ("Phase 1 runtime won't
+    execute this, but the policy itself isn't malformed"). Step 5 leaves
+    both as ``severity="blocker"``; Step 6 will introduce the warning
+    variant.
+    """
+    runnable: list[AdoptedStage] = []
+    for stage in adopted:
+        vtype = stage.verification_type
+        if vtype == "manual_check" and stage.required:
+            report.issues.append(
+                PreflightIssue(
+                    kind="manual_check_required",
+                    where=f"policy.stages[{stage.stage_id}]",
+                    message=(
+                        "stage uses verification_type=manual_check; Phase 1 "
+                        "forbids manual_check from being a required ALLOW "
+                        "basis (P6)"
+                    ),
+                )
+            )
+            continue
+        if vtype not in _SUPPORTED_RUNTIME_TYPES:
+            report.issues.append(
+                PreflightIssue(
+                    kind="unsupported_verification_type",
+                    where=f"policy.stages[{stage.stage_id}]",
+                    message=(
+                        f"verification_type {vtype!r} is not runnable in "
+                        f"Phase 1; only "
+                        f"{sorted(_SUPPORTED_RUNTIME_TYPES)} are supported"
+                    ),
+                )
+            )
+            continue
+        runnable.append(stage)
+    return runnable
+
+
+def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
+    """Decide whether ``qgb run <req_id>`` may proceed.
+
+    Thin orchestrator over :func:`validate_schema_sources`,
+    :func:`inspect_policy_graph`, :func:`resolve_adopted_stages`, and
+    :func:`check_runtime_support`. Step 6 ``qgb validate-policy`` will
+    reuse the same helpers with different short-circuit rules.
+
+    The report's ``issues`` list is empty exactly when execution is
+    safe. Callers that want NOT_READY semantics should map
+    ``ready() is False`` to exit code 2 without writing any gate.json.
+    """
+    report = PreflightReport()
+
+    validate_schema_sources(project_root, report)
+
+    # If anything fundamental is broken, do not try to interpret the
+    # policy. Reporting more issues on top of a broken base file is noise.
+    if any(
+        i.kind in ("missing_required_file", "invalid_json", "schema_violation")
+        for i in report.issues
+    ):
+        return report
+
+    try:
+        policy = load_policy(project_root)
+        report.policy = policy
+    except LoaderError as exc:
+        report.issues.append(
+            PreflightIssue(
+                kind=(
+                    "invalid_json" if exc.kind == "invalid_json"
+                    else "missing_required_file"
+                ),
+                where=str(exc.path),
+                message=exc.message,
+            )
+        )
+        return report
+
+    meta_path = req_meta_path(project_root, req_id)
+    try:
+        req_meta = load_req_meta(project_root, req_id)
+        report.req_meta = req_meta
+    except LoaderError as exc:
+        report.issues.append(
+            PreflightIssue(
+                kind=(
+                    "missing_required_file" if exc.kind == "missing_file"
+                    else "invalid_json"
+                ),
+                where=str(meta_path),
+                message=exc.message,
+            )
+        )
+        return report
+
+    policy_stages = inspect_policy_graph(policy, report)
+    adopted = resolve_adopted_stages(
+        project_root, req_id, policy_stages, req_meta, report
+    )
+    adopted = check_runtime_support(adopted, report)
 
     # Phase 1 treats every adopted stage as judgement material (see
     # decision.py for the rationale). An REQ with zero adopted stages

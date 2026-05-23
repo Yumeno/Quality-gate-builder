@@ -1,11 +1,15 @@
 """Serialise a run's results to gate.json / summary.md / stage logs.
 
-Two output trees (matches detailed-design.md §7.4, §7.5 and philosophy P7):
+Two output trees (matches detailed-design.md §7.4, §7.5, §8.7 and philosophy P7):
 
-* **Volatile** ``artifacts/<REQ>/runs/<timestamp_utc>/``
+* **Volatile** ``artifacts/<REQ>/runs/<timestamp_utc>-<run_id>/``
     - Every run lands here regardless of outcome.
-    - ``QGB_KEEP_RUNS`` (default 10) caps how many run-dirs are kept; older
-      ones are deleted oldest-first.
+    - ``timestamp_utc`` is the wall-clock instant of the run (seconds
+      precision). ``run_id`` (``r0001``-``rffff``) is a per-second
+      monotonic counter assigned at reservation time; it absorbs
+      same-second collisions without falsifying the timestamp.
+    - ``QGB_KEEP_RUNS`` (default 10) caps how many run-dirs are kept;
+      older ones are deleted oldest-first.
 * **Curated** ``evidence/<REQ>/latest/``
     - Updated by ``qgb run`` only (not by ``qgb verify``).
     - Byte-for-byte equal contents to the volatile copy, so reviewers can
@@ -65,8 +69,12 @@ class EvidenceWriteResult:
 def make_timestamps(now: datetime | None = None) -> Timestamps:
     """Generate the two timestamp forms from a single UTC instant.
 
-    The compact form (no separators in time) is what ``paths.run_dir`` uses
-    as its directory name, because Windows forbids ``:`` in path segments.
+    Both forms describe the same wall-clock instant (seconds precision).
+    The compact form (no separators in time) is what feeds the first
+    segment of ``paths.run_dir`` because Windows forbids ``:`` in path
+    segments. Collision avoidance lives in :func:`_reserve_run_dir` and
+    does **not** touch the timestamp; collisions are absorbed by
+    ``run_id`` so this function stays wall-clock-honest.
     """
     instant = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
         microsecond=0
@@ -81,64 +89,56 @@ def _timestamps_from_instant(instant: datetime) -> Timestamps:
     return Timestamps(compact=compact, rfc3339=rfc3339)
 
 
-def _parse_compact(compact: str) -> datetime:
-    """Inverse of the compact-timestamp formatter."""
-    return datetime.strptime(compact, "%Y-%m-%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+# run_id space: 'r' + 4 lowercase hex digits, r0001..rffff = 65535 slots/second.
+_RUN_ID_MIN = 1
+_RUN_ID_MAX = 0xFFFF
 
 
-_RUN_DIR_COLLISION_LIMIT = 60  # walk forward at most one minute to find a free slot.
+def _format_run_id(n: int) -> str:
+    return f"r{n:04x}"
 
 
 class RunDirReservationError(RuntimeError):
-    """No free run_dir slot could be reserved within the collision limit."""
+    """No free run_id slot could be reserved within the same second."""
 
 
 def _reserve_run_dir(
     runs_root: Path, timestamps: Timestamps
-) -> tuple[Path, Timestamps]:
-    """Reserve a run_dir atomically.
+) -> tuple[Path, str]:
+    """Reserve a run_dir atomically by picking the next free ``run_id``.
 
     Two ``qgb run`` invocations inside the same wall-clock second would
-    otherwise share a directory, and the second run would overwrite the
+    otherwise share a directory and the second run would overwrite the
     first's volatile evidence (P7 violation: every run must have its own
     durable trace until ``QGB_KEEP_RUNS`` decides to prune it).
 
-    Strategy: try to ``mkdir(exist_ok=False)`` at ``runs_root/<compact>``.
-    On ``FileExistsError`` (whether from a sibling process or a previous
-    run in the same second), walk the timestamp forward in one-second
-    steps and retry. The first successful mkdir wins. Because creation
-    itself is the locking primitive, two parallel processes cannot both
-    pick the same dir; one's mkdir will fail and it will move on.
+    Step 5 三次補修: ``timestamp_utc`` now stays as wall-clock truth.
+    Collisions are absorbed by walking ``run_id`` forward (``r0001`` ->
+    ``r0002`` -> ...) within the same second; the directory layout
+    becomes ``<timestamp_utc>-<run_id>``. ``mkdir(exist_ok=False)`` is
+    the locking primitive: two parallel processes that pick the same
+    ``run_id`` will see one ``mkdir`` succeed and the other raise
+    ``FileExistsError`` and move on.
 
-    The resulting ``Timestamps`` is the one that gets baked into
-    ``gate.json``, so ``paths.run_dir`` and ``timestamp_utc`` always
-    stay in lockstep.
-
-    Step 5 二次補修 / Step 6 申し送り: this still walks the timestamp
-    field forward, which makes ``timestamp_rfc3339`` a logical instant
-    rather than wall-clock truth when collisions happen. Step 6 will
-    introduce a separate ``run_id`` so the timestamp can stay honest.
-    Until then, the assumption ``paths.run_dir.suffix == timestamp_utc``
-    is part of the contract enforced by both gate schemas.
+    Returns a tuple of ``(reserved_run_dir, run_id)``. Raises
+    :class:`RunDirReservationError` when every slot in
+    ``r0001``..``rffff`` is already taken for this second — that
+    indicates either a bug or a system under denial-of-service-like
+    pressure, and a loud failure beats a silent schema-invalid gate.
     """
-    # Ensure the parent exists so children mkdir(exist_ok=False) can race fairly.
     runs_root.mkdir(parents=True, exist_ok=True)
-
-    candidate_ts = timestamps
-    for _ in range(_RUN_DIR_COLLISION_LIMIT + 1):
-        candidate_dir = runs_root / candidate_ts.compact
+    for n in range(_RUN_ID_MIN, _RUN_ID_MAX + 1):
+        run_id = _format_run_id(n)
+        candidate = runs_root / f"{timestamps.compact}-{run_id}"
         try:
-            candidate_dir.mkdir(parents=False, exist_ok=False)
-            return candidate_dir, candidate_ts
+            candidate.mkdir(parents=False, exist_ok=False)
         except FileExistsError:
-            pass
-        instant = _parse_compact(candidate_ts.compact)
-        instant = datetime.fromtimestamp(instant.timestamp() + 1, tz=timezone.utc)
-        candidate_ts = _timestamps_from_instant(instant)
+            continue
+        return candidate, run_id
 
     raise RunDirReservationError(
-        f"could not reserve a run_dir under {runs_root} after "
-        f"{_RUN_DIR_COLLISION_LIMIT + 1} attempts starting at {timestamps.compact}"
+        f"could not reserve a run_id under {runs_root} for {timestamps.compact}: "
+        f"all {_RUN_ID_MAX} slots are taken"
     )
 
 
@@ -159,6 +159,7 @@ def build_gate_document(
     req_id: str,
     phase: str,
     timestamps: Timestamps,
+    run_id: str,
     decision: Decision,
     adopted: list[AdoptedStage],
     results: list[StageResult],
@@ -190,6 +191,7 @@ def build_gate_document(
         "req_id": req_id,
         "timestamp_utc": timestamps.compact,
         "timestamp_rfc3339": timestamps.rfc3339,
+        "run_id": run_id,
         "phase": phase,
         "status": decision.status,
         "failed_stage": decision.failed_stage,
@@ -235,6 +237,7 @@ def build_summary_md(gate: dict[str, Any]) -> str:
     lines.append(f"| Phase | {gate['phase']} |")
     lines.append(f"| 実行日時 (UTC) | {gate['timestamp_utc']} |")
     lines.append(f"| 実行日時 (RFC3339) | {gate['timestamp_rfc3339']} |")
+    lines.append(f"| run_id | `{gate['run_id']}` |")
     lines.append(
         f"| Runner | {gate['runner']['name']} {gate['runner']['version']} |"
     )
@@ -303,10 +306,9 @@ def write_evidence(
     """
     qs = project_root / ".quality-system"
     artifacts = qs / "artifacts" / req_id / "runs"
-    # _reserve_run_dir creates run_dir atomically and returns the timestamps
-    # that actually won the race (which may have walked forward to dodge
-    # collisions with sibling processes).
-    run_dir, timestamps = _reserve_run_dir(artifacts, timestamps)
+    # _reserve_run_dir creates run_dir atomically and returns the run_id
+    # that actually won the race (timestamps stay as wall-clock truth).
+    run_dir, run_id = _reserve_run_dir(artifacts, timestamps)
     (run_dir / "stages").mkdir(parents=False, exist_ok=False)
 
     curated_dir = qs / "evidence" / req_id / "latest"
@@ -314,7 +316,9 @@ def write_evidence(
     (curated_dir / "stages").mkdir(parents=True, exist_ok=True)
 
     # Paths recorded *inside* gate.json are project-relative POSIX strings.
-    run_dir_rel = f".quality-system/artifacts/{req_id}/runs/{timestamps.compact}"
+    run_dir_rel = (
+        f".quality-system/artifacts/{req_id}/runs/{timestamps.compact}-{run_id}"
+    )
     curated_latest_rel = f".quality-system/evidence/{req_id}/latest"
 
     basis = build_basis(req_id, policy, adopted)
@@ -322,6 +326,7 @@ def write_evidence(
         req_id=req_id,
         phase=phase,
         timestamps=timestamps,
+        run_id=run_id,
         decision=decision,
         adopted=adopted,
         results=results,
@@ -383,7 +388,9 @@ def _resolve_keep_runs(explicit: int | None) -> int:
 def _prune_runs(runs_dir: Path, keep: int) -> None:
     """Keep only the ``keep`` most recent run directories under ``runs_dir``.
 
-    Directory names are compact timestamps, so lexical sort = chronological.
+    Directory names follow ``<compact_timestamp>-<run_id>`` where the
+    timestamp leads and ``run_id`` is a zero-padded hex counter, so
+    lexical sort = chronological even within the same second.
     """
     if not runs_dir.is_dir():
         return

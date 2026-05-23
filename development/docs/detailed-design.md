@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.8 (Phase 1 Step 0〜5 + 補修・二次補修確定範囲、Codex レビュー反映済み)
+# quality-gate-builder 詳細設計 v0.9 (Phase 1 Step 0〜5 + 補修・二次補修・三次補修確定範囲、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -180,8 +180,9 @@ qgb run main         = READY 時の検査実行と ALLOW/DENY 出力
 | REQ id | `^REQ-[A-Z0-9]+-[0-9]{3,}$` | `REQ-APP-001` |
 | stage id | 自由命名 (`L1`, `S1`, `cmd` など)、policy 内で一意 | `S1`, `S2` |
 | schema_version | `^[0-9]+\.[0-9]+$` | `1.0` |
-| timestamp_utc | `^[0-9]{4}-(0[1-9]\|1[0-2])-(0[1-9]\|[12][0-9]\|3[01])T(0[0-9]\|1[0-9]\|2[0-3])([0-5][0-9]){2}Z$` | `2026-05-21T012345Z` |
+| timestamp_utc | `^[0-9]{4}-(0[1-9]\|1[0-2])-(0[1-9]\|[12][0-9]\|3[01])T(0[0-9]\|1[0-9]\|2[0-3])([0-5][0-9]){2}Z$` (wall-clock truth、秒精度) | `2026-05-21T012345Z` |
 | timestamp_rfc3339 | `format: date-time` (qgb 独自 RFC3339 shape checker) | `2026-05-21T01:23:45Z` |
+| run_id | `^r[0-9a-f]{4}$` (Step 5 三次補修で追加。同秒内の衝突を吸収する monotonic counter) | `r0001`, `r0042` |
 
 ### 4.3 gate.json の if/then 整合性制約
 
@@ -510,18 +511,21 @@ Issue #12 議論で確定:
 
 これにより設計例の腐敗を CI で検出できる。Layer 3 は Step 5 で qgb run を実装するときに守るべき契約でもある。
 
-### 7.4 gate.json 内 timestamp 規約 (Step 5 への申し送り)
+### 7.4 gate.json 内 timestamp / run_id 規約 (Step 5 三次補修で確定)
 
 | フィールド | 形式 | 用途 |
 |---|---|---|
-| `timestamp_utc` | `YYYY-MM-DDTHHMMSSZ` (`:` なし、Z 終端) | `paths.run_dir` パスのサフィックス、ファイル名互換 |
+| `timestamp_utc` | `YYYY-MM-DDTHHMMSSZ` (`:` なし、Z 終端) | wall-clock truth (秒精度)、ファイル名互換 |
 | `timestamp_rfc3339` | `YYYY-MM-DDTHH:MM:SSZ` (`:` あり) | ツール互換、解析しやすい |
+| `run_id` | `r[0-9a-f]{4}` (`r0001`〜`rffff`) | 同秒内の衝突を吸収する monotonic counter |
 
-両者は **同一時刻** を表現する。Step 5 の実装では：
+時刻 2 系統は **同一時刻** を表現する。`run_id` は時刻とは独立で、同秒に複数 run が走ったときの差分だけを担う。
 
-- 単一の `datetime.now(timezone.utc)` 呼び出しから両形式を生成
-- `paths.run_dir` のサフィックスは `timestamp_utc` と必ず一致
-- `tests/test_examples.py::test_gate_timestamps_are_mutually_consistent` が CI で検証
+- 単一の `datetime.now(timezone.utc)` 呼び出しから両形式を生成 (`evidence.make_timestamps`)
+- `paths.run_dir` のサフィックスは **`<timestamp_utc>-<run_id>`** 形式で必ず一致
+- `evidence._reserve_run_dir` が atomic に `mkdir(exist_ok=False)` で予約しながら `run_id` をインクリメントする (`r0001` → `r0002` → ...)。`timestamp_utc` は前進させない (Codex 二次レビュー RR2 への対応、Step 5 三次補修)
+- 65,535 個 (`rffff`) 全て埋まると `RunDirReservationError` で停止し、silent な schema 違反を防ぐ
+- `tests/test_examples.py::test_gate_timestamps_are_mutually_consistent` が CI で `<timestamp_utc>-<run_id>` 整合性を検証
 
 ### 7.5 basis[] 規約 (Step 5 への申し送り)
 
@@ -542,7 +546,7 @@ Step 7 の knowledge 連携 (`waived` 段階の knowledge.jsonl 参照など) �
 | モジュール | 責務 |
 |---|---|
 | `qgb/core/loader.py` | `config.json` / `policy.json` / `<REQ>.meta.json` / `<contract>.json` の存在確認 + JSON parse。スキーマ検証は行わない |
-| `qgb/core/preflight.py` | READY/NOT_READY 判定。スキーマ違反 (validate を内部呼び出し) + 必須正本欠落 + `stage_id` 解決 + `contract_ref` 解決 + `verification_type` の一致 + `depends_on` DAG + `manual_check` の required 段階拒否 + Phase 1 で runnable な type 限定 |
+| `qgb/core/preflight.py` | READY/NOT_READY 判定。Step 5 三次補修で 5 関数に分割: `validate_schema_sources` (スキーマ違反 + 必須正本欠落) / `inspect_policy_graph` (policy stages の DAG + dangling) / `resolve_adopted_stages` (REQ meta の `stage_id` 解決 + `contract_ref` resolve + `verification_type` 一致 + `depends_on_order_violation`) / `check_runtime_support` (Phase 1 runnable 限定 + `manual_check_required`) / `run_preflight` (上記の薄い orchestrator)。`PreflightIssue.severity` は Phase 1 では全件 `"blocker"`、Step 6 で `"warning"` を validate-policy が初使用予定 |
 | `qgb/core/runner.py` | 採用段階を 1 件ずつ実行し `StageResult` を返す。`depends_on` 失敗時は実行スキップ (failed 記録) |
 | `qgb/core/decision.py` | 採用段階の結果から `ALLOW` / `DENY` + `failed_stage` (最初の失敗段階) を決定 + phase 別の `decision.meaning` を選択。Phase 1 は全 adopted stage を判定対象とする (`required` は schema で `const: true` に固定、二次補修 MR3) |
 | `qgb/core/evidence.py` | `gate.json` + `summary.md` + `stages/<id>.log` を採用側と揮発側の両方へ書き出し。`build_basis()` と `make_timestamps()` を提供。`QGB_KEEP_RUNS` による prune |
@@ -628,18 +632,20 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 - `paths.run_dir` の最末尾サフィックスは必ず `compact` と一致 (`test_examples.py::test_gate_timestamps_are_mutually_consistent` で CI 検証)
 - テストでは `monkeypatch.setattr(evidence, "make_timestamps", ...)` で固定値注入が可能
 
-#### 同一秒衝突回避 (Step 5 補修 R2 + 二次補修 RR1)
+#### 同一秒衝突回避 (Step 5 補修 R2 → 二次補修 RR1 → 三次補修 RR2/MR1 で確定)
 
 `evidence._reserve_run_dir(runs_root, timestamps)` が `write_evidence` の前段で動く:
 
-- `mkdir(parents=False, exist_ok=False)` を予約操作として使う **atomic な reservation**。Codex 二次レビューで指摘された check-then-create race を消した
-- `FileExistsError` を捕捉して 1 秒ずつ進めた synthetic timestamp に切り替え (最大 60 秒前進)
-- 戻り値は `(予約済 run_dir, 確定 Timestamps)` のタプルで、gate.json には確定後の値が焼き込まれる
-- 60 秒以内に空きが見つからなければ `RunDirReservationError` を投げて停止 (旧版にあった microsecond サフィックス fallback は curated schema の regex を破るリスクがあったため廃止)
+- `mkdir(parents=False, exist_ok=False)` を予約操作として使う **atomic な reservation**。check-then-create race を構造的に排除 (Codex 二次レビュー RR1)
+- 衝突時は `timestamp_utc` を進めず、**`run_id` を `r0001` から順にインクリメント**して `<timestamp>-<run_id>` で再予約 (Codex 二次レビュー RR2: synthetic timestamp は実時刻を歪めるため廃止)
+- 戻り値は `(予約済 run_dir, 確定 run_id)` のタプル。`Timestamps` は実時刻のまま gate.json に焼かれる
+- `r0001`〜`rffff` (65,535 個) を使い切ったら `RunDirReservationError` を投げて停止 (旧版の microsecond サフィックス fallback は curated `timestamp_utc` regex を破るリスクがあったため廃止、Codex 二次レビュー MR1)
 
-これにより同一プロセスの連続実行・並行プロセスの同秒実行いずれでも、各 run_dir が独立し過去 run の証跡が上書きされない (P7)。`timestamp_utc` と `paths.run_dir` のサフィックス一致は維持される。
+これにより:
 
-なお「`timestamp_utc` の値が実時刻からズレる (synthetic instant)」問題は Step 6 で `run_id` を schema に追加することで完全解決する予定 (§12 申し送り「timestamp と run_id の責務分離」)。
+1. 同一プロセスの連続実行・並行プロセスの同秒実行いずれでも、各 run_dir が独立し過去 run の証跡が上書きされない (P7)
+2. `timestamp_utc` / `timestamp_rfc3339` は常に wall-clock truth であり、証跡の解釈可能性が保たれる (P7)
+3. `paths.run_dir` の末尾は必ず `<timestamp_utc>-<run_id>` 形式 (両 schema で正規表現と if/then の整合性を強制)
 
 ### 8.8 basis[] の生成 (詳細)
 
@@ -764,8 +770,9 @@ select = ["E", "W", "F", "I", "B", "UP"]
 - Step 5: 17 件追加 (qgb run 縦串)
 - Step 5 補修: 5 件追加 (R1 root escape × 2、R2 同秒衝突 × 2、R3 optional ALLOW × 1)
 - Step 5 二次補修: 5 件追加 / 1 件差し替え (RR1 atomic reservation × 2、MR2 absolute path × 2、symlink × 1、MR3 const:true × 2、optional ALLOW テストを required=false NOT_READY に置換)
+- Step 5 三次補修: 12 件追加 (run_id regex × 8、run_id required × 1、preflight helpers × 1、severity default × 1、M1 depends_on order × 1)、同秒衝突テスト 3 件を logical-timestamp → run_id 採番方式に書き換え
 
-合計 **184 件、全成功、ruff 警告ゼロ**。
+合計 **196 件、全成功、ruff 警告ゼロ**。
 
 ### 10.2 fixture の責務分離
 
@@ -816,6 +823,8 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 
 ## 12. 未確定 / Step 6 以降で確定する事項
 
+Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + REQ meta トポロジカル順検証) と B 部分 (preflight モジュール 5 関数分割 + severity フィールド準備) を前倒した結果、本テーブルは「設計フェーズ系コマンド構築 (Step 6) のスコープに本来属する項目」と「Step 5 補修で扱いきれなかった runner/evidence 系の中小残課題」だけを残す形に整理した。
+
 以下は本書時点では未確定。各 Step で確定し、本書を改訂する。
 
 | 項目 | 確定予定 Step |
@@ -833,45 +842,20 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
 
-### Step 6 への申し送り (Codex Step 5 / 補修 / 二次補修レビュー由来)
+### Step 6 への申し送り (Codex Step 5 系レビュー由来、三次補修で残ったもの)
 
-#### timestamp と run_id の責務分離 (Codex 二次レビュー RR2 / MR1)
+Step 5 三次補修で「採用判定・証跡生成」関連の構造課題は片付け済み (run_id 導入、preflight 5 関数分割、REQ meta トポロジカル順検証、severity フィールド準備)。以下は「設計フェーズ系コマンド」のスコープと密接に絡むため、Step 6 で扱う:
 
-Step 5 二次補修時点で `evidence._reserve_run_dir` は同秒衝突を「1 秒前進した synthetic timestamp」で回避している。これは P7 の「再現可能な証跡」(衝突しても 1 run = 1 dir) は満たすが、`timestamp_utc` / `timestamp_rfc3339` を実時刻ではなく **logical instant** にしてしまう副作用がある。
+#### preflight 5 関数 API の妥当性検証 (validate-policy 視点)
 
-Step 6 では次の改訂を行う:
+Step 5 三次補修で関数分割そのものは仮置きしたが、`validate-policy` の中核として十分かは Step 6 で実コードで揉む必要がある。具体的に:
 
-- `gate.schema.json` / `gate.runtime.schema.json` に `run_id` (例: `r0001` 〜 `r9999` または UUIDv7 短縮) を必須フィールドで追加
-- `paths.run_dir` のサフィックスを `<compact>-<run_id>` 形式に変更 (run_id は同秒内でユニークになるよう採番)
-- `timestamp_utc` / `timestamp_rfc3339` は常に実時刻 (秒精度)、衝突時も改変しない
-- `_reserve_run_dir` は timestamp を進めず、run_id だけインクリメントするロジックに置き換え
-- 60 秒衝突 fallback (microsecond suffix) も同時に廃止 (現状 curated schema を破る可能性がある)
+- `check_runtime_support` の `manual_check_required` / `unsupported_verification_type` を `qgb run` では blocker、`validate-policy` では warning として扱う severity 切り替えポイントを実装する
+- `inspect_policy_graph` を `validate-policy` の段階数推奨レンジ (3〜7) チェックと組み合わせる
+- 必要なら 5 関数の境界を再調整 (Step 5 では「仮置き」で凍結していない)
 
-これにより:
+#### Step 5 補修で扱いきれなかった runner / evidence 残課題
 
-1. `timestamp_*` が wall-clock truth として正直になる (Codex RR2)
-2. fallback が curated `timestamp_utc` の regex を破るリスクが消える (Codex MR1)
-3. 同秒衝突は `run_id` だけで識別できるので並行プロセスに対しても堅牢
-
-ただし schema 改訂を伴うため、Step 5 の手書きリファレンス (`examples/generic-minimal/evidence-reference/REQ-APP-001/latest/gate.json`) と `tests/test_examples.py` Layer 3 も同時に更新が必要。Step 6 で `qgb validate-policy` と合わせて一括改訂する想定。
-
-#### preflight モジュールの再分割
-
-`qgb run` の preflight をそのまま validate-policy の中核にすると責務が混ざる。validate-policy は「設計品質と整合性を診断する」コマンドであり、`manual_check_required` / `unsupported_verification_type` は run 側 blocker だが validate-policy 側では「Phase 1 runtime 未対応」という別ランクの診断に過ぎない。Step 6 で次のように分割する想定:
-
-```python
-validate_schema_sources(project_root)        # 既存 run_validate
-inspect_policy_graph(policy)                  # DAG / dangling / topological order
-resolve_adopted_stages(root, req, policy, meta)  # REQ 固有
-check_runtime_support(adopted)                # qgb run 固有 (manual_check / unsupported)
-run_preflight()                               # 上記を組み合わせる薄い orchestration
-```
-
-加えて `PreflightIssue.severity` を導入し、`blockers` と `warnings` を分けて validate-policy の警告 (推奨段階数レンジ外など) を載せられる構造にする。
-
-#### Step 5 補修で扱いきれなかった残課題
-
-- **REQ meta 実行順がトポロジカル順を満たすか未検証** (Codex M1): `[S2, S1]` の順で書かれた場合に S2 が S1 未実行で走るリスク。`resolve_adopted_stages` の責務として Step 6 で実装
 - **`_replace_dir_contents()` が非 atomic** (Codex M4 / M5): `gate.json` と `stages/` の不整合や stale log 残存。`latest.tmp-<ts>` で書いて rename する方式が望ましい
 - **byte offset 表記** (Codex L2): substring_match のログは現状 code point index。`char offset` 表記に変えるか、UTF-8 byte offset を計算する
 - **`LoaderError.wrong_type` の preflight 側分類**: `invalid_json` 扱いに混ざる箇所がある (Codex L3)
@@ -889,3 +873,4 @@ run_preflight()                               # 上記を組み合わせる薄�
 | 0.6 | 2026-05-21 | Phase 1 Step 5 (qgb run 縦串) を反映。§8 を新設し loader/preflight/runner/decision/evidence の 5 モジュール責務、preflight 検査、verification_type 実装、timestamp/basis 生成、2 系統出力、QGB_KEEP_RUNS を確定。§10 テスト件数 173 件に更新、§11 思想憲章マトリクスに P6 機械化を追加 |
 | 0.7 | 2026-05-22 | Step 5 補修 (Codex レビュー反映): R1 contract.target の root escape 防止 (loader.resolve_project_relative を共通化)、R2 同一秒 run_dir 衝突回避、R3 optional stage と ALLOW schema の矛盾解消 (全 adopted stage を判定対象に)、reference gate.json の `evidence-reference/` 退避、§12 に Step 6 申し送り (preflight 再分割 / severity / topological order / atomic write / byte offset / loader error / QGB_KEEP_RUNS warning) を追加 |
 | 0.8 | 2026-05-23 | Step 5 二次補修 (Codex 二次レビュー反映): RR1 run_dir 予約を atomic 化 (mkdir(exist_ok=False) ループ + 60 秒 fallback を廃止)、MR2 resolve_project_relative() で absolute path を明示拒否、MR3 req-meta.schema.json の `required` を `const: true` で固定 (Phase 1 では false を schema レベルでブロック)、symlink escape テスト追加。§12 Step 6 申し送りに「timestamp と run_id の責務分離」(RR2 + MR1) を追加。テスト 184 件 |
+| 0.9 | 2026-05-23 | Step 5 三次補修 (Step 6 スコープ整理 + Codex 三次レビュー前準備): C 部分 (gate schema に `run_id` 導入、`timestamp_*` を wall-clock truth に、`paths.run_dir` を `<compact>-<run_id>` に、REQ meta トポロジカル順検証 M1) を完全前倒し。B 部分 (preflight の 5 関数分割: validate_schema_sources / inspect_policy_graph / resolve_adopted_stages / check_runtime_support / run_preflight、`PreflightIssue.severity` フィールド追加で Phase 1 は全件 blocker) も型・構造のみ前倒し。§4.2 識別子規約、§7.4 timestamp/run_id 規約、§8.1 モジュール責務、§8.7 同秒衝突回避を新仕様に。§12 Step 6 申し送りから完了項目を削除し validate-policy 視点の残課題のみ残す。テスト 196 件 |

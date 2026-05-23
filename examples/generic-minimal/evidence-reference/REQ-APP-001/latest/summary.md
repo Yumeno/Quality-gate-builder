@@ -14,8 +14,9 @@
 | Phase | verify |
 | 実行日時 (UTC) | 2026-05-21T120000Z |
 | 実行日時 (RFC3339) | 2026-05-21T12:00:00Z |
+| run_id | `r0001` |
 | Runner | qgb 0.1.0 |
-| run_dir | `.quality-system/artifacts/REQ-APP-001/runs/2026-05-21T120000Z` |
+| run_dir | `.quality-system/artifacts/REQ-APP-001/runs/2026-05-21T120000Z-r0001` |
 | curated_latest_dir | `.quality-system/evidence/REQ-APP-001/latest` |
 
 ## 段階別結果
