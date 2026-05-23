@@ -2,19 +2,23 @@
 
 Phase 1 rule (matches requirements doc §6.4.2 and the curated gate schema):
 
-* Every adopted stage is judgement material, regardless of its
-  ``required`` flag. If every adopted stage's ``result == passed`` →
-  ``ALLOW``. Otherwise → ``DENY``, with ``failed_stage`` set to the
-  *first* failed stage in execution order.
+* Every adopted stage is judgement material. If every adopted stage's
+  ``result == passed`` → ``ALLOW``. Otherwise → ``DENY``, with
+  ``failed_stage`` set to the *first* failed stage in execution order.
 
-This deliberately ignores the ``required`` flag on REQ meta stages for
-Phase 1. The curated ``gate.schema.json`` enforces "ALLOW implies every
-stage in stages[] has result=passed"; honouring an optional/failing
-stage while still emitting ALLOW would produce a schema-invalid gate
-document. Optional-stage semantics (e.g. "advisory checks") are a
-Phase 2 design surface (#21 / waivers, knowledge integration) — until
-then, if an adopted stage is unwanted, it should be removed from REQ
-meta, not flagged optional.
+The ``required`` flag on REQ meta stages is constrained to
+``const: true`` in Phase 1 (see ``req-meta.schema.json``), so this
+function does not branch on it. Two design pressures point the same way:
+
+* The curated ``gate.schema.json`` enforces "ALLOW implies every entry
+  in stages[] has result=passed"; honouring an optional/failing stage
+  while still emitting ALLOW would produce a schema-invalid gate.
+* If a stage isn't authoritative, it should not be in the adopted
+  set at all; "optional ALLOW basis" is a contradiction in terms.
+
+Optional-stage semantics (e.g. "advisory checks") and waivers belong
+to Phase 2 (knowledge integration); the schema-level rejection makes
+sure Phase 1 designers can't write a misleading half-state.
 
 Out of scope here (handled by ``preflight`` and Step 7):
 

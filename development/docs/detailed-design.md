@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.7 (Phase 1 Step 0〜5 + 補修確定範囲、Codex レビュー反映済み)
+# quality-gate-builder 詳細設計 v0.8 (Phase 1 Step 0〜5 + 補修・二次補修確定範囲、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -544,7 +544,7 @@ Step 7 の knowledge 連携 (`waived` 段階の knowledge.jsonl 参照など) �
 | `qgb/core/loader.py` | `config.json` / `policy.json` / `<REQ>.meta.json` / `<contract>.json` の存在確認 + JSON parse。スキーマ検証は行わない |
 | `qgb/core/preflight.py` | READY/NOT_READY 判定。スキーマ違反 (validate を内部呼び出し) + 必須正本欠落 + `stage_id` 解決 + `contract_ref` 解決 + `verification_type` の一致 + `depends_on` DAG + `manual_check` の required 段階拒否 + Phase 1 で runnable な type 限定 |
 | `qgb/core/runner.py` | 採用段階を 1 件ずつ実行し `StageResult` を返す。`depends_on` 失敗時は実行スキップ (failed 記録) |
-| `qgb/core/decision.py` | 採用段階の結果から `ALLOW` / `DENY` + `failed_stage` (最初の失敗 required 段階) を決定 + phase 別の `decision.meaning` を選択 |
+| `qgb/core/decision.py` | 採用段階の結果から `ALLOW` / `DENY` + `failed_stage` (最初の失敗段階) を決定 + phase 別の `decision.meaning` を選択。Phase 1 は全 adopted stage を判定対象とする (`required` は schema で `const: true` に固定、二次補修 MR3) |
 | `qgb/core/evidence.py` | `gate.json` + `summary.md` + `stages/<id>.log` を採用側と揮発側の両方へ書き出し。`build_basis()` と `make_timestamps()` を提供。`QGB_KEEP_RUNS` による prune |
 
 CLI (`qgb/cli.py`) はこれらを直列に呼ぶだけのオーケストレータ。各モジュールは互いに直接結合せず、`AdoptedStage` / `StageResult` / `Decision` / `Timestamps` のデータクラスで疎結合する。
@@ -609,6 +609,8 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 
 両 type とも `exit_code` は `null` (外部プロセス非起動)。target の root escape チェックは `loader.resolve_project_relative()` を `contract_ref` と共有することで、契約パスと検査対象パスの両方が「project 内部のみ」という不変条件を一箇所で守る (P9 / NF-007)。
 
+二次補修 (MR2): `resolve_project_relative()` は **絶対パスを明示的に拒否**する。docstring と実装の不一致 (旧版は「absolute path も拒否」と書きつつ実装は relative_to() だけで判定) を解消。`contract_ref` (REQ メタ) 中の絶対パスは preflight で NOT_READY に、`contract.target` 中の絶対パスは runner で stage failed として扱う (DENY)。これにより contract が project-rooted relative path だけを受け入れる入力契約が明確になる (P9)。
+
 ### 8.6 depends_on の扱い (Phase 1)
 
 - 採用段階を REQ meta 宣言順で実行
@@ -626,15 +628,18 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 - `paths.run_dir` の最末尾サフィックスは必ず `compact` と一致 (`test_examples.py::test_gate_timestamps_are_mutually_consistent` で CI 検証)
 - テストでは `monkeypatch.setattr(evidence, "make_timestamps", ...)` で固定値注入が可能
 
-#### 同一秒衝突回避 (Step 5 補修 R2)
+#### 同一秒衝突回避 (Step 5 補修 R2 + 二次補修 RR1)
 
-`evidence._resolve_run_dir(runs_root, timestamps)` が `write_evidence` の前段で動く:
+`evidence._reserve_run_dir(runs_root, timestamps)` が `write_evidence` の前段で動く:
 
-- `runs_root/<compact>/` が既存なら 1 秒ずつ進めた synthetic timestamp に切り替え (最大 60 秒前進)
-- 戻り値は `(確定 run_dir, 確定 Timestamps)` のタプルで、gate.json には確定後の値が焼き込まれる
-- 60 秒連続で衝突が続いた場合は `microsecond` をサフィックスにしたフォールバック (compact pattern からは外れるが、揮発側 schema は permissive なので OK)
+- `mkdir(parents=False, exist_ok=False)` を予約操作として使う **atomic な reservation**。Codex 二次レビューで指摘された check-then-create race を消した
+- `FileExistsError` を捕捉して 1 秒ずつ進めた synthetic timestamp に切り替え (最大 60 秒前進)
+- 戻り値は `(予約済 run_dir, 確定 Timestamps)` のタプルで、gate.json には確定後の値が焼き込まれる
+- 60 秒以内に空きが見つからなければ `RunDirReservationError` を投げて停止 (旧版にあった microsecond サフィックス fallback は curated schema の regex を破るリスクがあったため廃止)
 
-これにより同一プロセスから 3 回連続で `qgb run` を叩いても、各 run_dir が独立し過去 run の証跡が上書きされない (P7)。`timestamp_utc` と `paths.run_dir` のサフィックス一致は維持される。
+これにより同一プロセスの連続実行・並行プロセスの同秒実行いずれでも、各 run_dir が独立し過去 run の証跡が上書きされない (P7)。`timestamp_utc` と `paths.run_dir` のサフィックス一致は維持される。
+
+なお「`timestamp_utc` の値が実時刻からズレる (synthetic instant)」問題は Step 6 で `run_id` を schema に追加することで完全解決する予定 (§12 申し送り「timestamp と run_id の責務分離」)。
 
 ### 8.8 basis[] の生成 (詳細)
 
@@ -758,8 +763,9 @@ select = ["E", "W", "F", "I", "B", "UP"]
 - Step 4: 18 件追加 (examples/generic-minimal 整合性)
 - Step 5: 17 件追加 (qgb run 縦串)
 - Step 5 補修: 5 件追加 (R1 root escape × 2、R2 同秒衝突 × 2、R3 optional ALLOW × 1)
+- Step 5 二次補修: 5 件追加 / 1 件差し替え (RR1 atomic reservation × 2、MR2 absolute path × 2、symlink × 1、MR3 const:true × 2、optional ALLOW テストを required=false NOT_READY に置換)
 
-合計 **178 件、全成功、ruff 警告ゼロ**。
+合計 **184 件、全成功、ruff 警告ゼロ**。
 
 ### 10.2 fixture の責務分離
 
@@ -827,7 +833,27 @@ Windows CP932 ロケール下で日本語パスを含むケースが UTF-8 reade
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
 
-### Step 6 への申し送り (Codex Step 5 レビュー由来)
+### Step 6 への申し送り (Codex Step 5 / 補修 / 二次補修レビュー由来)
+
+#### timestamp と run_id の責務分離 (Codex 二次レビュー RR2 / MR1)
+
+Step 5 二次補修時点で `evidence._reserve_run_dir` は同秒衝突を「1 秒前進した synthetic timestamp」で回避している。これは P7 の「再現可能な証跡」(衝突しても 1 run = 1 dir) は満たすが、`timestamp_utc` / `timestamp_rfc3339` を実時刻ではなく **logical instant** にしてしまう副作用がある。
+
+Step 6 では次の改訂を行う:
+
+- `gate.schema.json` / `gate.runtime.schema.json` に `run_id` (例: `r0001` 〜 `r9999` または UUIDv7 短縮) を必須フィールドで追加
+- `paths.run_dir` のサフィックスを `<compact>-<run_id>` 形式に変更 (run_id は同秒内でユニークになるよう採番)
+- `timestamp_utc` / `timestamp_rfc3339` は常に実時刻 (秒精度)、衝突時も改変しない
+- `_reserve_run_dir` は timestamp を進めず、run_id だけインクリメントするロジックに置き換え
+- 60 秒衝突 fallback (microsecond suffix) も同時に廃止 (現状 curated schema を破る可能性がある)
+
+これにより:
+
+1. `timestamp_*` が wall-clock truth として正直になる (Codex RR2)
+2. fallback が curated `timestamp_utc` の regex を破るリスクが消える (Codex MR1)
+3. 同秒衝突は `run_id` だけで識別できるので並行プロセスに対しても堅牢
+
+ただし schema 改訂を伴うため、Step 5 の手書きリファレンス (`examples/generic-minimal/evidence-reference/REQ-APP-001/latest/gate.json`) と `tests/test_examples.py` Layer 3 も同時に更新が必要。Step 6 で `qgb validate-policy` と合わせて一括改訂する想定。
 
 #### preflight モジュールの再分割
 
@@ -862,3 +888,4 @@ run_preflight()                               # 上記を組み合わせる薄�
 | 0.5 | 2026-05-21 | Step 4 補修 (Codex レビュー反映): log_ref 実体追加 / REQ-design-notes 矛盾解消 / 整合性テスト 5 層化 / §7.4 timestamp 規約と §7.5 basis 規約を Step 5 申し送りとして明文化 |
 | 0.6 | 2026-05-21 | Phase 1 Step 5 (qgb run 縦串) を反映。§8 を新設し loader/preflight/runner/decision/evidence の 5 モジュール責務、preflight 検査、verification_type 実装、timestamp/basis 生成、2 系統出力、QGB_KEEP_RUNS を確定。§10 テスト件数 173 件に更新、§11 思想憲章マトリクスに P6 機械化を追加 |
 | 0.7 | 2026-05-22 | Step 5 補修 (Codex レビュー反映): R1 contract.target の root escape 防止 (loader.resolve_project_relative を共通化)、R2 同一秒 run_dir 衝突回避、R3 optional stage と ALLOW schema の矛盾解消 (全 adopted stage を判定対象に)、reference gate.json の `evidence-reference/` 退避、§12 に Step 6 申し送り (preflight 再分割 / severity / topological order / atomic write / byte offset / loader error / QGB_KEEP_RUNS warning) を追加 |
+| 0.8 | 2026-05-23 | Step 5 二次補修 (Codex 二次レビュー反映): RR1 run_dir 予約を atomic 化 (mkdir(exist_ok=False) ループ + 60 秒 fallback を廃止)、MR2 resolve_project_relative() で absolute path を明示拒否、MR3 req-meta.schema.json の `required` を `const: true` で固定 (Phase 1 では false を schema レベルでブロック)、symlink escape テスト追加。§12 Step 6 申し送りに「timestamp と run_id の責務分離」(RR2 + MR1) を追加。テスト 184 件 |

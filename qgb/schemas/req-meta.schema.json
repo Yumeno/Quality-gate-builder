@@ -42,7 +42,9 @@
           },
           "required": {
             "type": "boolean",
-            "default": true
+            "const": true,
+            "default": true,
+            "description": "Phase 1: must be true if present. Phase 1 treats every adopted stage as judgement material because the curated gate.schema.json requires every stages[] entry to be passed for ALLOW. Optional-stage semantics (advisory checks) is a Phase 2 design surface (waivers + knowledge); writing required=false here in Phase 1 would silently mislead the designer about which stages affect ALLOW."
           },
           "waived": {
             "type": "boolean",

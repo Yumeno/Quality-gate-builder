@@ -365,38 +365,44 @@ def test_run_keep_runs_prunes_old_runs(
     assert len(children) == 2, [c.name for c in children]
 
 
-# ---- R3: every adopted stage counts (no required=False ALLOW escape) -----
+# ---- R3 / MR3: required=false is rejected by schema in Phase 1 -----------
 
 
-def test_run_failing_optional_adopted_stage_still_denies(tmp_path: Path) -> None:
-    """A failing adopted stage marked required=False still produces DENY.
+def test_required_false_in_req_meta_is_not_ready(tmp_path: Path) -> None:
+    """MR3: writing required=false in REQ meta is preflight NOT_READY.
 
-    The curated gate.schema.json's ALLOW constraint requires every entry
-    of stages[] to have result=passed. Honouring an optional flag at the
-    decision layer would emit ALLOW with a failed stage and produce a
-    schema-invalid gate document. Phase 1: every adopted stage is
-    judgement material.
+    Phase 1's curated gate.schema.json requires every stages[] entry to
+    have result=passed for ALLOW. Accepting required=false at REQ meta
+    would silently mislead designers about which stages affect ALLOW,
+    so req-meta.schema.json constrains required to ``const: true`` in
+    Phase 1. The optional-stage semantics is a Phase 2 design surface.
     """
     project = _copy_generic_minimal(tmp_path)
 
-    # Mark S2 (substring_match) as required=False, then make it fail.
     meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
     meta = _read_json(meta_path)
     for stage in meta["stages"]:
         if stage["stage_id"] == "S2":
             stage["required"] = False
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    (project / "target" / "sample.txt").write_text("no greeting\n", encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
-    assert exit_code == EXIT_DENY
+    assert exit_code == EXIT_NOT_READY
 
-    gate = _gate(project)
-    assert gate["status"] == "DENY"
-    assert gate["failed_stage"] == "S2"
-    # Schema invariant: ALLOW would have been schema-invalid.
-    issues = schema_validate(gate, "gate")
-    assert not issues, [(i.path, i.message) for i in issues]
+
+def test_required_true_in_req_meta_is_accepted(tmp_path: Path) -> None:
+    """MR3: required=true (the default in Phase 1) still validates."""
+    project = _copy_generic_minimal(tmp_path)
+    meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
+    meta = _read_json(meta_path)
+    for stage in meta["stages"]:
+        stage["required"] = True
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
 
 
 # ---- R2: same-second runs must not collide -------------------------------
@@ -437,6 +443,84 @@ def test_run_same_second_does_not_overwrite_run_dir(
     assert children[0] == "2026-01-01T120000Z"
     assert children[1] == "2026-01-01T120001Z"
     assert children[2] == "2026-01-01T120002Z"
+
+
+def test_run_reserves_run_dir_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR1: run_dir reservation must survive a concurrent pre-claim.
+
+    The previous implementation used ``exists()`` then ``mkdir(exist_ok=True)``,
+    a non-atomic check-then-create pair. Two parallel processes that called
+    it inside the same wall-clock second would both observe a free slot and
+    both ``mkdir`` it — destroying P7's "each run leaves its own trace".
+
+    Simulating the race here: pre-create the timestamp's run_dir before
+    calling ``qgb run``. The reservation must walk forward instead of
+    happily writing into the pre-existing directory.
+    """
+    from datetime import datetime, timezone
+
+    from qgb.core import evidence as evidence_mod
+
+    project = _copy_generic_minimal(tmp_path)
+    runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    # Pre-claim the slot a parallel sibling would have taken.
+    (runs_dir / "2026-01-01T120000Z").mkdir()
+
+    fixed = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        evidence_mod,
+        "make_timestamps",
+        lambda now=None: evidence_mod._timestamps_from_instant(fixed),
+    )
+
+    assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
+
+    children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
+    # Pre-claimed slot stays empty (still on disk), real run lands in the next slot.
+    assert "2026-01-01T120000Z" in children
+    assert "2026-01-01T120001Z" in children
+    pre_claimed = runs_dir / "2026-01-01T120000Z"
+    assert not list(pre_claimed.iterdir()), (
+        f"pre-claimed run_dir was overwritten: {list(pre_claimed.iterdir())}"
+    )
+
+
+def test_run_reservation_failure_raises_when_all_slots_taken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RR1: if every collision slot is taken, reservation must raise, not silently overwrite.
+
+    The previous fallback used a microsecond-suffix compact string, which
+    would have produced a ``timestamp_utc`` that breaks gate.schema.json's
+    regex (^...([0-5][0-9]){2}Z$). Failing loudly is the correct outcome
+    here — silent schema-invalid gate.json is worse than a runtime error.
+    """
+    from datetime import datetime, timezone
+
+    from qgb.core import evidence as evidence_mod
+
+    project = _copy_generic_minimal(tmp_path)
+    runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    # Pre-claim every slot in the next 61 seconds (limit is 60 attempts).
+    base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    for offset in range(evidence_mod._RUN_DIR_COLLISION_LIMIT + 1):
+        instant = datetime.fromtimestamp(base.timestamp() + offset, tz=timezone.utc)
+        ts = evidence_mod._timestamps_from_instant(instant)
+        (runs_dir / ts.compact).mkdir()
+
+    monkeypatch.setattr(
+        evidence_mod,
+        "make_timestamps",
+        lambda now=None: evidence_mod._timestamps_from_instant(base),
+    )
+
+    # The CLI surfaces an internal error rather than a happy ALLOW.
+    with pytest.raises(evidence_mod.RunDirReservationError):
+        main(["run", "REQ-APP-001", "--path", str(project)])
 
 
 def test_run_same_second_gate_paths_stay_in_lockstep(
@@ -514,6 +598,114 @@ def test_run_substring_match_target_escape_is_rejected(tmp_path: Path) -> None:
     gate = _gate(project)
     s2_stage = next(s for s in gate["stages"] if s["id"] == "S2")
     assert s2_stage["result"] == "failed"
+
+
+def test_run_absolute_target_path_is_rejected(tmp_path: Path) -> None:
+    """MR2: absolute paths are rejected even when they land under the project.
+
+    contract.target must be project-rooted relative. Accepting an
+    absolute path that happens to fall under the project would silently
+    break when the project moved on disk (P9: input contracts must be
+    unambiguous).
+    """
+    project = _copy_generic_minimal(tmp_path)
+    # Sit the target somewhere *inside* the project to make sure the
+    # rejection is about the path *form*, not about the destination.
+    inside_abs = (project / "target" / "sample.txt").resolve()
+
+    s1_path = project / ".quality-system" / "contracts" / "REQ-APP-001" / "S1.json"
+    s1 = _read_json(s1_path)
+    s1["target"] = str(inside_abs)
+    s1_path.write_text(json.dumps(s1, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    gate = _gate(project)
+    s1_stage = next(s for s in gate["stages"] if s["id"] == "S1")
+    assert s1_stage["result"] == "failed"
+    log_text = (
+        project
+        / ".quality-system"
+        / "evidence"
+        / "REQ-APP-001"
+        / "latest"
+        / "stages"
+        / "S1.log"
+    ).read_text(encoding="utf-8")
+    assert "absolute path" in log_text
+
+
+def test_run_symlink_target_pointing_outside_is_rejected(tmp_path: Path) -> None:
+    """A symlink whose ``resolve()`` lands outside the project must not be read.
+
+    Resolving the path before the relative_to() check means that even if
+    the contract.target is a project-internal path, but it's actually a
+    symlink to ``/etc/passwd`` / ``..\\other``, the runner rejects it.
+    This complements the textual ``..`` rejection from R1.
+
+    On Windows, creating a symlink requires either Developer Mode or
+    elevated permissions; the test skips when ``os.symlink`` is denied
+    rather than failing.
+    """
+    import os
+
+    project = _copy_generic_minimal(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("hello\n", encoding="utf-8")
+
+    link_path = project / "target" / "linked.txt"
+    try:
+        os.symlink(outside, link_path)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation not permitted in this environment: {exc}")
+
+    s1_path = project / ".quality-system" / "contracts" / "REQ-APP-001" / "S1.json"
+    s1 = _read_json(s1_path)
+    s1["target"] = "target/linked.txt"
+    s1_path.write_text(json.dumps(s1, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    gate = _gate(project)
+    s1_stage = next(s for s in gate["stages"] if s["id"] == "S1")
+    assert s1_stage["result"] == "failed"
+    log_text = (
+        project
+        / ".quality-system"
+        / "evidence"
+        / "REQ-APP-001"
+        / "latest"
+        / "stages"
+        / "S1.log"
+    ).read_text(encoding="utf-8")
+    assert "outside the project root" in log_text
+
+
+def test_run_absolute_contract_ref_is_rejected_as_not_ready(tmp_path: Path) -> None:
+    """MR2: absolute contract_ref in REQ meta is preflight NOT_READY.
+
+    contract_ref is consumed by the loader during preflight, so an
+    absolute path here cannot even be opened safely — that's a NOT_READY
+    issue, not a stage failure.
+    """
+    project = _copy_generic_minimal(tmp_path)
+    s1_abs = (
+        project
+        / ".quality-system"
+        / "contracts"
+        / "REQ-APP-001"
+        / "S1.json"
+    ).resolve()
+
+    meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
+    meta = _read_json(meta_path)
+    meta["stages"][0]["contract_ref"] = str(s1_abs)
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    assert exit_code == EXIT_NOT_READY
 
 
 # ---- existing examples test must still pass ------------------------------

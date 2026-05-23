@@ -117,9 +117,26 @@ def resolve_project_relative(
     (NF-007: a contract must not be able to point ``qgb run`` at
     arbitrary filesystem locations).
 
-    Raises :class:`LoaderError` (kind=``wrong_type``) on either an
-    absolute path or a path that resolves outside the project root.
+    Rejected (LoaderError, kind=``wrong_type``):
+
+    * Absolute paths — the input contract is "project-rooted relative",
+      not "any local path"; accepting an absolute path even when it
+      happens to fall under the project would let users write specs
+      that silently break when the project moves on disk (P9: input
+      contracts must be unambiguous).
+    * Paths that resolve outside the project root — even via ``..`` or
+      a symlink whose ``resolve()`` lands elsewhere.
     """
+    if Path(ref).is_absolute():
+        raise LoaderError(
+            kind="wrong_type",
+            path=Path(ref),
+            message=(
+                f"{field_name} {ref!r} is an absolute path; "
+                f"must be project-rooted relative (e.g. "
+                f"'.quality-system/contracts/REQ-APP-001/S1.json')"
+            ),
+        )
     candidate = (project_root / ref).resolve()
     root_resolved = project_root.resolve()
     try:
