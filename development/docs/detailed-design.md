@@ -1,4 +1,4 @@
-# quality-gate-builder 詳細設計 v0.9 (Phase 1 Step 0〜5 + 補修・二次補修・三次補修確定範囲、Codex レビュー反映済み)
+# quality-gate-builder 詳細設計 v0.10 (Phase 1 Step 0〜5 + 補修 4 段確定範囲、Step 5 完結、Codex レビュー反映済み)
 
 ## 1. 本書の位置づけ
 
@@ -182,7 +182,7 @@ qgb run main         = READY 時の検査実行と ALLOW/DENY 出力
 | schema_version | `^[0-9]+\.[0-9]+$` | `1.0` |
 | timestamp_utc | `^[0-9]{4}-(0[1-9]\|1[0-2])-(0[1-9]\|[12][0-9]\|3[01])T(0[0-9]\|1[0-9]\|2[0-3])([0-5][0-9]){2}Z$` (wall-clock truth、秒精度) | `2026-05-21T012345Z` |
 | timestamp_rfc3339 | `format: date-time` (qgb 独自 RFC3339 shape checker) | `2026-05-21T01:23:45Z` |
-| run_id | `^r[0-9a-f]{4}$` (Step 5 三次補修で追加。同秒内の衝突を吸収する monotonic counter) | `r0001`, `r0042` |
+| run_id | `^r[0-9a-f]{4}$` かつ `not r0000` (Step 5 三次補修で導入、四次補修で `r0000` 予約。同秒内の衝突を吸収する monotonic counter、`r0001`〜`rffff` の 65,535 slots) | `r0001`, `r0042` |
 
 ### 4.3 gate.json の if/then 整合性制約
 
@@ -511,19 +511,21 @@ Issue #12 議論で確定:
 
 これにより設計例の腐敗を CI で検出できる。Layer 3 は Step 5 で qgb run を実装するときに守るべき契約でもある。
 
-### 7.4 gate.json 内 timestamp / run_id 規約 (Step 5 三次補修で確定)
+### 7.4 gate.json 内 timestamp / run_id 規約 (Step 5 三次補修で導入、四次補修で確定)
 
 | フィールド | 形式 | 用途 |
 |---|---|---|
 | `timestamp_utc` | `YYYY-MM-DDTHHMMSSZ` (`:` なし、Z 終端) | wall-clock truth (秒精度)、ファイル名互換 |
 | `timestamp_rfc3339` | `YYYY-MM-DDTHH:MM:SSZ` (`:` あり) | ツール互換、解析しやすい |
-| `run_id` | `r[0-9a-f]{4}` (`r0001`〜`rffff`) | 同秒内の衝突を吸収する monotonic counter |
+| `run_id` | `r[0-9a-f]{4}` かつ `not r0000` (`r0001`〜`rffff`) | 同秒内の衝突を吸収する monotonic counter |
+| `paths.run_dir` (末尾) | `<timestamp_utc>-<run_id>` (schema pattern で形状を強制) | 揮発側 run-dir のディレクトリ名 |
 
 時刻 2 系統は **同一時刻** を表現する。`run_id` は時刻とは独立で、同秒に複数 run が走ったときの差分だけを担う。
 
 - 単一の `datetime.now(timezone.utc)` 呼び出しから両形式を生成 (`evidence.make_timestamps`)
-- `paths.run_dir` のサフィックスは **`<timestamp_utc>-<run_id>`** 形式で必ず一致
-- `evidence._reserve_run_dir` が atomic に `mkdir(exist_ok=False)` で予約しながら `run_id` をインクリメントする (`r0001` → `r0002` → ...)。`timestamp_utc` は前進させない (Codex 二次レビュー RR2 への対応、Step 5 三次補修)
+- `paths.run_dir` の末尾は **`<timestamp_utc>-<run_id>`** 形式で、両 schema (`gate.schema.json` / `gate.runtime.schema.json`) の `paths.run_dir.pattern` が形状を強制する (Step 5 四次補修)
+- `evidence._reserve_run_dir` が atomic に `mkdir(exist_ok=False)` で予約しながら `run_id` をインクリメントする (`r0001` → `r0002` → ...)。`timestamp_utc` は前進させない (Codex 二次レビュー RR2 への対応、三次補修で実装)
+- `r0000` は **予約値** で実装は生成しない。`gate.schema.json` の `not: {const: "r0000"}` で外部生成 gate.json も含めて拒否 (Codex 三次レビュー RRR1 への対応、四次補修)
 - 65,535 個 (`rffff`) 全て埋まると `RunDirReservationError` で停止し、silent な schema 違反を防ぐ
 - `tests/test_examples.py::test_gate_timestamps_are_mutually_consistent` が CI で `<timestamp_utc>-<run_id>` 整合性を検証
 
@@ -632,7 +634,7 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 - `paths.run_dir` の最末尾サフィックスは必ず `compact` と一致 (`test_examples.py::test_gate_timestamps_are_mutually_consistent` で CI 検証)
 - テストでは `monkeypatch.setattr(evidence, "make_timestamps", ...)` で固定値注入が可能
 
-#### 同一秒衝突回避 (Step 5 補修 R2 → 二次補修 RR1 → 三次補修 RR2/MR1 で確定)
+#### 同一秒衝突回避 (Step 5 補修 R2 → 二次補修 RR1 → 三次補修 RR2/MR1 → 四次補修 RRR1/RRR2 で完結)
 
 `evidence._reserve_run_dir(runs_root, timestamps)` が `write_evidence` の前段で動く:
 
@@ -640,12 +642,15 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 - 衝突時は `timestamp_utc` を進めず、**`run_id` を `r0001` から順にインクリメント**して `<timestamp>-<run_id>` で再予約 (Codex 二次レビュー RR2: synthetic timestamp は実時刻を歪めるため廃止)
 - 戻り値は `(予約済 run_dir, 確定 run_id)` のタプル。`Timestamps` は実時刻のまま gate.json に焼かれる
 - `r0001`〜`rffff` (65,535 個) を使い切ったら `RunDirReservationError` を投げて停止 (旧版の microsecond サフィックス fallback は curated `timestamp_utc` regex を破るリスクがあったため廃止、Codex 二次レビュー MR1)
+- `r0000` は予約値で実装は生成しない。schema 側に `not: {const: "r0000"}` を加えて外部生成 gate も含めて拒否 (Codex 三次レビュー RRR1、四次補修)
+- `paths.run_dir` の末尾形状を schema の `pattern` で縛り、`<timestamp_utc>-<run_id>` 以外の任意 payload が curated/runtime のいずれにも紛れ込まないようにした (Codex 三次レビュー RRR2、四次補修)
 
 これにより:
 
 1. 同一プロセスの連続実行・並行プロセスの同秒実行いずれでも、各 run_dir が独立し過去 run の証跡が上書きされない (P7)
 2. `timestamp_utc` / `timestamp_rfc3339` は常に wall-clock truth であり、証跡の解釈可能性が保たれる (P7)
-3. `paths.run_dir` の末尾は必ず `<timestamp_utc>-<run_id>` 形式 (両 schema で正規表現と if/then の整合性を強制)
+3. `paths.run_dir` の末尾は schema レベルで `<timestamp_utc>-<run_id>` 形状を強制、外部生成 gate.json も同一規則に従う必要がある (P9: 入力契約の明確化)
+4. `r0000` は schema レベルで予約され、実装の生成範囲と schema の受理範囲が完全に一致 (Codex 二次レビュー追加チェック項目 #1 を完結)
 
 ### 8.8 basis[] の生成 (詳細)
 
@@ -771,8 +776,9 @@ select = ["E", "W", "F", "I", "B", "UP"]
 - Step 5 補修: 5 件追加 (R1 root escape × 2、R2 同秒衝突 × 2、R3 optional ALLOW × 1)
 - Step 5 二次補修: 5 件追加 / 1 件差し替え (RR1 atomic reservation × 2、MR2 absolute path × 2、symlink × 1、MR3 const:true × 2、optional ALLOW テストを required=false NOT_READY に置換)
 - Step 5 三次補修: 12 件追加 (run_id regex × 8、run_id required × 1、preflight helpers × 1、severity default × 1、M1 depends_on order × 1)、同秒衝突テスト 3 件を logical-timestamp → run_id 採番方式に書き換え
+- Step 5 四次補修: 8 件追加 (r0000 reject × 1 を curated parametric に追加 + runtime r0000 reject × 1、paths.run_dir suffix pattern parametric × 6)
 
-合計 **196 件、全成功、ruff 警告ゼロ**。
+合計 **204 件、全成功、ruff 警告ゼロ**。
 
 ### 10.2 fixture の責務分離
 
@@ -874,3 +880,4 @@ Step 5 三次補修で関数分割そのものは仮置きしたが、`validate-
 | 0.7 | 2026-05-22 | Step 5 補修 (Codex レビュー反映): R1 contract.target の root escape 防止 (loader.resolve_project_relative を共通化)、R2 同一秒 run_dir 衝突回避、R3 optional stage と ALLOW schema の矛盾解消 (全 adopted stage を判定対象に)、reference gate.json の `evidence-reference/` 退避、§12 に Step 6 申し送り (preflight 再分割 / severity / topological order / atomic write / byte offset / loader error / QGB_KEEP_RUNS warning) を追加 |
 | 0.8 | 2026-05-23 | Step 5 二次補修 (Codex 二次レビュー反映): RR1 run_dir 予約を atomic 化 (mkdir(exist_ok=False) ループ + 60 秒 fallback を廃止)、MR2 resolve_project_relative() で absolute path を明示拒否、MR3 req-meta.schema.json の `required` を `const: true` で固定 (Phase 1 では false を schema レベルでブロック)、symlink escape テスト追加。§12 Step 6 申し送りに「timestamp と run_id の責務分離」(RR2 + MR1) を追加。テスト 184 件 |
 | 0.9 | 2026-05-23 | Step 5 三次補修 (Step 6 スコープ整理 + Codex 三次レビュー前準備): C 部分 (gate schema に `run_id` 導入、`timestamp_*` を wall-clock truth に、`paths.run_dir` を `<compact>-<run_id>` に、REQ meta トポロジカル順検証 M1) を完全前倒し。B 部分 (preflight の 5 関数分割: validate_schema_sources / inspect_policy_graph / resolve_adopted_stages / check_runtime_support / run_preflight、`PreflightIssue.severity` フィールド追加で Phase 1 は全件 blocker) も型・構造のみ前倒し。§4.2 識別子規約、§7.4 timestamp/run_id 規約、§8.1 モジュール責務、§8.7 同秒衝突回避を新仕様に。§12 Step 6 申し送りから完了項目を削除し validate-policy 視点の残課題のみ残す。テスト 196 件 |
+| 0.10 | 2026-05-23 | Step 5 四次補修 (Codex 三次レビュー反映、Step 5 完結): RRR1 `r0000` を予約値として schema レベルで拒否 (`gate.schema.json` / `gate.runtime.schema.json` 両方に `not: {const: "r0000"}` 追加、`_RUN_ID_MIN = 1` と一致)、RRR2 `paths.run_dir` の末尾形状を schema `pattern` で `<timestamp_utc>-<run_id>` に固定 (任意外部 payload の防衛線を一段強化)。§4.2 run_id 説明、§7.4 規約表、§8.7 同秒衝突回避を四次補修反映に更新。テスト 204 件。**Step 5 系は本版で完結** (Codex 三次レビュー判定: 残課題 atomic write / byte offset / loader error / QGB_KEEP_RUNS warning は Step 6 と一緒に扱う) |

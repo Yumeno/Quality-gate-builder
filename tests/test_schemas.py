@@ -306,14 +306,62 @@ def test_gate_timestamp_utc_regex_rejects_bogus_values(bogus_value: str) -> None
         "R0001",           # uppercase prefix
         "r000Z",           # non-hex char
         "rgggg",           # non-hex char
+        "r0000",           # Step 5 四次補修: reserved; never generated.
     ],
 )
 def test_gate_run_id_regex_rejects_bogus_values(bogus_run_id: str) -> None:
-    """Step 5 三次補修: run_id must obey ^r[0-9a-f]{4}$."""
+    """Step 5 三次補修 + 四次補修: run_id must obey ^r[0-9a-f]{4}$ AND exclude r0000."""
     payload = _load_fixture("gate.allow.success.json")
     payload["run_id"] = bogus_run_id
     issues = validate(payload, "gate")
     assert issues, f"run_id must reject {bogus_run_id!r}"
+    assert _has_instance_path(issues, "/run_id")
+
+
+@pytest.mark.parametrize(
+    "bogus_run_dir",
+    [
+        # missing run_id suffix entirely
+        ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z",
+        # wrong separator between timestamp and run_id
+        ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z_r0001",
+        # run_id portion uses uppercase hex
+        ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z-rABCD",
+        # run_id is r0000 (reserved)
+        ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z-r0000",
+        # truncated timestamp
+        ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T01234Z-r0001",
+        # extra trailing segment after run_id
+        ".quality-system/artifacts/REQ-APP-001/runs/2026-05-18T012345Z-r0001/extra",
+    ],
+)
+def test_gate_paths_run_dir_suffix_pattern_rejects_bogus_values(
+    bogus_run_dir: str,
+) -> None:
+    """Step 5 四次補修: paths.run_dir must end with <timestamp_utc>-<run_id>.
+
+    Cross-field equality (run_dir suffix == timestamp_utc + '-' + run_id)
+    can't be enforced fully in JSON Schema, but the *shape* can be, and
+    that closes the door on externally produced gate.json claiming a
+    run_dir that the runner could never have written.
+    """
+    payload = _load_fixture("gate.allow.success.json")
+    payload["paths"]["run_dir"] = bogus_run_dir
+    issues = validate(payload, "gate")
+    assert issues, f"run_dir must reject {bogus_run_dir!r}"
+    assert _has_instance_path(issues, "/paths/run_dir")
+
+
+def test_gate_runtime_also_rejects_r0000() -> None:
+    """Step 5 四次補修: the runtime schema must align with the curated rule.
+
+    Volatile gate.json must reject r0000 too so an external tool cannot
+    seed a parallel run with a reserved counter.
+    """
+    payload = _load_fixture("gate-runtime.extra_field.success.json")
+    payload["run_id"] = "r0000"
+    issues = validate(payload, "gate-runtime")
+    assert issues, "gate-runtime schema must also reject r0000"
     assert _has_instance_path(issues, "/run_id")
 
 
