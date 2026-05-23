@@ -609,7 +609,7 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 - `contract.target` を `loader.resolve_project_relative()` で resolve
 - UTF-8 で読み込み
 - `contract.must_contain` (list[str]) の各要素について包含確認
-- 各 keyword の char offset をログに記録 (`hello: found at byte offset 0` 形式、※将来的に正確な byte offset 表記に修正予定)
+- 各 keyword の char offset をログに記録 (`'hello': found at char offset 0` 形式)。`str.index()` が返すのは UTF-16 code unit index (Python の str 内部表現上の位置) なので、Step 6a Commit 3 で "byte offset" 表記から "char offset" 表記に修正。本物の UTF-8 byte offset は Phase 2 以降の richer log の課題
 - UTF-8 decode 失敗時は failed
 - project_root 外への path escape は failed として記録 (Step 5 補修 R1)
 
@@ -854,21 +854,40 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 
 ただし Codex 計画レビューの指摘により、6a を「API 確定の巨大ステップ」にしすぎないことに注意する: `verify` (6b) が preflight API の最初の消費者になるため、6a 完了後に小修正が出るのを許容する。
 
-#### Step 6a — validate-policy / preflight 診断 API
+#### Step 6a — validate-policy / preflight 診断 API (本体 3 コミット完了、Codex レビュー待ち)
 
-**スコープ:**
+**スコープ (本体 3 コミット):**
 
-- `qgb validate-policy` 本体 (stage-design.md §11 の検査表すべて。error は exit 2、warning は exit 0 + stderr 通知)
-- preflight 診断 API:
+- `qgb validate-policy` 本体 (stage-design.md §11 の検査表すべて。blocker は exit 2、warning のみは exit 0 + stderr 通知、--json で機械可読出力)
+- preflight 診断 API (Commit 1):
   - 主 API は **severity filter 付き iteration** (`report.iter_issues(severity=...)`)
   - 便利メソッドとして `report.blocking_issues()` / `report.warnings()` / `report.has_blockers()`
   - `report.ready_for_run()` は run 用の意味を含むので runner 専用、validate-policy では `has_blockers()` を使う (P9)
-- `check_runtime_support` の severity 切り替え: `qgb run` では `manual_check_required` / `unsupported_verification_type` を blocker、`validate-policy` では warning
-- `inspect_policy_graph` に段階数推奨レンジ (3〜7) チェックを追加 (warning)
-- fixture 復活: `missing_required/` `dangling_ref/` `misplaced_contract/` を **validate-policy の仕様固定装置** として位置づけ、各 fixture が `kind` と `severity` を期待通り返すことを 6a の完了条件にする
-- Step 5 残課題のうち診断品質に直結するもの:
-  - `LoaderError.wrong_type` の preflight 側分類 (Codex L3)
-  - substring_match の byte offset / char offset 表記 (Codex L2)
+  - `ready()` は Step 5 までの後方互換として `ready_for_run()` に委譲
+- preflight 新規検査 (Commit 2):
+  - `duplicate_stage_id` (blocker, P9): policy.stages の id 重複
+  - `misplaced_contract` (blocker, P7): contract_ref が canonical layout (`.quality-system/contracts/<REQ>/<stage>.json`) に従わない
+  - `missing_contract_field` (blocker, P9): policy.stages[].required_contract_fields が contract.json に欠落
+  - `stage_count_out_of_range` (warning, P9): 段階数が推奨レンジ 3..7 を外れる (Phase 1 初の warning 実コード使用、generic-minimal の 2 段階で実例)
+  - `wrong_type` (blocker, Codex L3): LoaderError.wrong_type を missing_contract から分離
+- `check_runtime_support(adopted, report, *, mode: Literal["run", "validate_policy"])` (Commit 2):
+  - `mode="run"`: `manual_check_required` / `unsupported_verification_type` を blocker
+  - `mode="validate_policy"`: 同じ findings を warning ("policy 自体は malformed ではない、Phase 1 runtime が未対応というだけ")
+- `validate_policy_preflight(project_root, req_id=None)` 新規 entry point (Commit 2): `run_preflight` と同じ helper を別の short-circuit で組み立てる
+- fixture 復活 (Commit 3): `tests/fixtures/validate_policy/{missing_required, dangling_ref, misplaced_contract}/` を **validate-policy の仕様固定装置** として位置づけ。各 fixture が `kind` と `severity` を期待通り返すことを 6a の完了条件として CLI 経由でテスト
+- substring_match のログ表記 (Codex L2): "byte offset" → "char offset" に修正 (Python str は UTF-16 code unit、本物の UTF-8 byte offset は Phase 2 以降)
+
+**テスト件数:** 204 (Step 5 完結時) → 234 (Step 6a 本体完了)
+- Commit 1: +3 件 (preflight API テスト)
+- Commit 2: +16 件 (新 issue kind + severity 振り分け)、既存 2 件を warning 混在に追随
+- Commit 3: +11 件 (validate-policy CLI + fixture)
+
+**Step 6a 本体 3 コミット完了後の状態:**
+
+- ruff clean、全 234 テスト pass
+- Codex レビュー待ち
+- レビュー結果次第で補修 1〜2 段。Step 5 では補修 4 段だったが、Step 6a は構造的なリスク (race condition / atomic 系) が無いため少なめで収まる見込み
+- Step 6b 着手前に必ず Codex レビューを通す
 
 #### Step 6b — verify / run 周辺
 
@@ -924,3 +943,4 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 | 0.9 | 2026-05-23 | Step 5 三次補修 (Step 6 スコープ整理 + Codex 三次レビュー前準備): C 部分 (gate schema に `run_id` 導入、`timestamp_*` を wall-clock truth に、`paths.run_dir` を `<compact>-<run_id>` に、REQ meta トポロジカル順検証 M1) を完全前倒し。B 部分 (preflight の 5 関数分割: validate_schema_sources / inspect_policy_graph / resolve_adopted_stages / check_runtime_support / run_preflight、`PreflightIssue.severity` フィールド追加で Phase 1 は全件 blocker) も型・構造のみ前倒し。§4.2 識別子規約、§7.4 timestamp/run_id 規約、§8.1 モジュール責務、§8.7 同秒衝突回避を新仕様に。§12 Step 6 申し送りから完了項目を削除し validate-policy 視点の残課題のみ残す。テスト 196 件 |
 | 0.10 | 2026-05-23 | Step 5 四次補修 (Codex 三次レビュー反映、Step 5 完結): RRR1 `r0000` を予約値として schema レベルで拒否 (`gate.schema.json` / `gate.runtime.schema.json` 両方に `not: {const: "r0000"}` 追加、`_RUN_ID_MIN = 1` と一致)、RRR2 `paths.run_dir` の末尾形状を schema `pattern` で `<timestamp_utc>-<run_id>` に固定 (任意外部 payload の防衛線を一段強化)。§4.2 run_id 説明、§7.4 規約表、§8.7 同秒衝突回避を四次補修反映に更新。テスト 204 件。**Step 5 系は本版で完結** (Codex 三次レビュー判定: 残課題 atomic write / byte offset / loader error / QGB_KEEP_RUNS warning は Step 6 と一緒に扱う) |
 | 0.11 | 2026-05-23 | Step 6 計画確定 (Codex 計画レビュー反映): §12 を 4 サブステップ (6a 検査強化 / 6b 実行系小修正 / 6c 検出系 / 6d 生成系) に再編。preflight 診断 API を `iter_issues(severity)` を主 API として確定、`ready_for_run()` を runner 専用に限定し validate-policy では `has_blockers()` を使う方針を明文化 (P9)。Step 5 残課題を性質別に分散 (loader_error / byte offset → 6a、atomic write / QGB_KEEP_RUNS → 6b)。fixture 復活を「validate-policy の仕様固定装置」として 6a 完了条件化。`qgb verify` を 6b の最初に実装 (preflight API の最初の消費者として 6a の過不足を早期に見る)。adapters/ は 6c で `DetectedProjectProfile` データ境界を固定し validate-policy 経路と混ざらないようにする (P9)。6d 規模見積もりを 0.7 → 0.9〜1.2 に上方修正 (生成系の出力仕様整合・idempotency で補修が出やすいため) |
+| 0.12 | 2026-05-23 | Step 6a 本体 3 コミット完了 (Codex レビュー待ち): Commit 1 で `PreflightReport` 診断 API (`iter_issues(severity)` / `blocking_issues` / `warnings` / `has_blockers` / `ready_for_run`) を整理。Commit 2 で 5 つの新 issue kind (`duplicate_stage_id` / `misplaced_contract` / `missing_contract_field` / `stage_count_out_of_range` warning / `wrong_type`) と `check_runtime_support(mode="run"|"validate_policy")` を追加、`validate_policy_preflight()` 新規 entry point。Codex L2 (substring_match の "byte offset" → "char offset" 表記) と L3 (LoaderError.wrong_type の preflight 側分類) を同時に解消。Commit 3 で `qgb validate-policy [REQ-ID]` CLI を実装 (exit code: blocker→2 / warning のみ→0 stderr / clean→0 stdout、`--json` 対応)。tests/fixtures/validate_policy/{missing_required, dangling_ref, misplaced_contract}/ を「validate-policy の仕様固定装置」として作成。テスト 204 → 234 件 (+30)、ruff clean |

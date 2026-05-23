@@ -341,9 +341,9 @@ def inspect_policy_graph(
                 where="policy.stages",
                 message=(
                     f"policy declares {stage_count} stage(s); recommended "
-                    f"range is 3..7 (stage-design.md §9). Outside this band "
-                    f"is often a single-responsibility smell, not a hard "
-                    f"error"
+                    f"range is 3..7 (stage-design.md section 9). Outside "
+                    f"this band is often a single-responsibility smell, "
+                    f"not a hard error"
                 ),
                 severity="warning",
             )
@@ -449,7 +449,8 @@ def resolve_adopted_stages(
                     where=f"{meta_path}::stage_id={stage_id}",
                     message=(
                         f"contract_ref {contract_ref!r} is not the canonical "
-                        f"layout {expected_ref!r} (stage-design.md §11)"
+                        f"layout {expected_ref!r} "
+                        f"(stage-design.md section 11)"
                     ),
                 )
             )

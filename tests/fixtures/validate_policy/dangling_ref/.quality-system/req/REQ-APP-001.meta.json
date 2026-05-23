@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-APP-001",
+  "title": "存在しない stage_id を参照する REQ",
+  "stages": [
+    {
+      "stage_id": "S999",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S999.json",
+      "required": true
+    }
+  ]
+}

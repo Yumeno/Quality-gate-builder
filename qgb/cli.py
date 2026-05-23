@@ -13,7 +13,11 @@ from qgb.core import evidence as evidence_mod
 from qgb.core.decision import decide
 from qgb.core.evidence import write_evidence
 from qgb.core.init import InitReport, run_init
-from qgb.core.preflight import PreflightReport, run_preflight
+from qgb.core.preflight import (
+    PreflightReport,
+    run_preflight,
+    validate_policy_preflight,
+)
 from qgb.core.runner import run_stages
 from qgb.core.validate import ValidateReport, run_validate
 
@@ -349,6 +353,107 @@ def _handle_run(args: argparse.Namespace) -> int:
     return EXIT_OK if decision.status == "ALLOW" else EXIT_DENY
 
 
+# ---- validate-policy -----------------------------------------------------
+
+
+def _print_validate_policy_text(
+    report: PreflightReport, req_id: str | None, stream
+) -> None:
+    blockers = report.blocking_issues()
+    warnings_ = report.warnings()
+
+    scope = req_id or "<project>"
+    if not blockers and not warnings_:
+        print(
+            f"OK: design check passed for {scope}; no blockers or warnings.",
+            file=stream,
+        )
+        return
+
+    if blockers:
+        print(
+            f"NOT_READY: design check found {len(blockers)} blocker(s) "
+            f"for {scope}.",
+            file=stream,
+        )
+        for issue in blockers:
+            print(f"  - [{issue.kind}] {issue.where}", file=stream)
+            print(f"      {issue.message}", file=stream)
+
+    if warnings_:
+        if blockers:
+            print("", file=stream)
+        print(
+            f"Warnings ({len(warnings_)}) - design quality advisories "
+            f"(qgb run will still proceed):",
+            file=stream,
+        )
+        for issue in warnings_:
+            print(f"  - [{issue.kind}] {issue.where}", file=stream)
+            print(f"      {issue.message}", file=stream)
+
+
+def _validate_policy_to_json(
+    report: PreflightReport, req_id: str | None
+) -> dict[str, object]:
+    return {
+        "ok": not report.has_blockers(),
+        "req_id": req_id,
+        "status": "NOT_READY" if report.has_blockers() else "OK",
+        "blockers": [
+            {"kind": i.kind, "where": i.where, "message": i.message}
+            for i in report.blocking_issues()
+        ],
+        "warnings": [
+            {"kind": i.kind, "where": i.where, "message": i.message}
+            for i in report.warnings()
+        ],
+        "summary": {
+            "blockers": len(report.blocking_issues()),
+            "warnings": len(report.warnings()),
+        },
+    }
+
+
+def _handle_validate_policy(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(
+            f"qgb validate-policy: path does not exist: {root}", file=sys.stderr
+        )
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb validate-policy: --path must point at a project directory, "
+            f"not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    req_id: str | None = args.req_id
+    report = validate_policy_preflight(root, req_id)
+
+    if args.json:
+        json.dump(
+            _validate_policy_to_json(report, req_id),
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        # Blockers go to stderr (the user must fix them); warnings-only
+        # output goes to stderr too so CI scripts that only consume
+        # stdout do not silently accept advisories. OK output goes to
+        # stdout (the conventional "no news is good news" channel).
+        if report.has_blockers() or report.warnings():
+            _print_validate_policy_text(report, req_id, sys.stderr)
+        else:
+            _print_validate_policy_text(report, req_id, sys.stdout)
+
+    return EXIT_NOT_READY if report.has_blockers() else EXIT_OK
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -379,7 +484,6 @@ def build_parser() -> QgbArgumentParser:
         ("detect", "(not yet implemented) detect target language and framework"),
         ("design-stages", "(not yet implemented) propose verification stages for the target"),
         ("scaffold", "(not yet implemented) scaffold a new REQ"),
-        ("validate-policy", "(not yet implemented) validate stage design quality"),
         ("verify", "(not yet implemented) run lightweight checks (volatile artifacts only)"),
     )
     for name, help_text in stub_commands:
@@ -492,6 +596,48 @@ def build_parser() -> QgbArgumentParser:
         help="Emit a machine-readable JSON report to stdout instead of text",
     )
     run_p.set_defaults(handler=_handle_run)
+
+    # validate-policy: real handler (Step 6a Commit 3).
+    vp_p = subparsers.add_parser(
+        "validate-policy",
+        help="check stage design quality (policy + REQ + contract integrity)",
+        description=(
+            "Validate stage design quality (stage-design.md §11). Checks "
+            "policy.json structure (id uniqueness, depends_on DAG, "
+            "recommended stage count), and when a REQ id is given, the "
+            "REQ meta + contracts integrity "
+            "(stage_id resolution, canonical contract layout, "
+            "required_contract_fields coverage). "
+            "Distinct from 'qgb validate' (per-file schema) and from "
+            "'qgb run' preflight (which treats some advisories as blockers): "
+            "manual_check / unsupported verification_type surface as "
+            "warnings here, not blockers. "
+            "Returns 0 on success (warnings allowed), 2 (NOT_READY) on any "
+            "blocker, 64 on usage errors."
+        ),
+    )
+    vp_p.add_argument(
+        "req_id",
+        metavar="REQ-ID",
+        nargs="?",
+        default=None,
+        help=(
+            "Optional REQ id (e.g. REQ-APP-001). Without it, only the "
+            "project-wide policy graph is checked. With it, the REQ meta "
+            "and its contracts are also resolved."
+        ),
+    )
+    vp_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root containing .quality-system/ (default: current directory)",
+    )
+    vp_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    vp_p.set_defaults(handler=_handle_validate_policy)
 
     return parser
 

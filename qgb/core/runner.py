@@ -264,8 +264,14 @@ def _run_substring_match(project_root: Path, stage: AdoptedStage) -> StageResult
             missing.append(repr(keyword))
             continue
         if keyword in text:
+            # Step 6a Commit 3 (Codex L2): the value is a UTF-16 code unit
+            # offset in Python (str is a sequence of code points/units, not
+            # bytes), so labelling it "byte offset" was misleading. Use
+            # "char offset" to match what we actually compute. A real
+            # UTF-8 byte offset would require encoding the prefix; that
+            # is a Phase 2+ enrichment, not a Step 6 task.
             offset = text.index(keyword)
-            log_lines.append(f"- {keyword!r}: found at byte offset {offset}")
+            log_lines.append(f"- {keyword!r}: found at char offset {offset}")
         else:
             log_lines.append(f"- {keyword!r}: not found")
             missing.append(keyword)
