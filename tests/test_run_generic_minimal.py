@@ -352,6 +352,93 @@ def test_preflight_issue_defaults_to_blocker_severity(tmp_path: Path) -> None:
         assert issue.severity == "blocker", (issue.kind, issue.severity)
 
 
+def test_preflight_report_diagnostic_api(tmp_path: Path) -> None:
+    """Step 6a Commit 1: PreflightReport の診断 API は severity を区別する。
+
+    iter_issues() は severity フィルタを受ける、blocking_issues() と
+    warnings() は同等の絞り込みを返す、has_blockers() は blocker の有無、
+    ready_for_run() は blocker が無いことを表す。これらは validate-policy
+    実装の足場であり、Step 6a Commit 2 で初の warning が乗ったときに
+    挙動が分岐する地点になる。
+    """
+    from qgb.core.preflight import PreflightIssue, PreflightReport
+
+    report = PreflightReport()
+    assert list(report.iter_issues()) == []
+    assert report.blocking_issues() == []
+    assert report.warnings() == []
+    assert not report.has_blockers()
+    assert report.ready_for_run()
+
+    blocker = PreflightIssue(
+        kind="missing_contract",
+        where="x",
+        message="m",
+        severity="blocker",
+    )
+    warning = PreflightIssue(
+        kind="missing_contract",
+        where="y",
+        message="m",
+        severity="warning",
+    )
+    report.issues.extend([blocker, warning])
+
+    assert list(report.iter_issues()) == [blocker, warning]
+    assert list(report.iter_issues(severity="blocker")) == [blocker]
+    assert list(report.iter_issues(severity="warning")) == [warning]
+    assert report.blocking_issues() == [blocker]
+    assert report.warnings() == [warning]
+    assert report.has_blockers()
+    assert not report.ready_for_run()
+
+
+def test_preflight_report_warnings_only_is_ready_for_run(tmp_path: Path) -> None:
+    """warning だけのレポートは ready_for_run() == True。
+
+    Step 6a Commit 1 の段階では Phase 1 のどの検査も warning を発しないが、
+    Commit 2 で stage_count_out_of_range が warning として乗る。その時点で
+    qgb run は warning を無視して続行する必要があるため、API レベルで
+    先にロックする。
+    """
+    from qgb.core.preflight import PreflightIssue, PreflightReport
+
+    report = PreflightReport()
+    report.issues.append(
+        PreflightIssue(
+            kind="missing_contract",
+            where="x",
+            message="advisory",
+            severity="warning",
+        )
+    )
+    assert report.warnings()
+    assert not report.has_blockers()
+    assert report.ready_for_run()
+
+
+def test_preflight_legacy_ready_matches_ready_for_run() -> None:
+    """ready() は Step 5 までの後方互換。新規呼び出しは ready_for_run() を使う。
+
+    cli.py / runner.py が新 API に移行済みであることを担保しつつ、Step 5
+    で書かれた外部スクリプトが落ちないことも併せて確認する。
+    """
+    from qgb.core.preflight import PreflightIssue, PreflightReport
+
+    report = PreflightReport()
+    assert report.ready() is report.ready_for_run() is True
+
+    report.issues.append(
+        PreflightIssue(
+            kind="missing_contract",
+            where="x",
+            message="m",
+            severity="blocker",
+        )
+    )
+    assert report.ready() is report.ready_for_run() is False
+
+
 def test_run_returns_not_ready_when_req_meta_order_violates_depends_on(
     tmp_path: Path,
 ) -> None:

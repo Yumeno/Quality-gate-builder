@@ -309,7 +309,7 @@ def _handle_run(args: argparse.Namespace) -> int:
     phase: str = args.phase
 
     preflight = run_preflight(root, req_id)
-    if not preflight.ready():
+    if not preflight.ready_for_run():
         if args.json:
             json.dump(
                 _preflight_to_json(preflight, req_id),

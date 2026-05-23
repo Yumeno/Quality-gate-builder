@@ -30,7 +30,7 @@ data differently.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -89,6 +89,17 @@ class PreflightReport:
     ``adopted_stages`` is populated only when the report is ready; it lists
     the ``(policy_stage, req_meta_stage, contract)`` triples the runner will
     execute, in the order REQ meta declares them.
+
+    Step 6a (validate-policy への共通土台) で診断 API を整理:
+
+    * 主 API は :meth:`iter_issues` (severity フィルタ可)。
+    * :meth:`blocking_issues` / :meth:`warnings` / :meth:`has_blockers` は
+      便利メソッド。
+    * :meth:`ready_for_run` は ``qgb run`` 専用の意味 ("blocker が一つも
+      なければ run を続行できる") を持つ。``qgb validate-policy`` は
+      blocker と warning を区別して報告するので
+      :meth:`has_blockers` を使う (P9: 失敗モードを混ぜない)。
+    * :meth:`ready` は Step 5 までの後方互換。新規コードでは使わない。
     """
 
     issues: list[PreflightIssue] = field(default_factory=list)
@@ -96,8 +107,61 @@ class PreflightReport:
     policy: dict[str, Any] | None = None
     req_meta: dict[str, Any] | None = None
 
+    def iter_issues(
+        self, severity: PreflightSeverity | None = None
+    ) -> Iterator[PreflightIssue]:
+        """Iterate over issues, optionally filtered by severity.
+
+        ``severity=None`` yields every issue. Pass ``"blocker"`` or
+        ``"warning"`` to filter. Iteration preserves the order issues
+        were appended, which matters because :func:`run_preflight`
+        records them in the order it discovers them (schema first, then
+        graph, then resolution, then runtime support).
+        """
+        if severity is None:
+            yield from self.issues
+            return
+        for issue in self.issues:
+            if issue.severity == severity:
+                yield issue
+
+    def blocking_issues(self) -> list[PreflightIssue]:
+        """Return the subset of issues with ``severity="blocker"``."""
+        return list(self.iter_issues("blocker"))
+
+    def warnings(self) -> list[PreflightIssue]:
+        """Return the subset of issues with ``severity="warning"``."""
+        return list(self.iter_issues("warning"))
+
+    def has_blockers(self) -> bool:
+        """True iff at least one blocker is present.
+
+        Used by ``qgb validate-policy``: a report with only warnings is
+        still considered a successful design check (exit 0) while
+        blockers must surface as exit 2 (NOT_READY).
+        """
+        return any(i.severity == "blocker" for i in self.issues)
+
+    def ready_for_run(self) -> bool:
+        """True iff ``qgb run`` may proceed.
+
+        Phase 1 semantics: ``run`` treats every blocker as fatal and
+        ignores warnings (there are no warnings yet, but the contract
+        survives Step 6b's introduction of them). This is the *only*
+        place where the runner consults the report: callers that map
+        the result to NOT_READY/exit 2 should call this method.
+        """
+        return not self.has_blockers()
+
     def ready(self) -> bool:
-        return not self.issues
+        """Deprecated alias kept for Step 5 callers.
+
+        Equivalent to :meth:`ready_for_run` while Phase 1 has no
+        warnings. New code should call :meth:`ready_for_run` (run path)
+        or :meth:`has_blockers` (validate-policy path) directly so the
+        intent is explicit at the call site.
+        """
+        return self.ready_for_run()
 
 
 @dataclass(frozen=True)
