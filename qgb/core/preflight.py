@@ -375,18 +375,45 @@ def resolve_adopted_stages(
 
     Records ``unknown_stage_id`` / ``missing_contract`` /
     ``misplaced_contract`` / ``missing_contract_field`` /
-    ``verification_type_mismatch`` issues per entry and skips bad ones.
-    Also checks REQ meta order against ``depends_on`` (Step 5 三次補修
-    M1) and emits ``depends_on_order_violation`` when a stage appears
-    before one of its adopted predecessors.
+    ``wrong_type`` / ``verification_type_mismatch`` issues per entry and
+    skips bad ones. Also checks REQ meta order against ``depends_on``
+    (Step 5 三次補修 M1) and emits ``depends_on_order_violation`` when a
+    stage appears before one of its adopted predecessors.
 
-    Step 6a Commit 2:
+    Step 6a Commit 2 added:
 
     * canonical layout check (``.quality-system/contracts/<REQ>/<stage>.json``)
     * ``required_contract_fields`` (policy) ⊆ contract.json fields
-    * ``LoaderError.wrong_type`` (e.g. absolute path, root escape) is now
-      reported as ``wrong_type`` rather than collapsed into ``missing_contract``
-      so callers can distinguish a missing artefact from a malformed reference
+    * ``LoaderError.wrong_type`` (e.g. root escape via symlink) is now
+      reported as ``wrong_type`` rather than collapsed into
+      ``missing_contract`` so callers can distinguish a missing artefact
+      from a malformed reference
+
+    Step 6a 補修 1 次 (Codex M1) — diagnostic priority is *spec*:
+
+    The canonical-layout check runs **before** any filesystem resolution.
+    This means any ``contract_ref`` that fails the string match — including
+    absolute paths, ``..``-relative paths, ``.yaml`` files, deeper
+    subdirectory placements — is recorded as ``misplaced_contract`` and
+    NEVER reaches ``load_contract``. As a result:
+
+    * For the REQ-meta ``contract_ref`` path, ``wrong_type`` is only
+      reachable when the ``contract_ref`` string is canonical-looking
+      AND a filesystem-level escape happens at resolve time (e.g.
+      ``S1.json`` is a symlink pointing outside the project root).
+      A plain absolute path string is caught by ``misplaced_contract``
+      first.
+    * ``wrong_type`` remains the kind for policy/REQ meta loader errors
+      where the JSON itself is not an object (see
+      ``_loader_kind_for_policy`` / ``_loader_kind_for_meta``).
+
+    The "cheaper diagnostic first" ordering is deliberate: a textual
+    layout violation is unambiguous and stable (no I/O needed) while a
+    resolution-time escape requires the filesystem to be in a specific
+    state. Both indicate a contract that ``qgb run`` will refuse;
+    reporting the more easily-fixed one first reduces the loop the
+    designer has to walk through (P9: each error should point at the
+    smallest change that resolves it).
     """
     meta_path = req_meta_path(project_root, req_id)
     adopted_raw = req_meta.get("stages", []) or []
@@ -679,6 +706,16 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
         return report
 
     policy_stages = inspect_policy_graph(policy, report)
+    # Step 6a 補修 1 次 (Codex M2): if the policy graph itself is
+    # corrupt (duplicate ids, dependency cycles), adopted resolution
+    # would silently pick the first stage definition for any duplicated
+    # id and walk a graph that may not be a DAG. Both produce ambiguous
+    # secondary diagnostics that obscure the primary fix. Stop here so
+    # the report contains only first-order findings. The runner is
+    # NOT_READY regardless because graph errors are blockers.
+    if _has_graph_integrity_blockers(report):
+        return report
+
     adopted = resolve_adopted_stages(
         project_root, req_id, policy_stages, req_meta, report
     )
@@ -757,6 +794,12 @@ def validate_policy_preflight(
         # Project-wide check: policy graph quality only.
         return report
 
+    # Same short-circuit as run_preflight (Codex M2): graph integrity
+    # blockers make REQ-level resolution ambiguous; stop before adopted
+    # resolution so the report keeps first-order diagnostics.
+    if _has_graph_integrity_blockers(report):
+        return report
+
     meta_path = req_meta_path(project_root, req_id)
     try:
         req_meta = load_req_meta(project_root, req_id)
@@ -795,6 +838,27 @@ def _loader_kind_for_meta(loader_kind: str) -> PreflightIssueKind:
     if loader_kind == "wrong_type":
         return "wrong_type"
     return "missing_required_file"
+
+
+# Step 6a 補修 1 次 (Codex M2): graph-integrity blockers that make
+# downstream REQ-level resolution unsafe to attempt. duplicate_stage_id
+# means the policy_stages map silently picked the first occurrence
+# (any required_contract_fields / contract_ref check would be against
+# whichever stage definition won the tie); depends_on_cycle means the
+# graph is not a DAG so depends_on_order_violation diagnostics become
+# ill-defined. depends_on_unknown is intentionally NOT in this set —
+# adopted resolution is still meaningful when only some references are
+# dangling, so we let the per-stage diagnostics surface alongside.
+_GRAPH_INTEGRITY_BLOCKER_KINDS: frozenset[PreflightIssueKind] = frozenset(
+    {"duplicate_stage_id", "depends_on_cycle"}
+)
+
+
+def _has_graph_integrity_blockers(report: PreflightReport) -> bool:
+    return any(
+        i.kind in _GRAPH_INTEGRITY_BLOCKER_KINDS
+        for i in report.iter_issues("blocker")
+    )
 
 
 # ---------------------------------------------------------------------------

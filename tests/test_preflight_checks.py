@@ -71,6 +71,87 @@ def test_duplicate_stage_id_is_blocker(tmp_path: Path) -> None:
     assert "S1" in dup[0].message
 
 
+# ---- M2 short-circuit: graph integrity blockers stop adopted resolution
+
+
+def test_duplicate_stage_id_short_circuits_adopted_resolution(
+    tmp_path: Path,
+) -> None:
+    """Step 6a 補修 1 次 (Codex M2): duplicate_stage_id stops downstream resolution.
+
+    With duplicate ids the policy_stages map silently picks the first
+    occurrence; any per-stage diagnostic against the duplicated id would
+    be ambiguous about which definition was checked. The orchestrator
+    short-circuits so the report contains the duplicate blocker but no
+    ambiguous secondary findings (e.g. missing_contract_field tied to
+    one of the two definitions).
+    """
+    project = _copy_generic_minimal(tmp_path)
+    policy_path = project / ".quality-system" / "policy.json"
+    policy = _read_json(policy_path)
+    policy["stages"].append(dict(policy["stages"][0]))
+    _write_json(policy_path, policy)
+
+    report = run_preflight(project, "REQ-APP-001")
+    kinds = {i.kind for i in report.blocking_issues()}
+    assert "duplicate_stage_id" in kinds
+    # No adopted-resolution diagnostics: the resolver was never called.
+    assert "missing_contract" not in kinds
+    assert "misplaced_contract" not in kinds
+    assert "missing_contract_field" not in kinds
+    assert "verification_type_mismatch" not in kinds
+    assert "depends_on_order_violation" not in kinds
+    # No adopted stages were extracted either.
+    assert report.adopted_stages == []
+
+
+def test_depends_on_cycle_short_circuits_adopted_resolution(
+    tmp_path: Path,
+) -> None:
+    """Step 6a 補修 1 次 (Codex M2): cycle in depends_on stops downstream resolution.
+
+    With a cycle the graph is not a DAG; any depends_on_order_violation
+    diagnostic becomes ill-defined. Stop after inspect_policy_graph so
+    the report keeps only the cycle blocker.
+    """
+    project = _copy_generic_minimal(tmp_path)
+    policy_path = project / ".quality-system" / "policy.json"
+    policy = _read_json(policy_path)
+    # Add a cycle: S1 -> S2 -> S1.
+    policy["stages"][0]["depends_on"] = ["S2"]
+    _write_json(policy_path, policy)
+
+    report = run_preflight(project, "REQ-APP-001")
+    kinds = {i.kind for i in report.blocking_issues()}
+    assert "depends_on_cycle" in kinds
+    assert "depends_on_order_violation" not in kinds
+    assert report.adopted_stages == []
+
+
+def test_dangling_depends_on_does_not_short_circuit(tmp_path: Path) -> None:
+    """Counter-spec to M2: dangling depends_on still permits resolution.
+
+    depends_on_unknown is NOT in the graph-integrity blocker set because
+    adopted resolution is still meaningful when only some references are
+    dangling — the per-stage diagnostics can complement, not contradict,
+    the graph-level finding.
+    """
+    project = _copy_generic_minimal(tmp_path)
+    policy_path = project / ".quality-system" / "policy.json"
+    policy = _read_json(policy_path)
+    policy["stages"][1]["depends_on"] = ["S1", "S999"]  # S999 does not exist
+    _write_json(policy_path, policy)
+
+    report = run_preflight(project, "REQ-APP-001")
+    kinds = {i.kind for i in report.blocking_issues()}
+    assert "depends_on_unknown" in kinds
+    # adopted resolution still ran: the REQ has valid contracts so
+    # adopted_stages should still be populated.
+    assert report.adopted_stages, (
+        "dangling depends_on must NOT short-circuit adopted resolution"
+    )
+
+
 # ---- stage_count_out_of_range -------------------------------------------
 
 
@@ -202,11 +283,27 @@ def test_required_contract_fields_satisfied_emits_no_field_issue(
 # ---- wrong_type (L3 classification) -------------------------------------
 
 
-def test_absolute_contract_ref_is_wrong_type(tmp_path: Path) -> None:
-    """Absolute contract_ref (LoaderError.wrong_type) reports as wrong_type.
+def test_absolute_contract_ref_is_reported_as_misplaced_contract(
+    tmp_path: Path,
+) -> None:
+    """Absolute contract_ref is rejected as misplaced_contract, not wrong_type.
 
-    Before Step 6a Commit 2, LoaderError.wrong_type was collapsed into
-    missing_contract; this test pins the distinction.
+    Step 6a 補修 1 次 (Codex M1) spec lock: the canonical-layout check runs
+    BEFORE filesystem resolution, so any contract_ref string that does not
+    match the canonical pattern (.quality-system/contracts/<REQ>/<stage>.json)
+    is caught as misplaced_contract first and never reaches
+    load_contract / resolve_project_relative. This includes:
+
+    * absolute paths (this test)
+    * ``..``-relative paths
+    * different extensions (``.yaml``)
+    * different subdirectory placements
+
+    wrong_type from contract_ref remains reachable only when the
+    contract_ref string is itself canonical AND the filesystem entry
+    behind it escapes the project root (e.g. canonical S1.json is a
+    symlink pointing outside). See
+    ``test_root_escape_via_symlink_is_wrong_type``.
     """
     project = _copy_generic_minimal(tmp_path)
     meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
@@ -215,26 +312,42 @@ def test_absolute_contract_ref_is_wrong_type(tmp_path: Path) -> None:
     _write_json(meta_path, meta)
 
     report = run_preflight(project, "REQ-APP-001")
-    # Absolute path fails misplaced_contract first (different from the
-    # canonical relative shape); the wrong_type test below uses a
-    # canonical-looking but root-escape-via-symlink case.
-    assert any(
-        i.kind == "misplaced_contract" for i in report.blocking_issues()
+    blocker_kinds = {i.kind for i in report.blocking_issues()}
+    assert "misplaced_contract" in blocker_kinds, blocker_kinds
+    # Spec lock: wrong_type must NOT be raised for this case. The
+    # canonical-layout check short-circuits before loader sees it.
+    assert "wrong_type" not in blocker_kinds, (
+        "absolute path must surface as misplaced_contract (cheaper "
+        "diagnostic), not wrong_type"
     )
 
 
-def test_root_escape_via_dotdot_is_wrong_type(tmp_path: Path) -> None:
-    """contract_ref that resolves outside the project root → wrong_type.
+def test_dotdot_contract_ref_is_reported_as_misplaced_contract(
+    tmp_path: Path,
+) -> None:
+    """Same spec as absolute path: ``..``-traversal is misplaced_contract."""
+    project = _copy_generic_minimal(tmp_path)
+    meta_path = project / ".quality-system" / "req" / "REQ-APP-001.meta.json"
+    meta = _read_json(meta_path)
+    meta["stages"][0]["contract_ref"] = "../escape/S1.json"
+    _write_json(meta_path, meta)
 
-    Step 6a Commit 2: the L3 fix maps LoaderError.wrong_type onto the new
-    ``wrong_type`` issue kind (was previously collapsed into
-    ``missing_contract``). We drive resolve_adopted_stages directly here
-    to bypass the canonical-layout pre-check, because misplaced_contract
-    short-circuits before load_contract is even called — that is by
-    design (cheaper diagnostic first), but means the L3 path needs a
-    test that fakes a canonical-shaped contract_ref while the resolver
-    still escapes the root. We do that by symlinking the policy/req
-    files such that load_contract's resolve() actually escapes.
+    report = run_preflight(project, "REQ-APP-001")
+    blocker_kinds = {i.kind for i in report.blocking_issues()}
+    assert "misplaced_contract" in blocker_kinds
+    assert "wrong_type" not in blocker_kinds
+
+
+def test_root_escape_via_symlink_is_wrong_type(tmp_path: Path) -> None:
+    """Canonical contract_ref + symlinked file escaping the root → wrong_type.
+
+    Step 6a Commit 2 + 補修 1 次 (Codex M1) spec lock: wrong_type from a
+    REQ-meta contract_ref is reachable ONLY when the contract_ref string
+    itself is canonical AND the filesystem entry behind it escapes the
+    project root (e.g. ``S1.json`` is a symlink pointing outside).
+    A plain absolute or ``..``-relative path string is caught by the
+    earlier canonical-layout pre-check as ``misplaced_contract``; see
+    ``test_absolute_contract_ref_is_reported_as_misplaced_contract``.
     """
     project = _copy_generic_minimal(tmp_path)
     meta = load_req_meta(project, "REQ-APP-001")
