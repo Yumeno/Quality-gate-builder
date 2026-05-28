@@ -407,13 +407,24 @@ def resolve_adopted_stages(
       where the JSON itself is not an object (see
       ``_loader_kind_for_policy`` / ``_loader_kind_for_meta``).
 
-    The "cheaper diagnostic first" ordering is deliberate: a textual
-    layout violation is unambiguous and stable (no I/O needed) while a
-    resolution-time escape requires the filesystem to be in a specific
-    state. Both indicate a contract that ``qgb run`` will refuse;
-    reporting the more easily-fixed one first reduces the loop the
-    designer has to walk through (P9: each error should point at the
-    smallest change that resolves it).
+    Why canonical-layout check goes first — *limited to this case*: the
+    layout violation is decided by a stable textual comparison, with no
+    I/O and no dependence on filesystem state; the same input always
+    gives the same diagnostic, and the designer sees the cheapest fix
+    (rename / move the contract). Both findings indicate a contract
+    that ``qgb run`` will refuse, but the textual one points at the
+    smallest change (P9: each error should point at the smallest change
+    that resolves it).
+
+    This is **not** a general "cheaper diagnostic first" principle for
+    all preflight checks. When safety, ambiguity, or downstream
+    diagnostic pollution is at stake, the order must favour
+    "uncontaminated diagnostics first" instead — see ``run_preflight``'s
+    graph-integrity short-circuit (Codex M2) for the opposite trade-off,
+    where blockers like ``duplicate_stage_id`` suppress *more* findings
+    on purpose. The canonical-layout case earns its ordering specifically
+    because the textual violation is decisive on its own and does not
+    affect any later finding's validity.
     """
     meta_path = req_meta_path(project_root, req_id)
     adopted_raw = req_meta.get("stages", []) or []
@@ -849,6 +860,18 @@ def _loader_kind_for_meta(loader_kind: str) -> PreflightIssueKind:
 # ill-defined. depends_on_unknown is intentionally NOT in this set —
 # adopted resolution is still meaningful when only some references are
 # dangling, so we let the per-stage diagnostics surface alongside.
+#
+# Why the short-circuit also applies to ``validate_policy_preflight``
+# (Codex 二次レビュー反映): ``qgb validate-policy`` does try to report
+# *all* design quality findings, which would normally argue against
+# suppressing diagnostics. But "all findings" only helps when each
+# finding is correct in isolation. With ``duplicate_stage_id``,
+# downstream per-stage diagnostics cite a stage_id whose definition is
+# ambiguous; with ``depends_on_cycle``, ordering-aware diagnostics
+# become meaningless. Reporting wrong / unstable findings on top of a
+# correct primary finding *degrades* design quality feedback rather
+# than enriching it. The trade-off is intentional: fix the integrity
+# blocker first, then re-run validate-policy to surface the next layer.
 _GRAPH_INTEGRITY_BLOCKER_KINDS: frozenset[PreflightIssueKind] = frozenset(
     {"duplicate_stage_id", "depends_on_cycle"}
 )
