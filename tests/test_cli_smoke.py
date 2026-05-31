@@ -42,14 +42,15 @@ def test_main_without_args_prints_help(capsys: pytest.CaptureFixture[str]) -> No
     assert "run" in captured.out
 
 
-def test_main_with_unimplemented_subcommand_returns_usage_code(
+def test_main_with_unknown_subcommand_returns_usage_code(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # `design-stages` is still a stub in Step 6c (wired to real handler in Step 6d).
-    exit_code = main(["design-stages"])
-    captured = capsys.readouterr()
-    assert exit_code == EXIT_USAGE
-    assert "not implemented" in captured.err.lower()
+    """Phase 1 stub mechanism: all Phase 1 commands are now real handlers
+    (Step 6d completed). Unknown subcommands still exit 64 via argparse.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        main(["nonexistent-subcommand"])
+    assert exc_info.value.code == EXIT_USAGE
 
 
 def test_unknown_subcommand_exits_with_usage_code() -> None:
@@ -120,8 +121,7 @@ def test_subprocess_unknown_command_exits_64() -> None:
     assert "error" in result.stderr.lower()
 
 
-def test_subprocess_unimplemented_subcommand_exits_64() -> None:
-    # Use a stub subcommand (Step 6c wired detect to its real handler).
-    result = _run_qgb("design-stages")
+def test_subprocess_unknown_subcommand_exits_64() -> None:
+    """Subprocess parity for the unknown-command path."""
+    result = _run_qgb("nonexistent-subcommand")
     assert result.returncode == EXIT_USAGE
-    assert "not implemented" in result.stderr.lower()

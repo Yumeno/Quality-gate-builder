@@ -12,6 +12,12 @@ from qgb import __version__
 from qgb.adapters.base import DetectionResult
 from qgb.core import evidence as evidence_mod
 from qgb.core.decision import decide
+from qgb.core.design_stages import (
+    CommitOutcome,
+    DesignProposal,
+    commit_design,
+    propose_design,
+)
 from qgb.core.detect import run_detect
 from qgb.core.evidence import write_evidence
 from qgb.core.init import InitReport, run_init
@@ -21,6 +27,7 @@ from qgb.core.preflight import (
     validate_policy_preflight,
 )
 from qgb.core.runner import run_stages
+from qgb.core.scaffold import ScaffoldOutcome, scaffold_req
 from qgb.core.validate import ValidateReport, run_validate
 
 EXIT_OK = 0
@@ -621,6 +628,235 @@ def _handle_detect(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ---- design-stages -------------------------------------------------------
+
+
+def _proposal_to_json(proposal: DesignProposal) -> dict[str, object]:
+    # Codex 補修 7: `committed` lives on the envelope (CLI-level state),
+    # not on the proposal dataclass itself. Proposal carries pure data.
+    return {
+        "schema_version": 1,
+        "ok": True,
+        "committed": False,
+        "detect": {
+            "selected": _detect_profile_dict(proposal.detect.selected),
+            "candidates": [
+                _detect_profile_dict(p) for p in proposal.detect.candidates
+            ],
+        },
+        "proposed": {
+            "template": proposal.template,
+            "stages": [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "responsibility": s.responsibility,
+                    "depends_on": list(s.depends_on),
+                    "verification_type": s.verification_type,
+                    "required_contract_fields": list(s.required_contract_fields),
+                }
+                for s in proposal.stages
+            ],
+        },
+    }
+
+
+def _detect_profile_dict(p) -> dict[str, object]:
+    return {
+        "language": p.language,
+        "framework": p.framework,
+        "test_runner": p.test_runner,
+        "confidence": p.confidence,
+        "adapter_name": p.adapter_name,
+        "evidence": [
+            {"kind": ev.kind, "where": ev.where, "note": ev.note}
+            for ev in p.evidence
+        ],
+    }
+
+
+def _print_proposal_text(proposal: DesignProposal, stream) -> None:
+    sel = proposal.detect.selected
+    banner = f"Detected: {sel.language}"
+    if sel.framework:
+        banner += f" / framework={sel.framework}"
+    if sel.test_runner:
+        banner += f" / test_runner={sel.test_runner}"
+    print(banner, file=stream)
+    print(f"Recommended template: {proposal.template}", file=stream)
+    print("", file=stream)
+    print("Proposed stages:", file=stream)
+    for s in proposal.stages:
+        deps = ", ".join(s.depends_on) if s.depends_on else ""
+        print(
+            f"  {s.id}: {s.name} (verification_type={s.verification_type}, "
+            f"depends_on=[{deps}])",
+            file=stream,
+        )
+    print("", file=stream)
+    print(
+        "Note: this is a proposal only. policy.json was not modified. "
+        "Run `qgb design-stages --commit` to adopt.",
+        file=stream,
+    )
+
+
+def _commit_outcome_to_json(outcome: CommitOutcome) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "ok": outcome.ok,
+        "committed": outcome.ok,
+        "message": outcome.message,
+        "policy_path": (
+            str(outcome.policy_path) if outcome.policy_path else None
+        ),
+        "blockers": list(outcome.blockers),
+        "warnings": list(outcome.warnings),
+    }
+
+
+def _print_commit_outcome_text(outcome: CommitOutcome, stream) -> None:
+    if outcome.ok:
+        print(f"Committed: {outcome.policy_path}", file=stream)
+        if outcome.warnings:
+            print(
+                f"validate-policy warnings ({len(outcome.warnings)}):",
+                file=stream,
+            )
+            for w in outcome.warnings:
+                print(f"  - [{w['kind']}] {w['where']}", file=stream)
+                print(f"      {w['message']}", file=stream)
+    else:
+        print(f"Refused: {outcome.message}", file=stream)
+        if outcome.blockers:
+            print("Blockers:", file=stream)
+            for b in outcome.blockers:
+                print(f"  - [{b['kind']}] {b['where']}", file=stream)
+                print(f"      {b['message']}", file=stream)
+
+
+def _handle_design_stages(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(
+            f"qgb design-stages: path does not exist: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb design-stages: --path must point at a project directory, "
+            f"not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    proposal = propose_design(root)
+
+    if not args.commit:
+        if args.json:
+            json.dump(
+                _proposal_to_json(proposal),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            _print_proposal_text(proposal, sys.stdout)
+        return EXIT_OK
+
+    # --commit branch.
+    outcome = commit_design(root, proposal, force=args.force)
+    if args.json:
+        json.dump(
+            _commit_outcome_to_json(outcome),
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        _print_commit_outcome_text(
+            outcome, sys.stdout if outcome.ok else sys.stderr
+        )
+    return EXIT_OK if outcome.ok else EXIT_NOT_READY
+
+
+# ---- scaffold ------------------------------------------------------------
+
+
+def _scaffold_outcome_to_json(outcome: ScaffoldOutcome) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "ok": outcome.ok,
+        "req_id": outcome.req_id,
+        "message": outcome.message,
+        "created": list(outcome.created),
+    }
+
+
+def _print_scaffold_text(outcome: ScaffoldOutcome, stream) -> None:
+    if outcome.ok:
+        print(f"Scaffolded {outcome.req_id}:", file=stream)
+        for path in outcome.created:
+            print(f"  + {path}", file=stream)
+        print("", file=stream)
+        print(
+            "Generated contracts are schema-valid placeholders. "
+            "Fill in real values before `qgb run`.",
+            file=stream,
+        )
+    else:
+        print(f"Refused: {outcome.message}", file=stream)
+
+
+def _handle_scaffold(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(f"qgb scaffold: path does not exist: {root}", file=sys.stderr)
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb scaffold: --path must point at a project directory, "
+            f"not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    outcome = scaffold_req(root, args.req_id, force=args.force)
+
+    # Invalid REQ id is a usage error (caller passed bad input), not a
+    # state error.
+    if not outcome.ok and outcome.message.startswith("invalid REQ id"):
+        if args.json:
+            json.dump(
+                _scaffold_outcome_to_json(outcome),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(f"qgb scaffold: {outcome.message}", file=sys.stderr)
+        return EXIT_USAGE
+
+    if args.json:
+        json.dump(
+            _scaffold_outcome_to_json(outcome),
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        _print_scaffold_text(
+            outcome, sys.stdout if outcome.ok else sys.stderr
+        )
+
+    return EXIT_OK if outcome.ok else EXIT_NOT_READY
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -645,15 +881,92 @@ def build_parser() -> QgbArgumentParser:
         parser_class=QgbArgumentParser,
     )
 
-    # Phase 1 commands. Handlers are wired in incrementally; not-yet-implemented
-    # commands share a single stub handler that returns EXIT_USAGE.
-    stub_commands: tuple[tuple[str, str], ...] = (
-        ("design-stages", "(not yet implemented) propose verification stages for the target"),
-        ("scaffold", "(not yet implemented) scaffold a new REQ"),
+    # Phase 1 commands. As of Step 6d, all Phase 1 required commands have
+    # real handlers; the stub mechanism is retained for any future Phase 2+
+    # subcommand placeholders.
+
+    # design-stages: real handler (Step 6d).
+    ds_p = subparsers.add_parser(
+        "design-stages",
+        help="propose verification stages for the target project",
+        description=(
+            "Suggest a set of stages for the target project based on "
+            "`qgb detect` output and a Phase 1 template (generic-minimal). "
+            "Without --commit, this prints the proposal only; with --commit "
+            "the proposal is validated by `validate-policy` and, if it "
+            "passes, atomically written to .quality-system/policy.json. "
+            "Returns 0 on success, 2 (NOT_READY) on commit refusal or "
+            "validate-policy blockers, 64 on usage errors."
+        ),
     )
-    for name, help_text in stub_commands:
-        sub = subparsers.add_parser(name, help=help_text)
-        sub.set_defaults(handler=_handle_not_implemented)
+    ds_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root (default: current directory)",
+    )
+    ds_p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Adopt the proposed stages: validate the candidate policy and, "
+            "if it passes, overwrite .quality-system/policy.json#stages."
+        ),
+    )
+    ds_p.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "With --commit, replace an existing non-empty stages[] list. "
+            "Without this flag commits refuse to overwrite previous work."
+        ),
+    )
+    ds_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    ds_p.set_defaults(handler=_handle_design_stages)
+
+    # scaffold: real handler (Step 6d).
+    sc_p = subparsers.add_parser(
+        "scaffold",
+        help="generate a REQ skeleton (meta + contract placeholders + tests)",
+        description=(
+            "Generate the .quality-system/req/<REQ>.meta.json, "
+            "contract placeholders under .quality-system/contracts/<REQ>/, "
+            "and minimal tests/quality/L1_behavior/ + L5_contract/ scaffolds. "
+            "Generated contracts are schema-valid placeholders (TODO markers) "
+            "so `qgb validate` and `qgb validate-policy` both pass on the "
+            "fresh tree; `qgb run` will DENY until you fill in real values. "
+            "Returns 0 on success, 2 (NOT_READY) when the project is not "
+            "ready or the REQ already exists, 64 on usage errors "
+            "(missing path, invalid REQ id, etc.)."
+        ),
+    )
+    sc_p.add_argument(
+        "req_id",
+        metavar="REQ-ID",
+        help="REQ id following ^REQ-[A-Z0-9]+-[0-9]{3,}$ (e.g. REQ-APP-001)",
+    )
+    sc_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root containing .quality-system/ (default: current directory)",
+    )
+    sc_p.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite an existing REQ scaffold (meta + contracts only). "
+            "Other REQs and policy.json are never touched."
+        ),
+    )
+    sc_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    sc_p.set_defaults(handler=_handle_scaffold)
 
     # detect: real handler (Step 6c).
     detect_p = subparsers.add_parser(
