@@ -839,7 +839,7 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | `qgb validate-policy` 本体 + preflight 診断 API + fixture 復活 | Step 6a |
 | `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b (完結 2026-05-31) |
 | `qgb detect` + adapters/python + adapters/generic | Step 6c (完結 2026-05-31) |
-| `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d |
+| `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d (完結 2026-05-31) |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
 | `command` / `json_schema` verification_type | Step 7 / 8 |
 | `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 |
@@ -924,15 +924,19 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 
 詳細な作業記録 (計画 Codex 相談 → 本体 → 横断レビュー 8 件吸収 → 本体 1 コミット) は `journal/phase1-step6c.md`。本体 commit `0a77ca2`。テスト 266 → 327 件、ruff clean。
 
-#### Step 6d — design-stages / scaffold
+#### Step 6d — design-stages / scaffold (**完結 2026-05-31**)
 
-**スコープ:**
+**スコープ (全項目完了):**
 
-- `qgb design-stages` 提案フェーズ (Phase 1: ルールベース推定 + ユーザー確認、stage-design.md §10.1)
-- `qgb design-stages --commit` 採用フェーズ (`policy.json` に書き込み + `validate-policy` を内部で呼ぶ)
-- `qgb scaffold REQ-APP-001` (REQ + contract + テスト雛形生成)
-- examples は最小 1 件のみ (重い設計例パック化は Step 7 / 8 送り)
-- 既存ファイルがある場合の挙動 (idempotency) を 6d の完了条件に含める
+- `qgb design-stages` 提案フェーズ (Phase 1: ルールベース推定 + ユーザー確認、stage-design.md §10.1) — 完了
+- `qgb design-stages --commit` 採用フェーズ (`policy.json` に書き込み + `validate-policy` を内部で呼ぶ) — 完了 (atomic swap)
+- `qgb scaffold REQ-APP-001` (REQ + contract + テスト雛形生成) — 完了 (schema-valid placeholder)
+- examples は最小 1 件のみ (重い設計例パック化は Step 7 / 8 送り) — 維持 (generic-minimal のみ)
+- 既存ファイルがある場合の挙動 (idempotency) を 6d の完了条件に含める — 完了 (refuse + --force)
+
+詳細な作業記録 (計画 Codex 相談 → 本体 → 横断レビュー 9 件のうち中以上 6 件吸収 → 本体 1 コミット) は `journal/phase1-step6d.md`。本体 commit `a1e8cf4`。テスト 327 → 366 件、ruff clean。
+
+**Step 6 全体完結 (2026-05-31):** 6a / 6b / 6c / 6d 全て完了。Phase 1 必須コマンド (init / detect / design-stages / scaffold / validate / validate-policy / run) が全揃い。受け入れ条件§12 のうち 24 件中 14 件達成、残 10 件は Step 7-9 で消化予定。
 
 #### 規模感 (Step 5 を 1.0 とした相対値、Codex 計画レビュー反映後)
 
