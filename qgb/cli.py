@@ -297,6 +297,67 @@ def _print_run_text(gate: dict[str, object], stream) -> None:
         )
 
 
+def _confirm_run(
+    req_id: str, adopted_count: int, *, assume_yes: bool
+) -> tuple[bool, str]:
+    """Phase 1 F-008: ask for confirmation before mutating curated evidence.
+
+    Returns ``(proceed, reason)``:
+
+    * ``(True, "")`` — execution may continue (``--yes`` or user typed y/yes).
+    * ``(False, "non_tty_without_yes")`` — stdin is not a TTY and ``--yes``
+      was not given; refuses to read blindly.
+    * ``(False, "declined")`` — the user typed anything other than y/yes.
+
+    The prompt itself goes to stderr so ``--json`` keeps stdout clean; the
+    caller decides whether to emit a JSON abort payload to stdout.
+    """
+    if assume_yes:
+        return True, ""
+
+    stdin_isatty = bool(getattr(sys.stdin, "isatty", lambda: False)())
+    if not stdin_isatty:
+        print(
+            "qgb run: stdin is not a TTY; refuse to read confirmation blindly. "
+            "Pass --yes to proceed in non-interactive contexts "
+            "(e.g. CI, quality-gate.ps1).",
+            file=sys.stderr,
+        )
+        return False, "non_tty_without_yes"
+
+    print(
+        f"qgb run: about to execute {adopted_count} adopted stage(s) for "
+        f"{req_id} and overwrite curated evidence at "
+        f".quality-system/evidence/{req_id}/latest/.",
+        file=sys.stderr,
+    )
+    sys.stderr.write("Proceed? [y/N]: ")
+    sys.stderr.flush()
+    try:
+        answer = sys.stdin.readline()
+    except EOFError:
+        answer = ""
+    answer = answer.strip().lower()
+    if answer in ("y", "yes"):
+        return True, ""
+    print("qgb run: aborted by user (no curated evidence written).", file=sys.stderr)
+    return False, "declined"
+
+
+def _abort_to_json(req_id: str, reason: str) -> dict[str, object]:
+    """Codex 補修 1: ``--json`` モードで abort 経路も機械可読にする。
+
+    preflight NOT_READY が JSON を返すのと同じ契約に揃える。``reason``
+    は ``declined`` / ``non_tty_without_yes`` のいずれか。
+    """
+    return {
+        "ok": False,
+        "req_id": req_id,
+        "status": "NOT_READY",
+        "reason": reason,
+    }
+
+
 def _handle_run(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     if not root.exists():
@@ -311,6 +372,7 @@ def _handle_run(args: argparse.Namespace) -> int:
 
     req_id: str = args.req_id
     phase: str = args.phase
+    assume_yes: bool = args.yes
 
     preflight = run_preflight(root, req_id)
     if not preflight.ready_for_run():
@@ -324,6 +386,23 @@ def _handle_run(args: argparse.Namespace) -> int:
             sys.stdout.write("\n")
         else:
             sys.stderr.write(_format_preflight_text(preflight))
+        return EXIT_NOT_READY
+
+    # F-008: ask for confirmation only after preflight succeeded. A failed
+    # preflight is a NOT_READY that the user cannot answer "yes" to anyway,
+    # so prompting first would just be noise.
+    proceed, abort_reason = _confirm_run(
+        req_id, len(preflight.adopted_stages), assume_yes=assume_yes
+    )
+    if not proceed:
+        if args.json:
+            json.dump(
+                _abort_to_json(req_id, abort_reason),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
         return EXIT_NOT_READY
 
     timestamps = evidence_mod.make_timestamps()
@@ -587,6 +666,14 @@ def build_parser() -> QgbArgumentParser:
         help=(
             "TDD phase tag recorded in gate.json. Phase 1 wires only 'verify' "
             "semantics; 'red' expected-failure handling is Step 7."
+        ),
+    )
+    run_p.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Skip the interactive confirmation prompt. Required for "
+            "non-TTY contexts (CI, scripts). See requirements doc F-008."
         ),
     )
     run_p.add_argument(

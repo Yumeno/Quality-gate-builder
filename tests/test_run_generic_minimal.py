@@ -75,7 +75,7 @@ def test_run_generic_minimal_returns_allow(
 ) -> None:
     project = _copy_generic_minimal(tmp_path)
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     assert exit_code == EXIT_OK
     gate = _gate(project)
@@ -88,7 +88,7 @@ def test_run_generic_minimal_returns_allow(
 def test_run_writes_curated_gate_and_summary(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_OK
 
     curated = project / ".quality-system" / "evidence" / "REQ-APP-001" / "latest"
@@ -103,7 +103,7 @@ def test_run_writes_curated_gate_and_summary(tmp_path: Path) -> None:
 def test_run_writes_volatile_run_dir(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_OK
 
     runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
@@ -119,7 +119,7 @@ def test_run_writes_volatile_run_dir(tmp_path: Path) -> None:
 
 def test_curated_gate_conforms_to_strict_schema(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     gate = _gate(project)
     issues = schema_validate(gate, "gate")
@@ -129,7 +129,7 @@ def test_curated_gate_conforms_to_strict_schema(tmp_path: Path) -> None:
 def test_curated_gate_matches_reference_structure(tmp_path: Path) -> None:
     """Phase 1 contract: generated gate matches the hand-written reference shape."""
     project = _copy_generic_minimal(tmp_path)
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     gate = _gate(project)
 
@@ -175,7 +175,7 @@ def test_curated_gate_matches_reference_structure(tmp_path: Path) -> None:
 def test_curated_and_volatile_gates_have_identical_content(tmp_path: Path) -> None:
     """Phase 1: the gate written to curated/latest and to artifacts/runs/<ts>/ are equal."""
     project = _copy_generic_minimal(tmp_path)
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     curated = _gate(project)
     runs_dir = project / ".quality-system" / "artifacts" / "REQ-APP-001" / "runs"
@@ -189,7 +189,7 @@ def test_timestamps_in_two_formats_describe_same_instant(tmp_path: Path) -> None
     import re
 
     project = _copy_generic_minimal(tmp_path)
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     gate = _gate(project)
     utc = gate["timestamp_utc"]
@@ -212,7 +212,7 @@ def test_run_returns_deny_when_target_is_missing(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
     (project / "target" / "sample.txt").unlink()
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_DENY
 
     gate = _gate(project)
@@ -230,7 +230,7 @@ def test_run_returns_deny_when_keyword_missing(tmp_path: Path) -> None:
         "no greeting here\n", encoding="utf-8"
     )
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_DENY
 
     gate = _gate(project)
@@ -244,7 +244,7 @@ def test_deny_gate_conforms_to_strict_schema(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
     (project / "target" / "sample.txt").unlink()
 
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     gate = _gate(project)
     issues = schema_validate(gate, "gate")
@@ -261,7 +261,7 @@ def test_run_returns_not_ready_when_contract_ref_missing(
     # Break the reference: remove S1.json so contract_ref points nowhere.
     (project / ".quality-system" / "contracts" / "REQ-APP-001" / "S1.json").unlink()
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
     # A NOT_READY run must not write any curated gate.json. Step 5 補修:
@@ -290,7 +290,7 @@ def test_run_returns_not_ready_when_req_meta_stage_id_unknown(tmp_path: Path) ->
     )
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
 
@@ -483,13 +483,13 @@ def test_run_returns_not_ready_when_req_meta_order_violates_depends_on(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
 
 def test_run_returns_not_ready_for_unknown_req(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
-    exit_code = main(["run", "REQ-APP-999", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-999", "--yes", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
 
@@ -512,7 +512,7 @@ def _run_qgb_subprocess(*args: str) -> subprocess.CompletedProcess[str]:
 
 def test_run_subprocess_allow(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
-    result = _run_qgb_subprocess("run", "REQ-APP-001", "--path", str(project))
+    result = _run_qgb_subprocess("run", "REQ-APP-001", "--yes", "--path", str(project))
     assert result.returncode == EXIT_OK, result.stderr
     assert "ALLOW" in result.stdout
 
@@ -520,7 +520,7 @@ def test_run_subprocess_allow(tmp_path: Path) -> None:
 def test_run_subprocess_deny(tmp_path: Path) -> None:
     project = _copy_generic_minimal(tmp_path)
     (project / "target" / "sample.txt").unlink()
-    result = _run_qgb_subprocess("run", "REQ-APP-001", "--path", str(project))
+    result = _run_qgb_subprocess("run", "REQ-APP-001", "--yes", "--path", str(project))
     assert result.returncode == EXIT_DENY
     # DENY message should mention which stage failed.
     assert "DENY" in (result.stdout + result.stderr)
@@ -557,7 +557,7 @@ def test_run_keep_runs_prunes_old_runs(
     monkeypatch.setattr(evidence_mod, "make_timestamps", fake_make_timestamps)
 
     for _ in range(4):
-        main(["run", "REQ-APP-001", "--path", str(project)])
+        main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     children = sorted(p for p in runs_dir.iterdir() if p.is_dir())
     assert len(children) == 2, [c.name for c in children]
@@ -586,7 +586,7 @@ def test_required_false_in_req_meta_is_not_ready(tmp_path: Path) -> None:
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
 
@@ -600,7 +600,7 @@ def test_required_true_in_req_meta_is_accepted(tmp_path: Path) -> None:
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
+    assert main(["run", "REQ-APP-001", "--yes", "--path", str(project)]) == EXIT_OK
 
 
 # ---- R2: same-second runs must not collide -------------------------------
@@ -632,7 +632,7 @@ def test_run_same_second_does_not_overwrite_run_dir(
     monkeypatch.setenv("QGB_KEEP_RUNS", "10")
 
     for _ in range(3):
-        assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
+        assert main(["run", "REQ-APP-001", "--yes", "--path", str(project)]) == EXIT_OK
 
     children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
     assert len(children) == 3, children
@@ -667,7 +667,7 @@ def test_run_reserves_run_dir_atomically(
         lambda now=None: evidence_mod._timestamps_from_instant(fixed),
     )
 
-    assert main(["run", "REQ-APP-001", "--path", str(project)]) == EXIT_OK
+    assert main(["run", "REQ-APP-001", "--yes", "--path", str(project)]) == EXIT_OK
 
     children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
     assert "2026-01-01T120000Z-r0001" in children
@@ -710,7 +710,7 @@ def test_run_reservation_failure_raises_when_all_slots_taken(
     )
 
     with pytest.raises(evidence_mod.RunDirReservationError):
-        main(["run", "REQ-APP-001", "--path", str(project)])
+        main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
 
 def test_run_same_second_gate_paths_stay_in_lockstep(
@@ -730,8 +730,8 @@ def test_run_same_second_gate_paths_stay_in_lockstep(
         lambda now=None: evidence_mod._timestamps_from_instant(fixed),
     )
 
-    main(["run", "REQ-APP-001", "--path", str(project)])
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     gate = _gate(project)  # curated = latest = second run
     assert gate["timestamp_utc"] == "2026-01-01T120000Z"  # NOT advanced.
@@ -760,7 +760,7 @@ def test_run_target_escape_is_rejected_as_failed(tmp_path: Path) -> None:
     s1["target"] = "../outside.txt"
     s1_path.write_text(json.dumps(s1, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_DENY
 
     gate = _gate(project)
@@ -784,7 +784,7 @@ def test_run_substring_match_target_escape_is_rejected(tmp_path: Path) -> None:
     s2["target"] = "../outside.txt"
     s2_path.write_text(json.dumps(s2, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_DENY
     gate = _gate(project)
     s2_stage = next(s for s in gate["stages"] if s["id"] == "S2")
@@ -809,7 +809,7 @@ def test_run_absolute_target_path_is_rejected(tmp_path: Path) -> None:
     s1["target"] = str(inside_abs)
     s1_path.write_text(json.dumps(s1, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_DENY
     gate = _gate(project)
     s1_stage = next(s for s in gate["stages"] if s["id"] == "S1")
@@ -855,7 +855,7 @@ def test_run_symlink_target_pointing_outside_is_rejected(tmp_path: Path) -> None
     s1["target"] = "target/linked.txt"
     s1_path.write_text(json.dumps(s1, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_DENY
     gate = _gate(project)
     s1_stage = next(s for s in gate["stages"] if s["id"] == "S1")
@@ -895,7 +895,7 @@ def test_run_absolute_contract_ref_is_rejected_as_not_ready(tmp_path: Path) -> N
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    exit_code = main(["run", "REQ-APP-001", "--path", str(project)])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     assert exit_code == EXIT_NOT_READY
 
 
@@ -912,7 +912,7 @@ def test_running_does_not_break_existing_examples_test(tmp_path: Path) -> None:
     timestamp, proving the run executed elsewhere.
     """
     project = _copy_generic_minimal(tmp_path)
-    main(["run", "REQ-APP-001", "--path", str(project)])
+    main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
 
     ref_gate = _read_json(
         GENERIC_MINIMAL
