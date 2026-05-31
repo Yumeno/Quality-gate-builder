@@ -9,8 +9,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from qgb import __version__
+from qgb.adapters.base import DetectionResult
 from qgb.core import evidence as evidence_mod
 from qgb.core.decision import decide
+from qgb.core.detect import run_detect
 from qgb.core.evidence import write_evidence
 from qgb.core.init import InitReport, run_init
 from qgb.core.preflight import (
@@ -533,6 +535,92 @@ def _handle_validate_policy(args: argparse.Namespace) -> int:
     return EXIT_NOT_READY if report.has_blockers() else EXIT_OK
 
 
+# ---- detect --------------------------------------------------------------
+
+
+def _print_detect_text(result: DetectionResult, stream) -> None:
+    sel = result.selected
+    parts: list[str] = [f"Detected: {sel.language}"]
+    if sel.framework:
+        parts.append(f"framework={sel.framework}")
+    if sel.test_runner:
+        parts.append(f"test_runner={sel.test_runner}")
+    parts.append(f"confidence={sel.confidence:.2f}")
+    parts.append(f"adapter={sel.adapter_name}")
+    print(" / ".join(parts), file=stream)
+
+    if sel.evidence:
+        print("Evidence:", file=stream)
+        for ev in sel.evidence:
+            tail = f" ({ev.note})" if ev.note else ""
+            print(f"  - [{ev.kind}] {ev.where}{tail}", file=stream)
+
+    if len(result.candidates) > 1:
+        print("", file=stream)
+        print(
+            f"Other candidates ({len(result.candidates) - 1}):", file=stream
+        )
+        for cand in result.candidates:
+            if cand is sel:
+                continue
+            print(
+                f"  - {cand.language} (confidence={cand.confidence:.2f}, "
+                f"adapter={cand.adapter_name})",
+                file=stream,
+            )
+
+
+def _detect_to_json(result: DetectionResult) -> dict[str, object]:
+    def profile_dict(p) -> dict[str, object]:
+        return {
+            "language": p.language,
+            "framework": p.framework,
+            "test_runner": p.test_runner,
+            "confidence": p.confidence,
+            "adapter_name": p.adapter_name,
+            "evidence": [
+                {"kind": ev.kind, "where": ev.where, "note": ev.note}
+                for ev in p.evidence
+            ],
+        }
+
+    return {
+        # Codex 補修 7: schema_version is the integration contract for
+        # downstream consumers (Step 6d design-stages, future skills).
+        # Bump on any breaking change to the JSON shape.
+        "schema_version": 1,
+        "ok": True,
+        "selected": profile_dict(result.selected),
+        "candidates": [profile_dict(p) for p in result.candidates],
+    }
+
+
+def _handle_detect(args: argparse.Namespace) -> int:
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(f"qgb detect: path does not exist: {root}", file=sys.stderr)
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb detect: --path must point at a project directory, "
+            f"not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    result = run_detect(root)
+
+    if args.json:
+        json.dump(
+            _detect_to_json(result), sys.stdout, ensure_ascii=False, indent=2
+        )
+        sys.stdout.write("\n")
+    else:
+        _print_detect_text(result, sys.stdout)
+
+    return EXIT_OK
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -560,13 +648,38 @@ def build_parser() -> QgbArgumentParser:
     # Phase 1 commands. Handlers are wired in incrementally; not-yet-implemented
     # commands share a single stub handler that returns EXIT_USAGE.
     stub_commands: tuple[tuple[str, str], ...] = (
-        ("detect", "(not yet implemented) detect target language and framework"),
         ("design-stages", "(not yet implemented) propose verification stages for the target"),
         ("scaffold", "(not yet implemented) scaffold a new REQ"),
     )
     for name, help_text in stub_commands:
         sub = subparsers.add_parser(name, help=help_text)
         sub.set_defaults(handler=_handle_not_implemented)
+
+    # detect: real handler (Step 6c).
+    detect_p = subparsers.add_parser(
+        "detect",
+        help="detect target project language, framework, and test runner",
+        description=(
+            "Inspect the target project tree (no policy / no contracts) "
+            "and propose a language/framework/test_runner profile. Phase 1 "
+            "ships PythonAdapter and GenericAdapter; the latter always "
+            "matches as a fallback. Output is a single 'selected' profile "
+            "plus the full 'candidates' list. The confidence value is a "
+            "heuristic ranking score (not a probability). "
+            "Returns 0 always (generic is the safety net); 64 on usage errors."
+        ),
+    )
+    detect_p.add_argument(
+        "--path",
+        default=".",
+        help="Target project root (default: current directory)",
+    )
+    detect_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    detect_p.set_defaults(handler=_handle_detect)
 
     # init: real handler (Step 3).
     init_p = subparsers.add_parser(
