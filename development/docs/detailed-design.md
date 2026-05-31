@@ -840,10 +840,11 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b (完結 2026-05-31) |
 | `qgb detect` + adapters/python + adapters/generic | Step 6c (完結 2026-05-31) |
 | `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d (完結 2026-05-31) |
-| TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
-| `command` / `json_schema` verification_type | Step 7 / 8 |
-| `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 |
-| `waived` 段階の knowledge.jsonl 記録 + `basis[]` への `KNOWLEDGE-*` 追加 | Step 7 |
+| TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 (完結 2026-05-31) |
+| `command` verification_type | Step 7 (完結 2026-05-31) |
+| `json_schema` verification_type | Step 8 |
+| `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 (完結 2026-05-31) |
+| `waived` 段階の knowledge.jsonl 記録 + `basis[]` への `KNOWLEDGE-*` 追加 | Step 7 (完結 2026-05-31) |
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
 
@@ -937,6 +938,19 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 詳細な作業記録 (計画 Codex 相談 → 本体 → 横断レビュー 9 件のうち中以上 6 件吸収 → 本体 1 コミット) は `journal/phase1-step6d.md`。本体 commit `a1e8cf4`。テスト 327 → 366 件、ruff clean。
 
 **Step 6 全体完結 (2026-05-31):** 6a / 6b / 6c / 6d 全て完了。Phase 1 必須コマンド (init / detect / design-stages / scaffold / validate / validate-policy / run) が全揃い。受け入れ条件§12 のうち 24 件中 14 件達成、残 10 件は Step 7-9 で消化予定。
+
+#### Step 7 — TDD phase=red / command runner / manual_check NOT_READY / waived (**完結 2026-05-31**)
+
+**スコープ (全項目完了):**
+
+- A: TDD phase=red の expected-failure 本実装 (受け入れ条件 14) — 完了
+- B: `command` verification_type 実装 — 完了 (`subprocess.run` shell=False, env 全継承, stdin=DEVNULL, 64 KiB tail-truncate, timeout)
+- C: `manual_check` を含む REQ → NOT_READY (受け入れ条件 15) — 完了 (Step 6a の preflight が既達、Step 7 でテストロック)
+- D: `waived` 段階 + `knowledge.jsonl` + `KNOWLEDGE-*` basis (受け入れ条件 16) — 完了 (preflight / runner / decision / basis / knowledge.jsonl の 5 層整合)
+
+Codex 横断レビューで Phase 1 致命的な漏れ 4 件 (実メモリ cap / TimeoutExpired bytes / 非 UTF-8 decode / knowledge.jsonl 末尾 partial) を本体に吸収。詳細は `journal/phase1-step7.md`。本体 commit `ace1c0e`。テスト 366 → 406 件、ruff clean。
+
+**受け入れ条件§12 進捗:** Step 7 完結時点で 17/24 件達成 (Step 6 完結時 14 件 + Step 7 で 14/15/16 達成、23 は既達確認)。残 6 件 (17/18/19/20/21/24) は Step 8-9 で消化予定。
 
 #### 規模感 (Step 5 を 1.0 とした相対値、Codex 計画レビュー反映後)
 
