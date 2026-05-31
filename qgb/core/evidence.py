@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -379,16 +380,47 @@ _DEFAULT_KEEP_RUNS = 10
 
 
 def _resolve_keep_runs(explicit: int | None) -> int:
+    """Step 6b 項目 3 (Codex Step 5 L4): warn on invalid QGB_KEEP_RUNS.
+
+    Resolution order:
+
+    * ``explicit`` (test escape hatch) — trust the caller, no validation.
+    * ``QGB_KEEP_RUNS`` env var — parse as int. Reject ``< 1``, non-int,
+      and whitespace-only strings with a stderr warning and fall back to
+      ``_DEFAULT_KEEP_RUNS``.
+    * Unset / empty string — silent fall-back to the default.
+
+    Why warn instead of silent: previous behaviour clamped negatives to 1
+    and ignored garbage outright, so a typo like ``QGB_KEEP_RUNS=20a`` or
+    ``QGB_KEEP_RUNS=-5`` would prune more aggressively than the user
+    expected with no signal that the setting was malformed.
+    """
     if explicit is not None:
         return max(1, explicit)
     raw = os.environ.get("QGB_KEEP_RUNS")
     if raw is None or raw == "":
         return _DEFAULT_KEEP_RUNS
-    try:
-        value = int(raw)
-    except ValueError:
+    stripped = raw.strip()
+    if stripped == "":
+        _warn_invalid_keep_runs(raw, "empty after stripping whitespace")
         return _DEFAULT_KEEP_RUNS
-    return max(1, value)
+    try:
+        value = int(stripped)
+    except ValueError:
+        _warn_invalid_keep_runs(raw, "not an integer")
+        return _DEFAULT_KEEP_RUNS
+    if value < 1:
+        _warn_invalid_keep_runs(raw, "must be >= 1")
+        return _DEFAULT_KEEP_RUNS
+    return value
+
+
+def _warn_invalid_keep_runs(raw: str, reason: str) -> None:
+    print(
+        f"qgb: warning: QGB_KEEP_RUNS={raw!r} is invalid ({reason}); "
+        f"falling back to default ({_DEFAULT_KEEP_RUNS}).",
+        file=sys.stderr,
+    )
 
 
 def _prune_runs(runs_dir: Path, keep: int) -> None:
