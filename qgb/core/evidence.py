@@ -11,7 +11,7 @@ Two output trees (matches detailed-design.md §7.4, §7.5, §8.7 and philosophy 
     - ``QGB_KEEP_RUNS`` (default 10) caps how many run-dirs are kept;
       older ones are deleted oldest-first.
 * **Curated** ``evidence/<REQ>/latest/``
-    - Updated by ``qgb run`` only (not by ``qgb verify``).
+    - Updated by ``qgb run`` only.
     - Byte-for-byte equal contents to the volatile copy, so reviewers can
       diff curated/latest without surprises.
 

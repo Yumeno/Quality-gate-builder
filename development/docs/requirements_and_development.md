@@ -25,9 +25,10 @@ quality-gate-builder 要件定義書・基本設計書 v0.3
 - TDD mode の `mode` フィールド削除、`phase` (red/green/refactor/verify) で表現
 - gate.json スキーマを最小化（runner / failed_stage / stages[].contract_ref を追加、checks[] を stages[] に統合）
 - 採用判定 (`evidence/`) と揮発 (`artifacts/`) の 2 系統パス分離を採用
-- 入口分離（`qgb verify` 軽量 / `qgb run` 採用判定）を採用
-- 新コマンド `qgb design-stages`, `qgb validate-policy`, `qgb verify` を追加
+- 新コマンド `qgb design-stages`, `qgb validate-policy` を追加
 - エージェント中立スキル提供方針を追加：単一の中間表現から Claude Code / Codex CLI / Gemini CLI 向けスキル成果物をコンバータで生成する（F-019, C-008）
+
+> 撤回履歴: v0.3 の当初版では「入口分離（`qgb verify` 軽量 / `qgb run` 採用判定）」と新コマンド `qgb verify` を追加していたが、後の Phase 1 spec-review で撤回した。理由は思想憲章 P3（保証対象の転換＝コード不変を前提にしない）と「検査範囲を絞る軽量入口」が緊張するため。部分検証は CLI コマンドでなく REQ 分割（設計）で扱う。詳細は `stage-design.md` §3.1 および `yaoyorozu-entry-points-investigation.md` を参照。
 
 ### 1.4 対象読者
 
@@ -438,14 +439,17 @@ Phase 1 で対応する検査種別：
 
 `waived` メタ：本来必要な段階を理由つきで免除する場合、段階に `waived: true` と `waiver_reason` を付与する。waived 段階は判定対象から除外される。免除判断は `knowledge.jsonl` に記録する。
 
-#### F-008: 入口の分離
+#### F-008: 採用判定の入口は `qgb run` 単一
 
-軽量チェックと採用判定を別コマンドに分離する：
+採用判定の実行入口は `qgb run` のみとする：
 
-- `qgb verify <REQ>` — 段階を実行して結果を返す。揮発側 (`artifacts/.../runs/<ts>/`) にのみ書き込み
-- `qgb run <REQ>` — 採用判定を残す。揮発側に加えて採用側 (`evidence/.../latest/`) を更新
+- `qgb run <REQ>` — 対象 REQ の**全 stage を実行**し採用判定を残す。揮発側 (`artifacts/.../runs/<ts>/`) と採用側 (`evidence/.../latest/`) の両方を更新
 
 `qgb run` は実行前に確認プロンプトを出す（`--yes` でスキップ可）。
+
+**「検査範囲を絞る軽量入口」(`qgb verify` 相当) は設けない。** 思想憲章 P3（保証対象の転換＝コードの同一性でなく成立すべき状態を保証、コード不変を前提にしない）と緊張するためである。LLM 編集は全文が LLM を通り、要修正部分以外が改変されない保証がない。よって「特定段階だけ追試し、触っていない部分は前回の合格が有効」とする部分追試は、既に合格していた観点が知らぬ間に壊れるリスクを抱える。
+
+「対象を絞って検証したい」というニーズは、実行時に検査範囲を絞るのではなく **REQ 分割（設計）** で満たす：部分部分を独立 REQ として切り、各 REQ は自分の全 stage を `qgb run` で実行する（部分だけ再検証したいときはその REQ だけを run する）。結合検証は結合用の REQ を別途立てる。詳細は `stage-design.md` §3.1 を参照。
 
 #### F-009: 段階の機械検査
 
@@ -480,8 +484,6 @@ Phase 1 必須検査の例：
   stages/
     <stage-id>.log
 ```
-
-`qgb verify` は揮発側のみに書き込む。
 
 揮発側は `QGB_KEEP_RUNS` 環境変数で保持件数を制御する（デフォルト 10、`0` で無制限）。
 
@@ -581,7 +583,9 @@ LLM レビューは任意機能とする。要求の曖昧性指摘、テスト�
 - `red` — 期待される失敗段階（TDD 初期、retrofit 後の初回も含む）
 - `green` — 実装後の通過確認
 - `refactor` — リファクタ後の維持確認
-- `verify` — TDD サイクル外の単発検証
+- `verify` — TDD サイクル外の単発検証（`qgb run` の `--phase` 既定値）
+
+> 用語注意: ここでの `phase` 値 `verify` は **TDD サイクル上の局面** を表すものであり、撤回した CLI コマンド `qgb verify`（→ F-008）とは無関係である。`qgb run --phase verify`（既定）は「TDD サイクル外の通常の採用判定」を意味する。
 
 各 phase に対応する `decision.meaning` テンプレート：
 
@@ -834,7 +838,6 @@ python -m qgb design-stages
 python -m qgb scaffold <REQ>
 python -m qgb validate
 python -m qgb validate-policy
-python -m qgb verify <REQ>
 python -m qgb run <REQ>
 ```
 
@@ -1007,7 +1010,6 @@ python -m qgb design-stages [--commit]
 python -m qgb scaffold <REQ>
 python -m qgb validate
 python -m qgb validate-policy
-python -m qgb verify <REQ>
 python -m qgb run <REQ>
 ```
 
@@ -1046,7 +1048,7 @@ Phase 1 の導入マニュアルは、Windows PowerShell 環境を含むマル�
 8. 対象プロジェクトでの初期化
 9. 段階設計フェーズの実行
 10. サンプル REQ 生成
-11. quality-gate 実行（verify と run）
+11. quality-gate 実行（run）
 12. gate.json の読み方
 13. summary.md の読み方
 14. NOT_READY になった場合の対応
@@ -1072,7 +1074,6 @@ python -m qgb design-stages
 python -m qgb design-stages --commit
 python -m qgb scaffold REQ-APP-001
 python -m qgb validate-policy
-python -m qgb verify REQ-APP-001
 python -m qgb run REQ-APP-001
 ```
 
@@ -1201,24 +1202,25 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 5. config.json、policy.json、REQ、contract.json を生成できる
 6. `python -m qgb validate` で JSON 正本を検証できる
 7. `python -m qgb validate-policy` で段階設計の品質を検査できる
-8. `python -m qgb verify <REQ>` で軽量チェックを実行できる
-9. `python -m qgb run <REQ>` で採用判定を残せる
-10. gate.json、summary.md、stages/\*.log を出力できる
-11. 採用側 (`evidence/.../latest/`) と揮発側 (`artifacts/.../runs/<ts>/`) の 2 系統に書き込める
-12. 検査成功時に ALLOW を出せる
-13. 検査失敗時に DENY を出せる
-14. 構成不備時に NOT_READY を出し、gate.json を生成しない
-15. `phase: red` の DENY を期待結果として証跡化できる
-16. `manual_check` を含む REQ の run は NOT_READY となる
-17. waived を理由つきで `knowledge.jsonl` に記録できる
-18. Project Knowledge Base にユーザー明示情報を保存できる
-19. 外部由来情報に `requires_human_review` を付与できる
-20. 設計例パック 3 例（generic-minimal / python-cli-pytest / markdown-docs）が動作する
-21. 導入マニュアルが存在する
-22. 依存ライブラリ採用方針とセキュリティ確認手順が文書化されている
-23. LLM レビュー単独で ALLOW を出さない方針が明示されている
-24. 思想憲章、段階設計仕様、フレームワーク境界の 3 文書が並列に維持されている
-25. `skills/source/` のディレクトリ構造が予約されており、Phase 5 でのエージェント中立スキル提供方針 (F-019) が要件として確定している
+8. `python -m qgb run <REQ>` で採用判定を残せる（常に全 stage を実行する）
+9. gate.json、summary.md、stages/\*.log を出力できる
+10. 採用側 (`evidence/.../latest/`) と揮発側 (`artifacts/.../runs/<ts>/`) の 2 系統に書き込める
+11. 検査成功時に ALLOW を出せる
+12. 検査失敗時に DENY を出せる
+13. 構成不備時に NOT_READY を出し、gate.json を生成しない
+14. `phase: red` の DENY を期待結果として証跡化できる
+15. `manual_check` を含む REQ の run は NOT_READY となる
+16. waived を理由つきで `knowledge.jsonl` に記録できる
+17. Project Knowledge Base にユーザー明示情報を保存できる
+18. 外部由来情報に `requires_human_review` を付与できる
+19. 設計例パック 3 例（generic-minimal / python-cli-pytest / markdown-docs）が動作する
+20. 導入マニュアルが存在する
+21. 依存ライブラリ採用方針とセキュリティ確認手順が文書化されている
+22. LLM レビュー単独で ALLOW を出さない方針が明示されている
+23. 思想憲章、段階設計仕様、フレームワーク境界の 3 文書が並列に維持されている
+24. `skills/source/` のディレクトリ構造が予約されており、Phase 5 でのエージェント中立スキル提供方針 (F-019) が要件として確定している
+
+> 補足: 旧受け入れ条件 8「`qgb verify <REQ>` で軽量チェックを実行できる」は削除した。qgb は「検査範囲を絞る軽量入口」を持たない（思想憲章 P3 と緊張するため）。部分検証は実行時オプションでなく REQ 分割（設計）で解く。経緯は `stage-design.md` §3.1 および `yaoyorozu-entry-points-investigation.md` を参照。
 
 ---
 
@@ -1226,7 +1228,7 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 ### Phase 1: Python CLI MVP + 導入マニュアル
 
-- Python 製 qgb CLI（init, detect, design-stages, scaffold, validate, validate-policy, verify, run）
+- Python 製 qgb CLI（init, detect, design-stages, scaffold, validate, validate-policy, run）
 - JSON 正本、JSON Schema 検証
 - 段階設計フェーズ（パターン A）
 - policy 設計検査器

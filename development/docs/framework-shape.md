@@ -248,7 +248,7 @@ agent_bindings:
 - `evidence/<REQ>/latest/` — 採用判定の最新証跡。コミット対象
 - `artifacts/<REQ>/runs/<timestamp>/` — 揮発的な実行証跡。`.gitignore` で除外
 
-採用判定 (`evidence/`) を更新できるのは `qgb run` のみ。`qgb verify` は揮発側にのみ書く。詳細は要件定義書 §6 を参照。
+採用判定 (`evidence/`) を更新できるのは `qgb run` のみ。`qgb run` は対象 REQ の全 stage を実行し、揮発側と採用側の両方に書き込む。「検査範囲を絞る軽量入口」(`qgb verify` 相当) は設けない（思想憲章 P3 との緊張のため。部分検証は REQ 分割で扱う。詳細は `stage-design.md` §3.1 と要件定義書 §6 を参照）。
 
 ### 利用者プロジェクトに複製しないもの
 

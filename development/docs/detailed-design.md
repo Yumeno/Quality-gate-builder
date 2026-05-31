@@ -124,10 +124,11 @@ quality-gate-builder/
 | `detect` | 6 | parser 登録のみ | 対象系の言語/フレームワーク推定 |
 | `design-stages` | 6 | parser 登録のみ | 段階設計フェーズ |
 | `scaffold` | 6 | parser 登録のみ | REQ + contract + テスト雛形 |
-| `validate-policy` | 6 | parser 登録のみ | 段階設計の品質 + 正本ツリー整合性 |
-| `verify` | 6 | parser 登録のみ | 軽量チェック (揮発側のみ) |
+| `validate-policy` | 6a | **実装済み** | 段階設計の品質 + 正本ツリー整合性 |
 
-未実装サブコマンド呼び出しは `_handle_not_implemented` 共通 stub が EXIT_USAGE (=64) を返す。各 subparser に `set_defaults(handler=...)` を仕込んであり、Step ごとに stub を実 handler に差し替える設計。
+未実装サブコマンド呼び出しは `_handle_not_implemented` 共通 stub が EXIT_USAGE (=64) を返す。各 subparser に `set_defaults(handler=...)` を仕込んであり、Step ごとに stub を実 handler に差し替える設計。**現時点で `init` / `validate` / `validate-policy` / `run` は stub から実 handler への差し替え済み**で、`detect` / `design-stages` / `scaffold` のみが stub 状態 (上表の「parser 登録のみ」列に対応)。
+
+> `qgb verify` は Phase 1 spec-review で撤回されたため、本表に含めない (思想憲章 P3 との緊張、`stage-design.md` §3.1 参照)。`phase` 値の `verify` は TDD 局面として残るが、これは CLI コマンドとは無関係。
 
 ### 3.3 終了コード規約
 
@@ -672,7 +673,7 @@ NOT_READY が curated を上書きしないことは、Step 5 受入テスト `t
 
 | 系統 | パス | 書き手 | コミット対象 |
 |---|---|---|---|
-| 揮発 | `.quality-system/artifacts/<REQ>/runs/<compact>/` | `qgb run` / `qgb verify` (Step 6) | **No** (`.gitignore`) |
+| 揮発 | `.quality-system/artifacts/<REQ>/runs/<compact>/` | `qgb run` | **No** (`.gitignore`) |
 | 採用 | `.quality-system/evidence/<REQ>/latest/` | `qgb run` のみ | **Yes** |
 
 両系統に書く内容:
@@ -836,7 +837,7 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | 項目 | 確定予定 Step |
 |---|---|
 | `qgb validate-policy` 本体 + preflight 診断 API + fixture 復活 | Step 6a |
-| `qgb verify` / `qgb run --yes` / runner/evidence 構造化 | Step 6b |
+| `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b |
 | `qgb detect` + adapters/python + adapters/generic | Step 6c |
 | `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
@@ -850,9 +851,9 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 
 Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステップに分割して進める。各サブステップ完了時に Codex レビュー → 補修サイクル。
 
-着手順は **6a → 6b → 6c → 6d**。理由は「validate-policy が後続全部の検査土台で、API が確定しないと verify / design-stages も書けない」「6a の preflight 既存資産が一番多く新規実装が少ない」。
+着手順は **6a → 6b → 6c → 6d**。理由は「validate-policy が後続全部の検査土台で、API が確定しないと design-stages も書けない」「6a の preflight 既存資産が一番多く新規実装が少ない」。
 
-ただし Codex 計画レビューの指摘により、6a を「API 確定の巨大ステップ」にしすぎないことに注意する: `verify` (6b) が preflight API の最初の消費者になるため、6a 完了後に小修正が出るのを許容する。
+> 当初の Step 6b には `qgb verify` 実装が含まれ「verify が preflight API の最初の消費者になる」と位置づけていたが、Step 6b 着手時の spec-review で `qgb verify` の撤回が決まった (思想憲章 P3 との緊張、`stage-design.md` §3.1)。Step 6b は `qgb run --yes` / runner・evidence の構造化 (atomic / QGB_KEEP_RUNS) と verify 撤回の spec 反映に絞られる。
 
 #### Step 6a — validate-policy / preflight 診断 API (本体 3 コミット + 補修 1 次 + 補修 2 次完了、**Step 6a 完結**)
 
@@ -898,14 +899,16 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 - 「stderr に何か出たら失敗」扱いの CI wrapper はこの規約と衝突するので、`--json` 経由で `summary.blockers` / `summary.warnings` を見る運用に統一する
 - `qgb run` の text 出力で ALLOW を stdout、DENY を stderr に分けているのも同じ理由
 
-#### Step 6b — verify / run 周辺
+#### Step 6b — run 周辺 (verify 撤回後)
 
 **スコープ (実装順):**
 
-1. `qgb verify` (validate-policy + 軽量 run。揮発側のみで gate.json は更新しない) — preflight API の最初の消費者として 6b の最初に実装。ここで 6a の API 過不足が早期に見える
-2. `qgb run --yes` (実行前確認プロンプト)
-3. `_replace_dir_contents()` の atomic 化 (Codex M4 / M5): `latest.tmp-<ts>` で書いて rename
-4. `QGB_KEEP_RUNS` 不正値の warning (Codex L4)
+0. `qgb verify` 撤回の spec 反映 + cli.py stub 削除 (Step 6b 着手時の spec-review で決定。経緯は `journal/phase1-step6b-spec-review.md`、根拠は §3.1 と思想憲章 P3)
+1. `qgb run --yes` (実行前確認プロンプト)
+2. `_replace_dir_contents()` の atomic 化 (Codex M4 / M5): `latest.tmp-<ts>` で書いて rename
+3. `QGB_KEEP_RUNS` 不正値の warning (Codex L4)
+
+> 当初の Step 6b は `qgb verify` を最初に実装し「preflight API の最初の消費者」とする計画だったが、着手時の spec-review で verify 撤回が決まった (P3 との緊張)。これにより Step 6b は run の採用フロー整備 (--yes / atomic / QGB_KEEP_RUNS) と verify 撤回の反映に絞られる。「部分検証は REQ 分割で解く」という設計指針は §3.1 / stage-design §3.1 / 要件 F-008 に明記済み。
 
 #### Step 6c — detect / adapters
 

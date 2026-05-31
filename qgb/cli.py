@@ -484,7 +484,6 @@ def build_parser() -> QgbArgumentParser:
         ("detect", "(not yet implemented) detect target language and framework"),
         ("design-stages", "(not yet implemented) propose verification stages for the target"),
         ("scaffold", "(not yet implemented) scaffold a new REQ"),
-        ("verify", "(not yet implemented) run lightweight checks (volatile artifacts only)"),
     )
     for name, help_text in stub_commands:
         sub = subparsers.add_parser(name, help=help_text)
