@@ -846,7 +846,7 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 (完結 2026-05-31) |
 | `waived` 段階の knowledge.jsonl 記録 + `basis[]` への `KNOWLEDGE-*` 追加 | Step 7 (完結 2026-05-31) |
 | 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 (完結 2026-06-01) |
-| knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
+| knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 (完結 2026-06-01) |
 
 ### Step 6 サブステップ計画 (Codex 計画レビュー 2026-05-23 採用版)
 
@@ -973,6 +973,27 @@ Codex 段 5 1 周目で新規 finding (C2 再: int/str 混在で TypeError) → 
 詳細な作業記録は `journal/phase1-step8.md`。本体 commit `dd1f053`。テスト 406 → 448 件、ruff clean。
 
 **受け入れ条件§12 進捗:** Step 8 完結時点で **18/24 件達成** (Step 7 完結時 17 件 + Step 8 で 19 達成)。残 5 件 (17/18/20/21/24) は Step 9 で消化予定 (Step 9 完結で Phase 1 全体達成)。
+
+#### Step 9 — knowledge / requires_human_review / 導入マニュアル / 依存ポリシー / skills/source/ (**完結 2026-06-01、Phase 1 完結**)
+
+**スコープ (全項目完了):**
+
+- A: 受け入れ条件 17 (Project Knowledge Base ユーザー明示情報保存) — 完了 (qgb validate に knowledge.jsonl line-by-line validation を追加、partial-tail tolerant)
+- B: 受け入れ条件 18 (requires_human_review) — 完了 (knowledge.schema.json の allOf で `source_type=external → requires_human_review:true` を const enforce、P8 機械化)
+- C: 受け入れ条件 20 (導入マニュアル) — 完了 (development/docs/phase1-manual.md、spec §8.1 19 章 + §8.2 PowerShell verbatim block)
+- D: 受け入れ条件 21 (依存ポリシー / セキュリティ手順) — 完了 (development/docs/security-dependency-policy.md、§6.6.2 11 項目 + jsonschema 実例 + platform 別 binary)
+- E: 受け入れ条件 24 (skills/source/ 構造予約) — 完了 (skills/source/README.md、F-019 中間表現 + Phase 5 計画)
+
+memory review-process 段 1〜5 完走: 観点別 5 subagent → 集約 → Codex 横断 → 補修 → 収束ループ 2 周で「指摘なし収束 + Phase 1 完結」を受領。
+
+Codex 横断レビュー指摘 8 件 (blocker 0、major 2、minor 4、clean 2 観点):
+- S1 (spec §8.2 verbatim block) / W3 (venv aliasing) / C1 (BOM) / W4 (platform binary) → 本体補修
+- W1 (CRLF/BOM docstring) → 実装無変更で docstring
+- W2 → 対応不要
+
+詳細は `journal/phase1-step9.md` (Phase 1 全体振り返り付き)。本体 commit `9d7196f`。テスト 448 → 470 件、ruff clean。
+
+**受け入れ条件§12 進捗:** Step 9 完結時点で **24/24 件達成 → Phase 1 全体完結**。
 
 #### 規模感 (Step 5 を 1.0 とした相対値、Codex 計画レビュー反映後)
 
