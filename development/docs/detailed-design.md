@@ -105,7 +105,7 @@ quality-gate-builder/
           stages/{S1,S2}.log               # log_ref が指す stage 実行ログ
 ```
 
-`skills/source/`、`tools/`、`dist/skills/` は Phase 5 で追加予定。`examples/` には Step 8 で `python-cli-pytest/` と `markdown-docs/` を追加する。
+`skills/source/`、`tools/`、`dist/skills/` は Phase 5 で追加予定。`examples/` には Step 8 (完結 2026-06-01) で `python-cli-pytest/` と `markdown-docs/` を追加済。これにより Phase 1 の 3 例 (generic-minimal / python-cli-pytest / markdown-docs) が揃い、4 runtime-supported verification_type (file_exists / substring_match / command / json_schema) を網羅する。
 
 ## 3. CLI 体系の確定事項
 
@@ -842,10 +842,10 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d (完結 2026-05-31) |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 (完結 2026-05-31) |
 | `command` verification_type | Step 7 (完結 2026-05-31) |
-| `json_schema` verification_type | Step 8 |
+| `json_schema` verification_type | Step 8 (完結 2026-06-01) |
 | `manual_check` を含む REQ への注釈フロー (Phase 2 設計の入口) | Step 7 (完結 2026-05-31) |
 | `waived` 段階の knowledge.jsonl 記録 + `basis[]` への `KNOWLEDGE-*` 追加 | Step 7 (完結 2026-05-31) |
-| 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 |
+| 設計例パック 2 例追加 (python-cli-pytest / markdown-docs) | Step 8 (完結 2026-06-01) |
 | knowledge 追加コマンド、導入マニュアル、依存調査ポリシー文書 | Step 9 |
 
 ### Step 6 サブステップ計画 (Codex 計画レビュー 2026-05-23 採用版)
@@ -951,6 +951,28 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 Codex 横断レビューで Phase 1 致命的な漏れ 4 件 (実メモリ cap / TimeoutExpired bytes / 非 UTF-8 decode / knowledge.jsonl 末尾 partial) を本体に吸収。詳細は `journal/phase1-step7.md`。本体 commit `ace1c0e`。テスト 366 → 406 件、ruff clean。
 
 **受け入れ条件§12 進捗:** Step 7 完結時点で 17/24 件達成 (Step 6 完結時 14 件 + Step 7 で 14/15/16 達成、23 は既達確認)。残 6 件 (17/18/19/20/21/24) は Step 8-9 で消化予定。
+
+#### Step 8 — json_schema verification_type + 設計例パック 2 例追加 (**完結 2026-06-01**)
+
+**スコープ (全項目完了):**
+
+- A: `json_schema` verification_type 実装 — 完了 (target / schema を R1 解決、$ref present は failed、format は Phase 1 では強制有効化しない)
+- B: examples/python-cli-pytest 構築 — 完了 (3 stages: command + command + substring_match)
+- C: examples/markdown-docs 構築 — 完了 (3 stages: file_exists + substring_match + json_schema)
+
+3 example で Phase 1 の 4 runtime-supported verification_type (file_exists / substring_match / command / json_schema) を網羅。manual_check は受け入れ条件 15 で NOT_READY なので example には含めない。
+
+memory review-process 段 1〜5 完走: 観点別 5 subagent → 集約 → Codex 横断 → 補修 → 収束ループ (2 周目で「指摘なし収束」)。
+
+Codex 横断レビュー指摘 (主なもの):
+- W1 (resolved path log) / C1 (validator defensive) / C2 (sort key) → 本体補修
+- W2 (Windows backslash) / W3 (Windows python argv) / Ph1 (pytest 実時間) → docs 対応 (README / design-notes に明文化)
+
+Codex 段 5 1 周目で新規 finding (C2 再: int/str 混在で TypeError) → 2 周目で `str(p) for p in e.absolute_path` に修正、「指摘なし収束」を受領。
+
+詳細な作業記録は `journal/phase1-step8.md`。本体 commit `dd1f053`。テスト 406 → 448 件、ruff clean。
+
+**受け入れ条件§12 進捗:** Step 8 完結時点で **18/24 件達成** (Step 7 完結時 17 件 + Step 8 で 19 達成)。残 5 件 (17/18/20/21/24) は Step 9 で消化予定 (Step 9 完結で Phase 1 全体達成)。
 
 #### 規模感 (Step 5 を 1.0 とした相対値、Codex 計画レビュー反映後)
 
