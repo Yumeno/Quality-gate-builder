@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "stage_id": "S3",
+  "verification_type": "json_schema",
+  "target": "docs/metadata.json",
+  "schema": "schemas/metadata.schema.json"
+}

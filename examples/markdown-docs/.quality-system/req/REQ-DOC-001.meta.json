@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "title": "文書群が存在し、見出し規約と metadata schema を満たす",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S1.json",
+      "required": true
+    },
+    {
+      "stage_id": "S2",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S2.json",
+      "required": true
+    },
+    {
+      "stage_id": "S3",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S3.json",
+      "required": true
+    }
+  ]
+}

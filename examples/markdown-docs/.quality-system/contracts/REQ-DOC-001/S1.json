@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "stage_id": "S1",
+  "verification_type": "file_exists",
+  "target": "docs/index.md"
+}

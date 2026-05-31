@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "pytest が成功する",
+      "responsibility": "tests/ 配下の pytest が exit 0 で完了する",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command"]
+    },
+    {
+      "id": "S2",
+      "name": "demo_cli --help が exit 0 を返す",
+      "responsibility": "python -m demo_cli --help が exit 0 で完了する",
+      "depends_on": ["S1"],
+      "verification_type": "command",
+      "required_contract_fields": ["command"]
+    },
+    {
+      "id": "S3",
+      "name": "README に install 手順が書かれている",
+      "responsibility": "README.md が Installation セクションを含む",
+      "depends_on": [],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    }
+  ]
+}

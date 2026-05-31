@@ -1,0 +1,15 @@
+{
+  "doc_set": "markdown-docs-example",
+  "version": "0.1.0",
+  "language": "en",
+  "pages": [
+    {
+      "path": "docs/index.md",
+      "title": "Project Documentation"
+    },
+    {
+      "path": "docs/api.md",
+      "title": "API Reference"
+    }
+  ]
+}

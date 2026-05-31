@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "timestamp_utc": "2026-05-21T120000Z",
+  "timestamp_rfc3339": "2026-05-21T12:00:00Z",
+  "run_id": "r0001",
+  "phase": "verify",
+  "status": "ALLOW",
+  "failed_stage": "",
+  "decision": {
+    "result": "ALLOW",
+    "meaning": "Defined checks passed. This is not proof of total correctness.",
+    "scope": "Judgement is local to this project's policy/contracts and is not comparable across projects (P11)."
+  },
+  "runner": {
+    "name": "qgb",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "run_dir": ".quality-system/artifacts/REQ-DOC-001/runs/2026-05-21T120000Z-r0001",
+    "curated_latest_dir": ".quality-system/evidence/REQ-DOC-001/latest"
+  },
+  "stages": [
+    {
+      "id": "S1",
+      "name": "index ページが存在する",
+      "result": "passed",
+      "verification_type": "file_exists",
+      "exit_code": null,
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S1.json",
+      "log_ref": "stages/S1.log"
+    },
+    {
+      "id": "S2",
+      "name": "index ページに H1 ヘッダがある",
+      "result": "passed",
+      "verification_type": "substring_match",
+      "exit_code": null,
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S2.json",
+      "log_ref": "stages/S2.log"
+    },
+    {
+      "id": "S3",
+      "name": "metadata が schema に従う",
+      "result": "passed",
+      "verification_type": "json_schema",
+      "exit_code": null,
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S3.json",
+      "log_ref": "stages/S3.log"
+    }
+  ],
+  "basis": [
+    "REQ-DOC-001",
+    "POLICY-default",
+    "CONTRACT-REQ-DOC-001-S1",
+    "CONTRACT-REQ-DOC-001-S2",
+    "CONTRACT-REQ-DOC-001-S3"
+  ]
+}

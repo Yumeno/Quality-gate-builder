@@ -195,11 +195,11 @@ class AdoptedStage:
 
 
 # Phase 1 understands these verification types at runtime. Step 7 added
-# ``command``. ``json_schema`` is reserved for Step 8 and ``manual_check``
-# is run-rejected by design (P6). Preflight rejects unsupported types so
+# ``command``; Step 8 added ``json_schema``. ``manual_check`` is
+# run-rejected by design (P6). Preflight rejects unsupported types so
 # silent ALLOW never happens.
 _SUPPORTED_RUNTIME_TYPES: frozenset[str] = frozenset(
-    {"file_exists", "substring_match", "command"}
+    {"file_exists", "substring_match", "command", "json_schema"}
 )
 
 

@@ -1,0 +1,18 @@
+stage_id: S1
+name: pytest が成功する
+verification_type: command
+contract_ref: .quality-system/contracts/REQ-APP-001/S1.json
+command: ['python', '-m', 'pytest', '-q']
+expected_exit_code: 0
+timeout_seconds: 60
+resolved cwd: <project_root>
+
+--- execution ---
+exit_code: 0
+stdout (full):
+....                                                                     [100%]
+4 passed in 0.02s
+
+stderr (full):
+
+result: passed

@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "index ページが存在する",
+      "responsibility": "docs/index.md が存在する",
+      "depends_on": [],
+      "verification_type": "file_exists",
+      "required_contract_fields": ["target"]
+    },
+    {
+      "id": "S2",
+      "name": "index ページに H1 ヘッダがある",
+      "responsibility": "docs/index.md が H1 (# ) で始まるトップ見出しを持つ",
+      "depends_on": ["S1"],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    },
+    {
+      "id": "S3",
+      "name": "metadata が schema に従う",
+      "responsibility": "docs/metadata.json が schemas/metadata.schema.json を満たす",
+      "depends_on": [],
+      "verification_type": "json_schema",
+      "required_contract_fields": ["target", "schema"]
+    }
+  ]
+}

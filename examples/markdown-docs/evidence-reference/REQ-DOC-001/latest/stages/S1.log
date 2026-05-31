@@ -1,0 +1,9 @@
+stage_id: S1
+name: index ページが存在する
+verification_type: file_exists
+contract_ref: .quality-system/contracts/REQ-DOC-001/S1.json
+target: docs/index.md
+
+check: docs/index.md exists as a regular file
+resolved: <project_root>/docs/index.md
+result: passed

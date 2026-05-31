@@ -438,12 +438,15 @@ def test_check_runtime_support_mode_validate_policy_emits_warning() -> None:
 
 
 def test_check_runtime_support_mode_validate_policy_warns_for_unsupported_type() -> None:
-    """Step 7: ``command`` became runtime-supported; ``json_schema``
-    remains the canonical unsupported-but-scaffolded type in Phase 1.
+    """Step 8: every Phase 1 verification_type is now runtime-supported
+    (file_exists / substring_match / command / json_schema); manual_check
+    has its own ``manual_check_required`` issue kind. We probe the
+    ``unsupported_verification_type`` branch with a synthetic value that
+    schema would reject but the runner path must still handle defensively.
     """
     report = PreflightReport()
     runnable = check_runtime_support(
-        [_make_adopted(verification_type="json_schema")],
+        [_make_adopted(verification_type="future_unsupported_type")],
         report,
         mode="validate_policy",
     )
@@ -458,7 +461,7 @@ def test_check_runtime_support_mode_validate_policy_warns_for_unsupported_type()
 def test_check_runtime_support_mode_run_blocks_unsupported_type() -> None:
     report = PreflightReport()
     runnable = check_runtime_support(
-        [_make_adopted(verification_type="json_schema")],
+        [_make_adopted(verification_type="future_unsupported_type")],
         report,
         mode="run",
     )

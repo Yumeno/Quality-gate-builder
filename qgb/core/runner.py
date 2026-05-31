@@ -28,6 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import jsonschema
+import jsonschema.exceptions
+
 from qgb.core.loader import LoaderError, resolve_project_relative
 from qgb.core.preflight import AdoptedStage
 
@@ -133,6 +136,8 @@ def _execute_one(project_root: Path, stage: AdoptedStage) -> StageResult:
         return _run_substring_match(project_root, stage)
     if stage.verification_type == "command":
         return _run_command(project_root, stage)
+    if stage.verification_type == "json_schema":
+        return _run_json_schema(project_root, stage)
     # Preflight should have caught unsupported types; this is a defensive guard.
     return StageResult(
         stage_id=stage.stage_id,
@@ -584,5 +589,294 @@ def _run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
         contract_ref=stage.contract_ref,
         result=outcome,
         exit_code=int(completed.returncode),
+        log_text="\n".join(log_lines) + "\n",
+    )
+
+
+# ---- json_schema verification_type (Step 8 項目 1) ----------------------
+
+# Codex 計画レビュー: Phase 1 では JSON Schema の $ref を意図的にサポート
+# しない。$ref が schema 内に存在したら failed として扱う。これにより
+# R1 ガード (target / schema 両方が project root 配下に閉じ込められる)
+# を ``jsonschema`` ライブラリの ref 解決経路と切り離せる。
+
+
+def _schema_contains_dollar_ref(node: object) -> bool:
+    """Recursively detect any ``$ref`` key in a parsed JSON Schema.
+
+    Phase 1 contract: ``json_schema`` verification rejects schemas that
+    use ``$ref`` (internal or external). This keeps R1 path resolution
+    the only entry point for filesystem access — the ``jsonschema``
+    library is never asked to resolve a reference.
+    """
+    if isinstance(node, dict):
+        if "$ref" in node:
+            return True
+        return any(_schema_contains_dollar_ref(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_schema_contains_dollar_ref(v) for v in node)
+    return False
+
+
+def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
+    """Execute a ``verification_type=json_schema`` stage.
+
+    Phase 1 design (Codex 計画レビュー 2026-05-31):
+
+    * ``target`` (workspace-relative) is parsed as JSON.
+    * ``schema`` (workspace-relative) is parsed as JSON and
+      validated as a JSON Schema via
+      ``jsonschema.validators.validator_for(schema).check_schema()``.
+    * Both ``target`` and ``schema`` paths go through
+      :func:`qgb.core.loader.resolve_project_relative` — escapes
+      (absolute, ``..``-relative, symlinks pointing outside) are
+      rejected as failed.
+    * ``$ref`` in the schema (internal or external) is unsupported
+      and treated as failed (see :func:`_schema_contains_dollar_ref`).
+    * Validation failures are reported as failed with the violation
+      path + message in ``log_text``.
+
+    **Phase 1 out-of-scope** (Codex 計画レビュー):
+
+    * ``$ref`` resolution (Phase 2 allowlist-based support).
+    * JSON Schema ``format`` assertions (Phase 2 strict-mode opt-in).
+    * Streaming validation / memory caps for large JSON inputs
+      (Phase 2; current implementation buffers the full target).
+    * Remote / network schema fetch (always unsupported in qgb).
+    """
+    import json as _json
+
+    contract = stage.contract
+    target = contract.get("target")
+    schema_path_str = contract.get("schema")
+
+    log_lines = [
+        f"stage_id: {stage.stage_id}",
+        f"name: {stage.name}",
+        "verification_type: json_schema",
+        f"contract_ref: {stage.contract_ref}",
+        f"target: {target}",
+        f"schema: {schema_path_str}",
+    ]
+
+    if (
+        not isinstance(target, str)
+        or not target
+        or not isinstance(schema_path_str, str)
+        or not schema_path_str
+    ):
+        log_lines.append(
+            "result: failed (contract.target or contract.schema is missing "
+            "or not a string)"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    # Resolve target under project root (R1).
+    try:
+        target_full = resolve_project_relative(
+            project_root, target, "contract.target"
+        )
+    except LoaderError as exc:
+        log_lines.append(f"result: failed ({exc.message})")
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    # Resolve schema under project root (R1).
+    try:
+        schema_full = resolve_project_relative(
+            project_root, schema_path_str, "contract.schema"
+        )
+    except LoaderError as exc:
+        log_lines.append(f"result: failed ({exc.message})")
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    # Step 8 統合レビュー W1: surface the resolved target/schema paths
+    # so the audit log matches the other runners' convention
+    # (_run_file_exists / _run_substring_match / _run_command all log
+    # ``resolved: ...`` after R1 path resolution succeeds).
+    log_lines.append(f"resolved target: {target_full}")
+    log_lines.append(f"resolved schema: {schema_full}")
+
+    if not target_full.is_file():
+        log_lines.append(
+            f"result: failed (target file does not exist: {target_full})"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    if not schema_full.is_file():
+        log_lines.append(
+            f"result: failed (schema file does not exist: {schema_full})"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    try:
+        target_data = _json.loads(target_full.read_text(encoding="utf-8"))
+    except (_json.JSONDecodeError, UnicodeDecodeError) as exc:
+        log_lines.append(
+            f"result: failed (target is not valid JSON: {exc})"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    try:
+        schema_data = _json.loads(schema_full.read_text(encoding="utf-8"))
+    except (_json.JSONDecodeError, UnicodeDecodeError) as exc:
+        log_lines.append(
+            f"result: failed (schema is not valid JSON: {exc})"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    # Phase 1: $ref unsupported. Reject before handing the schema to
+    # ``jsonschema`` so its resolver is never invoked.
+    if _schema_contains_dollar_ref(schema_data):
+        log_lines.append(
+            "result: failed ($ref in schema is unsupported in Phase 1; "
+            "see contract docs)"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    # Schema must itself be a valid JSON Schema.
+    try:
+        validator_cls = jsonschema.validators.validator_for(schema_data)
+        validator_cls.check_schema(schema_data)
+    except jsonschema.exceptions.SchemaError as exc:
+        log_lines.append(
+            f"result: failed (schema is not a valid JSON Schema: {exc.message})"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    # Phase 1: format is NOT enforced (Codex 計画レビュー方針).
+    #
+    # Step 8 統合レビュー C1: defensive try/except around validator
+    # instantiation and iter_errors. ``check_schema`` above filters out
+    # the common malformed-schema case, but the jsonschema library can
+    # still raise (unknown draft, library version drift, unexpected
+    # custom format etc.). A bare exception here would surface as a
+    # traceback in `qgb run`; treating it as a stage failure keeps
+    # auditability intact and matches the runner's contract that
+    # individual stages never crash the whole gate.
+    #
+    # Step 8 統合レビュー C2 (再): sort by the **string form** of
+    # ``absolute_path``. ``e.absolute_path`` is a deque whose elements
+    # can mix ``int`` (array index) and ``str`` (object key); Python 3
+    # refuses to compare ``int`` and ``str`` directly, so a raw
+    # ``list(e.absolute_path)`` key would raise ``TypeError`` on real
+    # schemas that have both array and object levels. Stringifying each
+    # element (``str(p) for p in e.absolute_path``) gives a deterministic
+    # ordering across runs while staying robust to mixed-type paths.
+    try:
+        validator = validator_cls(schema_data)
+        errors = sorted(
+            validator.iter_errors(target_data),
+            key=lambda e: [str(p) for p in e.absolute_path],
+        )
+    except Exception as exc:  # noqa: BLE001 - any validator error is a stage failure
+        log_lines.append(
+            f"result: failed (validator raised unexpectedly: "
+            f"{type(exc).__name__}: {exc})"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+    if not errors:
+        log_lines.append("result: passed")
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="passed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+        )
+
+    log_lines.append(f"validation errors ({len(errors)}):")
+    for err in errors:
+        path = "/" + "/".join(str(p) for p in err.absolute_path)
+        log_lines.append(f"  - {path}: {err.message}")
+    log_lines.append("result: failed (schema validation errors)")
+    return StageResult(
+        stage_id=stage.stage_id,
+        name=stage.name,
+        verification_type=stage.verification_type,
+        contract_ref=stage.contract_ref,
+        result="failed",
+        exit_code=None,
         log_text="\n".join(log_lines) + "\n",
     )

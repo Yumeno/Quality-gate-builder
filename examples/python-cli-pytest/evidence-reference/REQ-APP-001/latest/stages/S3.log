@@ -1,0 +1,11 @@
+stage_id: S3
+name: README に install 手順が書かれている
+verification_type: substring_match
+contract_ref: .quality-system/contracts/REQ-APP-001/S3.json
+target: README.md
+must_contain: ['Installation']
+
+check: every entry of must_contain[] occurs in target file
+resolved: <project_root>/README.md
+- 'Installation': found at char offset 165
+result: passed

@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "name": "markdown-docs"
+  },
+  "qgb": {
+    "core_language": "generic",
+    "version": "0.1.0"
+  },
+  "commands": {}
+}

@@ -1,0 +1,11 @@
+stage_id: S2
+name: index ページに H1 ヘッダがある
+verification_type: substring_match
+contract_ref: .quality-system/contracts/REQ-DOC-001/S2.json
+target: docs/index.md
+must_contain: ['# ']
+
+check: every entry of must_contain[] occurs in target file
+resolved: <project_root>/docs/index.md
+- '# ': found at char offset 0
+result: passed

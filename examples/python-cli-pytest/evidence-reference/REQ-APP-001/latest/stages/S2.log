@@ -1,0 +1,26 @@
+stage_id: S2
+name: demo_cli --help が exit 0 を返す
+verification_type: command
+contract_ref: .quality-system/contracts/REQ-APP-001/S2.json
+command: ['python', '-m', 'demo_cli', '--help']
+expected_exit_code: 0
+timeout_seconds: 30
+resolved cwd: <project_root>
+
+--- execution ---
+exit_code: 0
+stdout (full):
+usage: demo_cli [-h] <command> ...
+
+Minimal demo CLI used by examples/python-cli-pytest.
+
+positional arguments:
+  <command>
+    greet     print a greeting
+
+options:
+  -h, --help  show this help message and exit
+
+stderr (full):
+
+result: passed

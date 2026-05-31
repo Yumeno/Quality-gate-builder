@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-APP-001",
+  "title": "demo_cli が起動し、テストが通り、install 手順が書かれている",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S1.json",
+      "required": true
+    },
+    {
+      "stage_id": "S2",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S2.json",
+      "required": true
+    },
+    {
+      "stage_id": "S3",
+      "contract_ref": ".quality-system/contracts/REQ-APP-001/S3.json",
+      "required": true
+    }
+  ]
+}

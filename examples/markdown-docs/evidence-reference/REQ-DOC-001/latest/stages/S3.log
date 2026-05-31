@@ -1,0 +1,7 @@
+stage_id: S3
+name: metadata が schema に従う
+verification_type: json_schema
+contract_ref: .quality-system/contracts/REQ-DOC-001/S3.json
+target: docs/metadata.json
+schema: schemas/metadata.schema.json
+result: passed

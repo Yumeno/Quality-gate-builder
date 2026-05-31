@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-APP-001",
+  "stage_id": "S1",
+  "verification_type": "command",
+  "command": ["python", "-m", "pytest", "-q"],
+  "expected_exit_code": 0,
+  "timeout_seconds": 60
+}
