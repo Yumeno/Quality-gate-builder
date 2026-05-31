@@ -311,9 +311,9 @@ def write_evidence(
     run_dir, run_id = _reserve_run_dir(artifacts, timestamps)
     (run_dir / "stages").mkdir(parents=False, exist_ok=False)
 
-    curated_dir = qs / "evidence" / req_id / "latest"
-    curated_dir.mkdir(parents=True, exist_ok=True)
-    (curated_dir / "stages").mkdir(parents=True, exist_ok=True)
+    curated_root = qs / "evidence" / req_id
+    curated_root.mkdir(parents=True, exist_ok=True)
+    curated_dir = curated_root / "latest"
 
     # Paths recorded *inside* gate.json are project-relative POSIX strings.
     run_dir_rel = (
@@ -338,7 +338,8 @@ def write_evidence(
     gate_text = json.dumps(gate, ensure_ascii=False, indent=2) + "\n"
     summary_text = build_summary_md(gate)
 
-    # Volatile copy.
+    # Volatile copy. Run dir is exclusively owned (reserved by run_id), so
+    # direct writes are safe.
     (run_dir / "gate.json").write_text(gate_text, encoding="utf-8")
     (run_dir / "summary.md").write_text(summary_text, encoding="utf-8")
     for r in results:
@@ -346,15 +347,20 @@ def write_evidence(
             r.log_text, encoding="utf-8"
         )
 
-    # Curated copy. Clear stage logs first so a leftover log from a removed
-    # stage cannot survive into a new run.
-    _replace_dir_contents(curated_dir / "stages")
-    (curated_dir / "gate.json").write_text(gate_text, encoding="utf-8")
-    (curated_dir / "summary.md").write_text(summary_text, encoding="utf-8")
-    for r in results:
-        (curated_dir / "stages" / f"{r.stage_id}.log").write_text(
-            r.log_text, encoding="utf-8"
-        )
+    # Curated copy: atomic swap (Step 6b 項目 2 / Codex Step 5 M4/M5).
+    # Stage the full payload into a sibling tmp dir, then swap it into
+    # place. This guarantees the curated/latest/ tree is observed only in
+    # a consistent state (or absent), never half-written, and that a
+    # mid-write failure leaves the previous latest/ intact rather than
+    # destroyed (no "stages empty + old gate.json" window, no broken
+    # curated/ on Ctrl+C / power loss).
+    _atomic_swap_curated(
+        curated_root=curated_root,
+        run_id=run_id,
+        gate_text=gate_text,
+        summary_text=summary_text,
+        stage_logs=[(r.stage_id, r.log_text) for r in results],
+    )
 
     _prune_runs(artifacts, _resolve_keep_runs(keep_runs))
 
@@ -402,15 +408,127 @@ def _prune_runs(runs_dir: Path, keep: int) -> None:
         shutil.rmtree(victim, ignore_errors=True)
 
 
-def _replace_dir_contents(target: Path) -> None:
-    if target.exists() and target.is_dir():
-        for entry in target.iterdir():
-            if entry.is_dir():
-                shutil.rmtree(entry, ignore_errors=True)
-            else:
-                try:
-                    entry.unlink()
-                except OSError:
-                    pass
-    else:
-        target.mkdir(parents=True, exist_ok=True)
+def _recover_orphan_latest(curated_root: Path) -> None:
+    """Codex 補修 (Medium 2): startup-time recovery for crash-mid-swap.
+
+    If a previous run was killed between step 2 (``latest`` → ``latest.old-X``)
+    and step 3 (``latest.tmp-Y`` → ``latest``), the on-disk state is:
+
+    * ``latest/`` absent
+    * one or more ``latest.old-*`` directories present (the last known good)
+
+    Without recovery, the next ``qgb run`` would still produce a fresh
+    ``latest/``, but any failure during *its* staging would leave the
+    user without curated evidence — even though a recoverable copy
+    exists on disk. Promote the most recent ``latest.old-*`` back to
+    ``latest/`` before staging so we always have a fallback.
+
+    If multiple ``latest.old-*`` exist, the lexically largest is taken
+    as "most recent" — ``run_id`` is a per-second hex counter, so within
+    a tight time window this is monotonic enough for the rare crash case.
+    Older orphans are deleted.
+    """
+    final_dir = curated_root / "latest"
+    if final_dir.exists():
+        return
+    orphans = sorted(
+        p for p in curated_root.iterdir()
+        if p.is_dir() and p.name.startswith("latest.old-")
+    )
+    if not orphans:
+        return
+    winner = orphans[-1]
+    os.replace(winner, final_dir)
+    for victim in orphans[:-1]:
+        shutil.rmtree(victim, ignore_errors=True)
+
+
+def _atomic_swap_curated(
+    *,
+    curated_root: Path,
+    run_id: str,
+    gate_text: str,
+    summary_text: str,
+    stage_logs: list[tuple[str, str]],
+) -> None:
+    """Atomically replace ``curated_root/latest/`` with a freshly-written tree.
+
+    The sequence is:
+
+    0. Recover from a previous mid-swap crash: if ``latest/`` is absent
+       but ``latest.old-*`` is present, restore the most recent old as
+       ``latest/`` first.
+    1. Write the full payload (``gate.json`` + ``summary.md`` +
+       ``stages/<id>.log``) into ``curated_root/latest.tmp-<run_id>/``.
+    2. If ``curated_root/latest/`` already exists, rename it to
+       ``curated_root/latest.old-<run_id>/``.
+    3. Rename ``latest.tmp-<run_id>/`` to ``latest/``.
+    4. Best-effort delete ``latest.old-<run_id>/``.
+
+    The only window where ``latest/`` is absent is between step 2 and 3,
+    and during that window the content that *will* appear in ``latest/``
+    is already fully written on disk. Readers therefore observe either
+    "absent" or "fully consistent", never "partial".
+
+    On any failure in step 1, ``latest/`` is untouched and the half-written
+    tmp tree is left for inspection (Codex Step 5 M4/M5 rationale: silent
+    cleanup hides bugs; explicit residue lets a follow-up ``qgb run``
+    overwrite it with the next run_id).
+
+    **Out of scope for Phase 1:** durability across power loss (no
+    ``fsync()`` on files / parent dir) and multi-writer concurrency (no
+    interprocess lock). Phase 1's contract is single-writer crash
+    consistency at the rename layer; readers see either old or new but
+    never a partially-built tree. See Codex review note for Phase 2
+    durability hardening.
+
+    **Windows note (NF-004):** if an external process (PowerShell host,
+    editor, indexer, AV scanner) holds an open handle to a file under
+    ``latest/``, step 2 may raise ``PermissionError``. The previous
+    ``latest/`` is preserved in that case because the swap aborts before
+    moving anything; the staged ``latest.tmp-<run_id>/`` is left on disk
+    for the next run or for manual inspection.
+    """
+    tmp_dir = curated_root / f"latest.tmp-{run_id}"
+    old_dir = curated_root / f"latest.old-{run_id}"
+    final_dir = curated_root / "latest"
+
+    # 0. Recover from a previous mid-swap crash before staging anything new.
+    _recover_orphan_latest(curated_root)
+
+    # If a previous interrupted run left a stale tmp at the same run_id,
+    # blow it away first; the new run owns this run_id now.
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # 1. Stage the full payload into the tmp dir.
+    (tmp_dir / "stages").mkdir(parents=True, exist_ok=False)
+    (tmp_dir / "gate.json").write_text(gate_text, encoding="utf-8")
+    (tmp_dir / "summary.md").write_text(summary_text, encoding="utf-8")
+    for stage_id, log_text in stage_logs:
+        (tmp_dir / "stages" / f"{stage_id}.log").write_text(
+            log_text, encoding="utf-8"
+        )
+
+    # 2. Move the existing latest aside (no-op if it does not exist).
+    if final_dir.exists():
+        # If an old.<run_id> already exists from a botched prior swap,
+        # remove it first so the rename can succeed.
+        if old_dir.exists():
+            shutil.rmtree(old_dir, ignore_errors=True)
+        os.replace(final_dir, old_dir)
+
+    # 3. Swap the staged tmp into place.
+    try:
+        os.replace(tmp_dir, final_dir)
+    except OSError:
+        # The swap failed after we already moved the previous latest
+        # aside. Restore the previous latest so we never leave the user
+        # without curated evidence.
+        if old_dir.exists() and not final_dir.exists():
+            os.replace(old_dir, final_dir)
+        raise
+
+    # 4. Best-effort cleanup of the now-orphaned previous tree.
+    if old_dir.exists():
+        shutil.rmtree(old_dir, ignore_errors=True)
