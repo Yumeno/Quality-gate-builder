@@ -124,3 +124,4 @@ TDD mode is the only exception where DENY is an *expected* state: `gate.json.pha
 - Don't scaffold `qgb/` directories speculatively. Build the pieces a task actually needs, with their tests, end-to-end.
 - Section headers and tables in the spec are written in Japanese; preserve that language for user-facing Japanese docs and keep code/identifiers/CLI output in English unless a spec section says otherwise.
 - Acceptance criteria for Phase 1 are enumerated in §12 (items 1–15). Use that list as the checklist when judging "is Phase 1 done."
+- **Before building any Codex review context or concatenating multiple files into one** — read auto-memory `codex-context-files.md` first. `cat >> file` / heredoc / subshell-redirect always hit a permission prompt; the correct flow is Read + Write tool into `C:\Users\vz7a-\AppData\Local\Temp\codex_ctx_*.txt`. Forgetting this stalls work for several turns.
