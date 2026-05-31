@@ -68,6 +68,11 @@
         "meaning": {
           "type": "string",
           "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Step 6+7 統合レビュー RA2: project-local P11 framing (judgement scope). 'meaning' is kept verbatim per F-016; 'scope' carries the P11 annotation as a separate field so exact-match consumers of meaning are not broken."
         }
       }
     },
@@ -139,6 +144,15 @@
           "log_ref": {
             "type": "string",
             "minLength": 1
+          },
+          "synthetic": {
+            "type": "boolean",
+            "description": "Step 6+7 統合レビュー RA1: true when the evidence builder synthesised this entry because the runner produced no result for the adopted stage. Distinguishes runner-integrity gaps from normal stage failures."
+          },
+          "synthetic_reason": {
+            "type": "string",
+            "enum": ["missing_result_for_adopted_stage"],
+            "description": "Step 6+7 統合レビュー RA1: required when synthetic=true; identifies why the entry was synthesised."
           }
         }
       }

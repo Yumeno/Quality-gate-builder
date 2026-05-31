@@ -1090,8 +1090,12 @@ def build_parser() -> QgbArgumentParser:
         default="verify",
         choices=["red", "green", "refactor", "verify"],
         help=(
-            "TDD phase tag recorded in gate.json. Phase 1 wires only 'verify' "
-            "semantics; 'red' expected-failure handling is Step 7."
+            "TDD phase tag recorded in gate.json. All four phases (red / "
+            "green / refactor / verify) emit phase-specific decision.meaning "
+            "wording (F-016): phase=red treats DENY as the expected failure "
+            "of an un-implemented test, and ALLOW under phase=red is flagged "
+            "as 'unexpected pass'. The CLI exit code is aligned with status "
+            "(ALLOW=0, DENY=1) regardless of phase."
         ),
     )
     run_p.add_argument(

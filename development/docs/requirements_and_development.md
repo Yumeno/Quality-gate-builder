@@ -439,6 +439,22 @@ Phase 1 で対応する検査種別：
 
 `waived` メタ：本来必要な段階を理由つきで免除する場合、段階に `waived: true` と `waiver_reason` を付与する。waived 段階は判定対象から除外される。免除判断は `knowledge.jsonl` に記録する。
 
+##### Phase 1 における waiver の audit semantics (Step 6+7 統合レビュー Codex A4/A8 反映)
+
+Phase 1 では waiver は次の意味を持つ。Step 7 実装 + 統合レビューを経て確定:
+
+1. **判定対象除外は人間判断**: waived 段階は decision の判定母集団から除外される。これは「人間が判断して除外した」と明示的に記録された判断であり、自動評価の弱い証拠ではない。
+2. **再評価は行わない**: waived とした段階は、その contract が指すファイルや対象コードが変更されても再評価しない。要件§F-007 通り「判定対象から除外」を文字通り適用する。これは思想 **P3 (コードの同一性を保証しない)** と外見上緊張するが、F-007 が「人間判断による除外」を許す設計であることと一貫している。
+3. **gate.json の basis は snapshot reference**: `gate.json.basis[]` に書かれた `KNOWLEDGE-WAIVER-<REQ>-<stage>` は run 時点での knowledge.jsonl エントリへの snapshot reference であり、live link ではない。後から knowledge.jsonl を手編集して waiver エントリを削除しても、過去の gate.json は更新されない (gate.json は不変監査記録、knowledge.jsonl は live state)。
+4. **waiver の更新・削除は手動操作**: 更新したい場合は knowledge.jsonl の reason を編集し、(削除なら) REQ.meta.json の waived フラグも外して、`qgb run` を再実行する。再実行で新しい gate.json が新しい状態を反映する。
+
+**Phase 2 で検討する拡張** (Phase 1 では out-of-scope):
+
+- waiver の expiry / 有効期限
+- contract hash による「waived 後の contract 変更検知」
+- 過去の gate.json と現在の knowledge.jsonl の orphan 検証 CLI
+- `qgb add-waiver` / `qgb rm-waiver` の専用 CLI
+
 #### F-008: 採用判定の入口は `qgb run` 単一
 
 採用判定の実行入口は `qgb run` のみとする：

@@ -31,11 +31,12 @@ revisions do not silently relax the rules):
 * Adapters do not parse shebangs.
 * Adapters do not return multiple framework / test_runner candidates;
   the most likely one is picked, others are not exposed.
-* Adapters do not normalise filename case (Codex 補修 8: Windows
-  filesystems are typically case-insensitive but ``Path.suffix`` is a
-  literal string match; loose ``.PY`` will not be recognised as
-  Python. Phase 1 assumes lowercase conventions; Phase 2 may add
-  case-fold matching).
+* Adapters normalise filename **extensions** to lowercase before
+  comparison (Step 6+7 統合レビュー A3): a top-level ``Script.PY`` is
+  treated as Python even on case-insensitive filesystems (Windows /
+  macOS HFS+). Bare filename casing (e.g. ``Pyproject.toml`` vs
+  ``pyproject.toml``) is **not** normalised; adapters trust the
+  filesystem's own case-folding for non-extension names.
 * ``confidence`` is a **heuristic ranking score**, not a probability.
   It is used to rank multiple matching adapters; it does not represent
   a calibrated belief.

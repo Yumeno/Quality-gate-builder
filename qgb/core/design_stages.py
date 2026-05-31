@@ -41,6 +41,7 @@ from typing import Any
 
 from qgb.adapters.base import DetectionResult
 from qgb.core.detect import run_detect
+from qgb.core.preflight import validate_policy_preflight
 
 # Phase 1 templates live in the repo's examples/ tree, located by walking
 # up from this file.
@@ -109,6 +110,14 @@ def _pick_template(_detect_result: DetectionResult) -> str:
 
 
 def _load_template_stages(template_name: str) -> list[StageProposal]:
+    """Load and shape-validate a template's policy.json stages.
+
+    Codex A5: the template may have been hand-edited or shipped from a
+    plug-in source in Phase 2, so a malformed entry must surface as a
+    descriptive ``ValueError`` rather than a bare ``KeyError`` mid-load.
+    This mirrors the defensive shape check ``qgb/core/scaffold.py``
+    added in Step 6d for the project-side policy (Codex 補修 5).
+    """
     template_path = (
         _TEMPLATES_DIR
         / template_name
@@ -122,7 +131,18 @@ def _load_template_stages(template_name: str) -> list[StageProposal]:
     payload = json.loads(template_path.read_text(encoding="utf-8"))
     raw_stages = payload.get("stages", [])
     out: list[StageProposal] = []
-    for raw in raw_stages:
+    for idx, raw in enumerate(raw_stages):
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"design-stages template {template_name!r}: "
+                f"stages[{idx}] is not an object"
+            )
+        for required_key in ("id", "name", "verification_type"):
+            if required_key not in raw:
+                raise ValueError(
+                    f"design-stages template {template_name!r}: "
+                    f"stages[{idx}] is missing required key {required_key!r}"
+                )
         out.append(
             StageProposal(
                 id=raw["id"],
@@ -218,8 +238,6 @@ def commit_design(
     )
 
     # Validate the staged tree.
-    from qgb.core.preflight import validate_policy_preflight
-
     report = validate_policy_preflight(staging_root, None)
     if report.has_blockers():
         blockers = [

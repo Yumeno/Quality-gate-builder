@@ -181,12 +181,44 @@ def build_gate_document(
     run_dir_rel: str,
     curated_latest_rel: str,
 ) -> dict[str, Any]:
-    """Assemble the dict that becomes gate.json (both copies)."""
+    """Assemble the dict that becomes gate.json (both copies).
+
+    Step 6+7 統合レビュー補修 (Codex A6): if the runner produced no
+    result for an adopted stage (which should not happen in normal
+    operation but could appear after refactors or partial failures),
+    we **must not** silently drop the stage from ``stages_payload``.
+    Dropping it would leave gate.json with fewer stages than were
+    adopted, breaking the "every adopted stage is judgement material"
+    contract and confusing auditors. Instead, we synthesise a
+    ``result=failed`` entry naming the missing stage so the gate
+    evidence is internally consistent and the failure is visible.
+    """
     stages_payload: list[dict[str, Any]] = []
     results_by_id = {r.stage_id: r for r in results}
     for stage in adopted:
         r = results_by_id.get(stage.stage_id)
         if r is None:
+            # Step 6+7 統合レビュー RA1: distinguish runner-integrity
+            # failure from a normal stage failure. ``synthetic: true`` +
+            # ``synthetic_reason`` lets an auditor see that the missing
+            # result is an internal evidence gap (the runner did not
+            # produce a result for an adopted stage) rather than a
+            # legitimate failed check. ``schema_version: 1.0`` of
+            # gate.json allows additional properties so this is
+            # backward-compatible.
+            stages_payload.append(
+                {
+                    "id": stage.stage_id,
+                    "name": stage.name,
+                    "result": "failed",
+                    "verification_type": stage.verification_type,
+                    "exit_code": None,
+                    "contract_ref": stage.contract_ref,
+                    "log_ref": f"stages/{stage.stage_id}.log",
+                    "synthetic": True,
+                    "synthetic_reason": "missing_result_for_adopted_stage",
+                }
+            )
             continue
         stages_payload.append(
             {
@@ -212,6 +244,12 @@ def build_gate_document(
         "decision": {
             "result": decision.status,
             "meaning": decision.meaning,
+            # Codex RA2: ``scope`` keeps ``meaning`` strictly verbatim
+            # per F-016 by hoisting the project-local (P11) note out of
+            # the meaning string. Exact-match consumers of ``meaning``
+            # are unaffected; auditors reading ``decision.scope`` see
+            # the P11 framing.
+            "scope": decision.scope,
         },
         "runner": {"name": "qgb", "version": __version__},
         "paths": {
@@ -273,9 +311,17 @@ def build_summary_md(gate: dict[str, Any]) -> str:
     lines.append("")
     if status == "ALLOW":
         lines.append("すべての必須段階が通過したため、status=ALLOW。")
-    else:
+    elif gate["failed_stage"]:
         lines.append(
             f"必須段階 `{gate['failed_stage']}` が failed のため、status=DENY。"
+        )
+    else:
+        # Step 6+7 統合レビュー (Codex A9): all-waived DENY. No stage
+        # actually failed — the REQ simply has no judgement material
+        # because every adopted stage was waived. Avoid the misleading
+        # "stage `` が failed" wording.
+        lines.append(
+            "すべての必須段階が waived のため判定対象が存在せず、status=DENY。"
         )
     lines.append("")
     lines.append("## 採用根拠 (basis)")
@@ -418,6 +464,29 @@ def _record_waiver_knowledge(
     for ``kind: waiver``: ``id``, ``kind``, ``title``, ``source_type``,
     ``created_at``, plus the waiver-specific ``stage_id`` / ``reason`` /
     ``decided_by`` / ``applies_to`` block.
+
+    **Phase 1 audit semantics** (Step 6+7 統合レビュー Codex A4, A8):
+
+    * The ``KNOWLEDGE-WAIVER-<REQ>-<stage>`` row that ``build_basis``
+      adds to ``gate.json#basis`` is a **snapshot reference** to this
+      file at run time. It is not a live link. If a user hand-edits
+      ``knowledge.jsonl`` to remove a waiver entry after the gate was
+      written, the historical ``gate.json`` is **not** updated and
+      the basis row will reference an id that no longer exists.
+      Phase 1 treats ``gate.json`` as the immutable audit record and
+      ``knowledge.jsonl`` as the live state; the user is responsible
+      for not destroying audit history by removing waivers.
+    * Waived stages are **not** re-evaluated if their underlying
+      contract / target file changes (Step 6+7 統合レビュー A8). This
+      is in alignment with requirements §F-007 ("waived 段階は判定対象
+      から除外される") and the philosophy of explicit human-recorded
+      decisions. Phase 2 may add waiver expiry, contract hash
+      checksums, or revalidation policies; Phase 1 does not.
+    * Updating a waiver's reason or removing a waiver in Phase 1 is a
+      manual operation: edit ``knowledge.jsonl`` (and the matching
+      ``REQ.meta.json`` if removing the waiver entirely), then re-run
+      ``qgb run`` so a new ``gate.json`` is written that reflects the
+      new state.
     """
     waived_stages = [s for s in adopted if s.waived]
     if not waived_stages:

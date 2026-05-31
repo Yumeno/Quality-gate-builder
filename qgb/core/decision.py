@@ -50,13 +50,30 @@ from qgb.core.runner import StageResult
 Status = Literal["ALLOW", "DENY"]
 
 
+# Codex RA2: keep ``decision.meaning`` strictly verbatim per F-016 so any
+# downstream consumer that exact-matches this string is not broken. The
+# project-local note (P11) is exposed separately as ``decision.scope``.
+_DECISION_SCOPE_NOTE = (
+    "Judgement is local to this project's policy/contracts and is not "
+    "comparable across projects (P11)."
+)
+
+
 @dataclass(frozen=True)
 class Decision:
-    """ALLOW/DENY judgement plus the failing stage id (or empty)."""
+    """ALLOW/DENY judgement plus the failing stage id (or empty).
+
+    Step 6+7 統合レビュー (Codex RA2): ``meaning`` stays strictly
+    verbatim per F-016 so exact-match consumers are not silently
+    broken. The project-local note (P11) lives in ``scope`` as a
+    separate field; ``gate.json#/decision/scope`` is emitted alongside
+    ``decision.result`` / ``decision.meaning``.
+    """
 
     status: Status
     failed_stage: str
     meaning: str
+    scope: str = _DECISION_SCOPE_NOTE
 
 
 # Per-phase ``decision.meaning`` strings. Wired to F-016 Step 7.
@@ -148,6 +165,9 @@ def decide(
 
     if failed_first:
         status: Status = "DENY"
+        # Codex A7: defensive postcondition. DENY with a non-empty
+        # failed_first means at least one stage was inspected and
+        # failed; nothing more to assert here.
     elif judgement_passed == 0:
         # Every adopted stage was waived (or none at all). Phase 1 does
         # not emit ALLOW with no judgement material — the user must
@@ -167,6 +187,19 @@ def decide(
         status = "ALLOW"
 
     meaning_by_status = _MEANING_BY_PHASE.get(phase, _MEANING_BY_PHASE["verify"])
+
+    # Codex A7: defensive postcondition. ``status=ALLOW`` must always be
+    # backed by at least one non-waived passed stage. The branches above
+    # already guarantee this, but the assert protects against a future
+    # refactor that introduces a bypass path. Schema-side enforcement
+    # (gate.schema.json#allOf for ALLOW + contains: passed) is the
+    # second line of defense; this in-process check catches the
+    # condition before evidence is even written.
+    if status == "ALLOW":
+        assert judgement_passed > 0, (
+            f"decide() postcondition: ALLOW requires judgement_passed > 0, "
+            f"got {judgement_passed}"
+        )
     return Decision(
         status=status,
         failed_stage=failed_first,

@@ -39,7 +39,7 @@ universal list; the python-specific ones are):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from qgb.adapters.base import (
@@ -99,11 +99,11 @@ class _Signals:
     loose_py_count: int = 0
     framework: str | None = None
     test_runner: str | None = None
-    evidence: list[DetectionEvidence] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        if self.evidence is None:
-            self.evidence = []
+    # Codex A12: use ``field(default_factory=list)`` instead of the
+    # ``None`` + ``__post_init__`` shim. The shim required a ``type:
+    # ignore[assignment]`` because the declared type ``list[...]`` did
+    # not allow ``None``; the new form is honest to the type checker.
+    evidence: list[DetectionEvidence] = field(default_factory=list)
 
     def any_marker(self) -> bool:
         return (
@@ -173,11 +173,17 @@ class PythonAdapter(BaseAdapter):
                 sig.has_requirements = True
 
         # Loose ``*.py`` at top level (excluding hidden / excluded dirs
-        # by virtue of iterating only the root).
+        # by virtue of iterating only the root). Codex A3: lower-case
+        # the suffix so case-insensitive filesystems (Windows by
+        # default, macOS HFS+) also pick up ``Script.PY`` / ``Main.Py``.
         loose_py = [
             p
             for p in project_root.iterdir()
-            if p.is_file() and p.suffix == ".py" and not p.name.startswith(".")
+            if (
+                p.is_file()
+                and p.suffix.lower() == ".py"
+                and not p.name.startswith(".")
+            )
         ]
         sig.loose_py_count = len(loose_py)
         if sig.loose_py_count >= 2:
