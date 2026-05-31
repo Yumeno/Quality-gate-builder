@@ -20,12 +20,23 @@ Optional-stage semantics (e.g. "advisory checks") and waivers belong
 to Phase 2 (knowledge integration); the schema-level rejection makes
 sure Phase 1 designers can't write a misleading half-state.
 
-Out of scope here (handled by ``preflight`` and Step 7):
+Out of scope here (handled by ``preflight``):
 
 * NOT_READY conditions (no REQ, missing contract, manual_check, etc.) are
   decided before the runner is called.
-* TDD phase=red expected-failure semantics will compose with this function
-  in Step 7; for now ``decision.meaning`` is chosen per-phase by callers.
+
+Step 7 added per-phase ``decision.meaning`` semantics:
+
+* ``phase=red`` + DENY → "expected failure" wording
+* ``phase=red`` + ALLOW → "unexpected pass" wording (suspicious; the new
+  test should have failed)
+* ``phase=verify`` + DENY → "signal to revise" wording (DENY is data,
+  not a project verdict)
+* ``phase=green/refactor`` → neutral implementation / refactor wording
+
+The CLI keeps exit codes aligned with ``status`` regardless of phase
+(ALLOW=0, DENY=1), so CI scripts can read either side without
+special-casing phase=red.
 """
 
 from __future__ import annotations
@@ -48,26 +59,57 @@ class Decision:
     meaning: str
 
 
-# Per-phase ``decision.meaning`` strings. Phase 1 only emits ``verify``;
-# Step 7 will widen this when red/green/refactor are exposed.
+# Per-phase ``decision.meaning`` strings. Wired to F-016 Step 7.
+#
+# Design notes (Codex 計画レビュー):
+#
+# * ``phase=red`` is the TDD red step: a failing test was just added and
+#   the code is not yet implemented. DENY here is **expected** — the
+#   meaning says so explicitly. ALLOW under phase=red is suspicious
+#   (the new test should fail) and the meaning calls that out as
+#   "unexpected pass" so an automated reader can flag it for review.
+# * ``phase=green`` and ``phase=refactor`` use neutral implementation /
+#   refactor wording. A DENY here is a normal failure.
+# * ``phase=verify`` is the default for ad-hoc runs and uses
+#   "revision signal" wording from F-016 instead of treating DENY as
+#   a "failure" of the project.
+# * Exit codes (in qgb/cli.py) are kept aligned with ``status``: ALLOW=0,
+#   DENY=1 regardless of phase. The phase only changes what the gate
+#   *means*, not what the CLI returns. This avoids CI scripts having
+#   to special-case phase=red to read both exit code and gate.json.
 _MEANING_BY_PHASE: dict[str, dict[Status, str]] = {
     "verify": {
         "ALLOW": "Defined checks passed. This is not proof of total correctness.",
-        "DENY": "At least one required check failed. This is not a project-wide quality verdict.",
+        "DENY": (
+            "Defined checks did not pass. This is not a failure but a "
+            "signal to revise."
+        ),
     },
     "green": {
-        "ALLOW": "Implementation phase: defined checks passed.",
-        "DENY": "Implementation phase: at least one required check failed.",
+        "ALLOW": (
+            "Required checks passed against the freshly implemented code."
+        ),
+        "DENY": (
+            "Implementation phase: at least one required check failed."
+        ),
     },
     "refactor": {
-        "ALLOW": "Refactor phase: defined checks continued to pass.",
-        "DENY": "Refactor phase: at least one previously-passing check regressed.",
+        "ALLOW": (
+            "Refactor phase: required checks remained passing after refactor."
+        ),
+        "DENY": (
+            "Refactor phase: at least one previously-passing check regressed."
+        ),
     },
     "red": {
-        # Step 7 will override this; in Phase 1 we keep the same wording as
-        # verify so an accidental --phase red still produces a sensible gate.
-        "ALLOW": "Defined checks passed. This is not proof of total correctness.",
-        "DENY": "At least one required check failed. This is not a project-wide quality verdict.",
+        "ALLOW": (
+            "Unexpected pass: phase=red expected the new test to fail before "
+            "implementation. Inspect whether the test actually exercises the "
+            "intended behaviour."
+        ),
+        "DENY": (
+            "The required test fails as expected before implementation."
+        ),
     },
 }
 
@@ -79,19 +121,51 @@ def decide(
 ) -> Decision:
     """Return the ALLOW/DENY decision over the executed stages.
 
-    Every adopted stage participates in the judgement: an ALLOW gate must
-    have every stage's ``result == passed`` (this matches the curated
-    gate.schema.json's ``allOf`` constraint).
+    Every non-waived adopted stage participates in the judgement: an
+    ALLOW gate must have every such stage's ``result == passed`` (this
+    matches the curated gate.schema.json's ``allOf`` constraint).
+
+    Step 7 D: waived stages are excluded from the judgement entirely
+    (their ``result`` is ``"waived"``, never ``"passed"``). A REQ whose
+    adopted stages are *all* waived produces ``DENY`` rather than
+    ALLOW — Phase 1 refuses to treat "no judgement material" as ALLOW
+    because the curated gate's ALLOW semantics require at least one
+    passed required check (philosophy P1 / P5: ALLOW must mean
+    "defined required checks passed", not "nothing was checked").
     """
     results_by_id = {r.stage_id: r for r in results}
     failed_first = ""
+    judgement_passed = 0
     for stage in adopted:
         result = results_by_id.get(stage.stage_id)
+        # Waived stages are excluded from judgement.
+        if result is not None and result.result == "waived":
+            continue
         if result is None or result.result != "passed":
             failed_first = stage.stage_id
             break
+        judgement_passed += 1
 
-    status: Status = "ALLOW" if not failed_first else "DENY"
+    if failed_first:
+        status: Status = "DENY"
+    elif judgement_passed == 0:
+        # Every adopted stage was waived (or none at all). Phase 1 does
+        # not emit ALLOW with no judgement material — the user must
+        # remove the waivers or accept a DENY signal that the REQ has
+        # no automatic basis.
+        #
+        # Step 7 補修 (Codex 5): ``failed_stage`` stays empty here. It
+        # used to be set to ``adopted[0].stage_id``, but that pointed
+        # at a *waived* stage and made gate.json look like the waived
+        # stage was the reason for DENY. The reason is "no judgement
+        # material", which is a REQ-level condition, not a stage-level
+        # one; surfacing a stage id would mislead automation that
+        # reads ``failed_stage`` to locate the actual failure.
+        status = "DENY"
+        failed_first = ""
+    else:
+        status = "ALLOW"
+
     meaning_by_status = _MEANING_BY_PHASE.get(phase, _MEANING_BY_PHASE["verify"])
     return Decision(
         status=status,

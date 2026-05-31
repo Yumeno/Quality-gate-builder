@@ -114,7 +114,8 @@
           "name": { "type": "string", "minLength": 1 },
           "result": {
             "type": "string",
-            "enum": ["passed", "failed"]
+            "enum": ["passed", "failed", "waived"],
+            "description": "Step 7: 'waived' indicates the stage was explicitly waived by REQ meta and excluded from judgement. An ALLOW gate is allowed to contain waived stages alongside passed ones, but every non-waived stage must be passed."
           },
           "verification_type": {
             "type": "string",
@@ -151,7 +152,7 @@
   },
   "allOf": [
     {
-      "description": "ALLOW: failed_stage must be empty, decision.result must be ALLOW, every stage must have result=passed.",
+      "description": "ALLOW: failed_stage must be empty, decision.result must be ALLOW, every non-waived stage must have result=passed, and at least one passed stage must exist (Step 7: ALLOW with all stages waived is forbidden).",
       "if": {
         "properties": { "status": { "const": "ALLOW" } },
         "required": ["status"]
@@ -164,14 +165,20 @@
           "failed_stage": { "const": "" },
           "stages": {
             "items": {
-              "properties": { "result": { "const": "passed" } }
+              "properties": {
+                "result": { "enum": ["passed", "waived"] }
+              }
+            },
+            "contains": {
+              "properties": { "result": { "const": "passed" } },
+              "required": ["result"]
             }
           }
         }
       }
     },
     {
-      "description": "DENY: failed_stage must be non-empty, decision.result must be DENY, at least one stage must have result=failed.",
+      "description": "DENY: decision.result must be DENY. Either a stage actually failed (failed_stage non-empty, at least one stage.result=failed) OR every adopted stage is waived (failed_stage empty, no stages.result=failed) — the latter is Step 7's 'no judgement material' branch.",
       "if": {
         "properties": { "status": { "const": "DENY" } },
         "required": ["status"]
@@ -180,15 +187,33 @@
         "properties": {
           "decision": {
             "properties": { "result": { "const": "DENY" } }
+          }
+        },
+        "oneOf": [
+          {
+            "description": "Normal DENY: a stage failed.",
+            "properties": {
+              "failed_stage": { "minLength": 1 },
+              "stages": {
+                "contains": {
+                  "properties": { "result": { "const": "failed" } },
+                  "required": ["result"]
+                }
+              }
+            }
           },
-          "failed_stage": { "minLength": 1 },
-          "stages": {
-            "contains": {
-              "properties": { "result": { "const": "failed" } },
-              "required": ["result"]
+          {
+            "description": "All-waived DENY (Step 7): no judgement material. failed_stage is empty and no stage has result=failed.",
+            "properties": {
+              "failed_stage": { "const": "" },
+              "stages": {
+                "items": {
+                  "properties": { "result": { "const": "waived" } }
+                }
+              }
             }
           }
-        }
+        ]
       }
     }
   ]

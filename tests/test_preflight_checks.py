@@ -438,9 +438,12 @@ def test_check_runtime_support_mode_validate_policy_emits_warning() -> None:
 
 
 def test_check_runtime_support_mode_validate_policy_warns_for_unsupported_type() -> None:
+    """Step 7: ``command`` became runtime-supported; ``json_schema``
+    remains the canonical unsupported-but-scaffolded type in Phase 1.
+    """
     report = PreflightReport()
     runnable = check_runtime_support(
-        [_make_adopted(verification_type="command")],
+        [_make_adopted(verification_type="json_schema")],
         report,
         mode="validate_policy",
     )
@@ -455,7 +458,9 @@ def test_check_runtime_support_mode_validate_policy_warns_for_unsupported_type()
 def test_check_runtime_support_mode_run_blocks_unsupported_type() -> None:
     report = PreflightReport()
     runnable = check_runtime_support(
-        [_make_adopted(verification_type="command")], report, mode="run"
+        [_make_adopted(verification_type="json_schema")],
+        report,
+        mode="run",
     )
     assert runnable == []
     assert any(

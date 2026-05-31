@@ -171,7 +171,17 @@ class PreflightReport:
 
 @dataclass(frozen=True)
 class AdoptedStage:
-    """An adopted REQ stage with its resolved policy entry and contract."""
+    """An adopted REQ stage with its resolved policy entry and contract.
+
+    Step 7 added ``waived`` / ``waiver_reason``: when the REQ meta sets
+    ``waived: true`` (with a non-empty ``waiver_reason`` per the schema),
+    the stage is still adopted — its contract is still validated and its
+    presence is still recorded — but the runner skips execution, the
+    decision treats the stage as judgement-excluded, and a
+    ``KNOWLEDGE-WAIVER-<REQ>-<stage>`` entry is added to
+    ``gate.json#basis`` plus a ``waiver`` row is appended to
+    ``knowledge.jsonl``.
+    """
 
     stage_id: str
     name: str
@@ -180,13 +190,16 @@ class AdoptedStage:
     contract_ref: str
     contract: dict[str, Any]
     required: bool
+    waived: bool = False
+    waiver_reason: str = ""
 
 
-# Phase 1 understands these verification types at runtime. Others (command,
-# json_schema, manual_check) are scaffolded by the schemas but not runnable
-# yet; preflight rejects them so silent ALLOW never happens.
+# Phase 1 understands these verification types at runtime. Step 7 added
+# ``command``. ``json_schema`` is reserved for Step 8 and ``manual_check``
+# is run-rejected by design (P6). Preflight rejects unsupported types so
+# silent ALLOW never happens.
 _SUPPORTED_RUNTIME_TYPES: frozenset[str] = frozenset(
-    {"file_exists", "substring_match"}
+    {"file_exists", "substring_match", "command"}
 )
 
 
@@ -445,6 +458,8 @@ def resolve_adopted_stages(
         stage_id = entry.get("stage_id")
         contract_ref = entry.get("contract_ref")
         required = bool(entry.get("required", True))
+        waived = bool(entry.get("waived", False))
+        waiver_reason = entry.get("waiver_reason", "") or ""
 
         if not isinstance(stage_id, str) or stage_id not in policy_stages:
             report.issues.append(
@@ -563,6 +578,8 @@ def resolve_adopted_stages(
                 contract_ref=contract_ref,
                 contract=contract,
                 required=required,
+                waived=waived,
+                waiver_reason=waiver_reason,
             )
         )
 
@@ -631,6 +648,21 @@ def check_runtime_support(
     )
     runnable: list[AdoptedStage] = []
     for stage in adopted:
+        # Step 7: a waived stage is never executed, so its
+        # verification_type is irrelevant for runtime support. The
+        # runner will short-circuit it to result=waived, and the
+        # decision excludes it from judgement. Keep it in the returned
+        # list so the runner / evidence layer can still emit a
+        # "waived" stage entry in gate.json and add the
+        # KNOWLEDGE-WAIVER-* basis. Without this, a waived
+        # manual_check would still be flagged as
+        # ``manual_check_required`` and block ``qgb run`` even though
+        # the user explicitly waived it (P6 is preserved because the
+        # waiver is recorded in knowledge.jsonl with a reason and
+        # decided_by).
+        if stage.waived:
+            runnable.append(stage)
+            continue
         vtype = stage.verification_type
         if vtype == "manual_check" and stage.required:
             report.issues.append(

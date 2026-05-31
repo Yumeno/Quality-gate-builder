@@ -146,13 +146,26 @@ def _reserve_run_dir(
 def build_basis(
     req_id: str, policy: dict[str, Any] | None, adopted: list[AdoptedStage]
 ) -> list[str]:
-    """Phase 1 ``basis[]`` per detailed-design.md §7.5."""
+    """Phase 1 ``basis[]`` per detailed-design.md §7.5.
+
+    Step 7 D: each waived stage contributes a
+    ``KNOWLEDGE-WAIVER-<REQ>-<stage>`` row so the gate auditor can
+    follow the waiver back to ``knowledge.jsonl``.
+    """
     policy_id = "default"
     if policy and isinstance(policy.get("policy_id"), str):
         policy_id = policy["policy_id"]
     out = [req_id, f"POLICY-{policy_id}"]
     out.extend(f"CONTRACT-{req_id}-{stage.stage_id}" for stage in adopted)
+    for stage in adopted:
+        if stage.waived:
+            out.append(f"KNOWLEDGE-{waiver_knowledge_id(req_id, stage.stage_id)}")
     return out
+
+
+def waiver_knowledge_id(req_id: str, stage_id: str) -> str:
+    """Canonical knowledge.jsonl id for a per-(REQ, stage) waiver."""
+    return f"WAIVER-{req_id}-{stage_id}"
 
 
 def build_gate_document(
@@ -363,6 +376,17 @@ def write_evidence(
         stage_logs=[(r.stage_id, r.log_text) for r in results],
     )
 
+    # Step 7 D: record one ``waiver`` entry per waived stage into
+    # knowledge.jsonl. The append is idempotent (an existing entry with
+    # the same ``id`` is not duplicated) so repeated runs of the same
+    # REQ do not balloon the knowledge file.
+    _record_waiver_knowledge(
+        qs=qs,
+        req_id=req_id,
+        adopted=adopted,
+        timestamps=timestamps,
+    )
+
     _prune_runs(artifacts, _resolve_keep_runs(keep_runs))
 
     return EvidenceWriteResult(
@@ -371,6 +395,94 @@ def write_evidence(
         gate_path_curated=curated_dir / "gate.json",
         gate_path_volatile=run_dir / "gate.json",
     )
+
+
+# ---------------------------------------------------------------------------
+
+
+def _record_waiver_knowledge(
+    *,
+    qs: Path,
+    req_id: str,
+    adopted: list[AdoptedStage],
+    timestamps: Timestamps,
+) -> None:
+    """Append one ``waiver`` row per waived stage to ``knowledge.jsonl``.
+
+    Idempotent: an entry whose ``id`` already exists in the file is not
+    rewritten. This means re-running the same REQ does not duplicate
+    waivers, and a user-edited ``reason`` (Phase 1: hand-editing is the
+    only way to update an existing waiver) is preserved.
+
+    The schema is the one ``qgb/schemas/knowledge.schema.json`` defines
+    for ``kind: waiver``: ``id``, ``kind``, ``title``, ``source_type``,
+    ``created_at``, plus the waiver-specific ``stage_id`` / ``reason`` /
+    ``decided_by`` / ``applies_to`` block.
+    """
+    waived_stages = [s for s in adopted if s.waived]
+    if not waived_stages:
+        return
+
+    knowledge_dir = qs / "knowledge"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    kjsonl = knowledge_dir / "knowledge.jsonl"
+
+    existing_ids: set[str] = set()
+    if kjsonl.is_file():
+        for line in kjsonl.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                # Pre-existing malformed line: leave it alone, surface
+                # nothing here (validate would flag it on a later run).
+                continue
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+                existing_ids.add(entry["id"])
+
+    to_append: list[dict[str, Any]] = []
+    for stage in waived_stages:
+        wid = waiver_knowledge_id(req_id, stage.stage_id)
+        if wid in existing_ids:
+            continue
+        to_append.append(
+            {
+                "id": wid,
+                "kind": "waiver",
+                "title": f"Waiver for {req_id} / {stage.stage_id}",
+                "applies_to": req_id,
+                "stage_id": stage.stage_id,
+                "reason": stage.waiver_reason,
+                "decided_by": "user",
+                "source_type": "user",
+                "created_at": timestamps.rfc3339,
+            }
+        )
+
+    if not to_append:
+        return
+
+    # Step 7 補修 (Codex 4): if the existing file ends with a partial
+    # line (no trailing newline), naively appending would concatenate
+    # our new JSON onto the broken tail, corrupting the new entry too.
+    # Prefix a newline in that case so the new entries land on their
+    # own lines and remain parseable by the next reader.
+    needs_leading_newline = False
+    if kjsonl.is_file() and kjsonl.stat().st_size > 0:
+        with kjsonl.open("rb") as fh:
+            fh.seek(-1, 2)
+            needs_leading_newline = fh.read(1) != b"\n"
+
+    # Append-only write. Each entry is one JSON object per line per the
+    # ``knowledge.jsonl`` convention.
+    with kjsonl.open("a", encoding="utf-8") as fh:
+        if needs_leading_newline:
+            fh.write("\n")
+        for entry in to_append:
+            fh.write(json.dumps(entry, ensure_ascii=False))
+            fh.write("\n")
 
 
 # ---------------------------------------------------------------------------
