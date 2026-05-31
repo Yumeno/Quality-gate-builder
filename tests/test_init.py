@@ -143,9 +143,10 @@ def test_init_output_passes_validate(tmp_path: Path) -> None:
     run_init(tmp_path, project_name="round-trip")
     report = run_validate(tmp_path)
     assert not report.has_problems(), report
-    # Only the two top-level spec files exist after init; no REQ meta yet.
+    # After Step 9, knowledge.jsonl is also part of the validate target
+    # set (Phase 1 受け入れ条件 17/18).
     schema_names = sorted(name for _, name in report.files_checked)
-    assert schema_names == ["config", "policy"]
+    assert schema_names == ["config", "knowledge", "policy"]
 
 
 # ---- CLI: in-process via main() ------------------------------------------

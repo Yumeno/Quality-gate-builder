@@ -124,6 +124,10 @@ def _iter_target_files(root: Path) -> Iterator[tuple[Path, str]]:
     layout (e.g. nested under contracts/<REQ>/<sub>/) are not enumerated;
     detecting such tree-shape problems is the responsibility of
     ``qgb validate-policy`` (Step 6).
+
+    Step 9 (受け入れ条件 17/18): ``knowledge/knowledge.jsonl`` is handled
+    separately by :func:`_iter_jsonl_files` because each line is its own
+    JSON document with the ``knowledge`` schema (JSONL, not single JSON).
     """
     qs = root / ".quality-system"
     if not qs.is_dir():
@@ -147,6 +151,21 @@ def _iter_target_files(root: Path) -> Iterator[tuple[Path, str]]:
         for req_subdir in sorted(p for p in contracts_dir.iterdir() if p.is_dir()):
             for contract in sorted(req_subdir.glob("*.json")):
                 yield contract, "contract"
+
+
+def _iter_jsonl_files(root: Path) -> Iterator[tuple[Path, str]]:
+    """Yield (path, schema_name) for JSONL spec files (Step 9).
+
+    Each yielded path contains one JSON object per non-blank line, all
+    validated under the same ``schema_name``. Currently only
+    ``knowledge.jsonl`` is in scope.
+    """
+    qs = root / ".quality-system"
+    if not qs.is_dir():
+        return
+    kjsonl = qs / "knowledge" / "knowledge.jsonl"
+    if kjsonl.is_file():
+        yield kjsonl, "knowledge"
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +228,10 @@ def run_validate(root: Path) -> ValidateReport:
 
     See the module docstring for the precise scope. The caller decides what
     exit code or output format to produce.
+
+    Step 9: in addition to the single-JSON spec files, ``knowledge.jsonl``
+    is validated line-by-line against the ``knowledge`` schema (受け入れ
+    条件 17/18).
     """
     report = ValidateReport()
 
@@ -232,5 +255,56 @@ def run_validate(root: Path) -> ValidateReport:
             report.field_mismatches.extend(
                 _check_contract_field_mismatch(payload, path)
             )
+
+    for path, schema_name in _iter_jsonl_files(root):
+        report.files_checked.append((path, schema_name))
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            report.read_errors.append(
+                ReadError(file=path, message=f"read error: {exc}")
+            )
+            continue
+        # Step 9 の knowledge.jsonl validation は Step 7 で確立した
+        # append-only / partial-tail-tolerant な運用と矛盾しないように、
+        # 「最後の行が改行で終わっていない場合」のみを partial として
+        # skip する。それ以外の中間行で JSON parse が失敗したら、
+        # ファイルが正しく壊れていることを示すので read_error として
+        # 報告する。
+        #
+        # NF-004 (Windows PowerShell first-class): ``splitlines()`` は
+        # LF / CRLF / CR を透過的に処理するので、Windows 書き込みの
+        # ``\r\n`` 終端ファイルも ``endswith("\n")`` で正常終了として
+        # 認識される (``\r\n`` も末尾に ``\n`` を含むため)。BOM 付き
+        # UTF-8 は対象外 — Phase 1 では BOM なし UTF-8 を要求する
+        # (phase1-manual.md §19 troubleshooting 参照)。
+        lines = text.splitlines()
+        ends_with_newline = text.endswith("\n") or text == ""
+        for line_no, raw in enumerate(lines, start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            is_last_line = line_no == len(lines)
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                if is_last_line and not ends_with_newline:
+                    # Step 7 が許容する partial tail。silent skip。
+                    continue
+                report.read_errors.append(
+                    ReadError(
+                        file=path,
+                        message=f"invalid JSON on line {line_no}: {exc}",
+                    )
+                )
+                continue
+            for issue in validate(entry, schema_name):
+                report.schema_issues.append(
+                    FileIssue(
+                        file=path,
+                        schema_name=schema_name,
+                        issue=issue,
+                    )
+                )
 
     return report

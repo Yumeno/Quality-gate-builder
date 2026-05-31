@@ -90,6 +90,19 @@
       "then": {
         "required": ["stage_id", "reason", "decided_by", "applies_to"]
       }
+    },
+    {
+      "description": "Step 9 (受け入れ条件 18): external 由来の知識は requires_human_review:true を必須とする (philosophy P8 / NF-007). 外部由来コンテンツを machine ALLOW の根拠として黙って取り込まないよう、schema レベルで強制する.",
+      "if": {
+        "properties": { "source_type": { "const": "external" } },
+        "required": ["source_type"]
+      },
+      "then": {
+        "required": ["requires_human_review"],
+        "properties": {
+          "requires_human_review": { "const": true }
+        }
+      }
     }
   ],
   "additionalProperties": true
