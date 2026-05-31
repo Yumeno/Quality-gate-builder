@@ -838,7 +838,7 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 |---|---|
 | `qgb validate-policy` 本体 + preflight 診断 API + fixture 復活 | Step 6a |
 | `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b (完結 2026-05-31) |
-| `qgb detect` + adapters/python + adapters/generic | Step 6c |
+| `qgb detect` + adapters/python + adapters/generic | Step 6c (完結 2026-05-31) |
 | `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
 | `command` / `json_schema` verification_type | Step 7 / 8 |
@@ -912,14 +912,17 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 
 > 当初の Step 6b は `qgb verify` を最初に実装し「preflight API の最初の消費者」とする計画だったが、着手時の spec-review で verify 撤回が決まった (P3 との緊張)。これにより Step 6b は run の採用フロー整備 (--yes / atomic / QGB_KEEP_RUNS) と verify 撤回の反映に絞られた。「部分検証は REQ 分割で解く」という設計指針は §3.1 / stage-design §3.1 / 要件 F-008 に明記済み。
 
-#### Step 6c — detect / adapters
+#### Step 6c — detect / adapters (**完結 2026-05-31**)
 
-**スコープ:**
+**スコープ (全項目完了):**
 
-- adapters/python, adapters/generic の 2 種で起動
-- adapter base 規約 (`detect()` の返り値型を含む)
-- `DetectedProjectProfile` 的なデータ境界を固定: `language` / `framework` / `test_runner` / `confidence` / `evidence[]`
-- **重要 (P9 維持):** `validate-policy` は「採用済み policy が妥当か」を見る、`detect` は「候補 stage を提案する材料」を返す。両者のロジックを混ぜない
+- adapters/python, adapters/generic の 2 種で起動 — 完了
+- adapter base 規約 (`detect()` の返り値型を含む) — 完了
+- `DetectedProjectProfile` 的なデータ境界を固定: `language` / `framework` / `test_runner` / `confidence` / `evidence[]` — 完了
+- 補修: `DetectionResult(selected, candidates)`、JSON `schema_version=1`、OSError ガード、`adapter.name` での control flow、unreadable/empty 区別 — 完了
+- **重要 (P9 維持):** `validate-policy` は「採用済み policy が妥当か」を見る、`detect` は「候補 stage を提案する材料」を返す。両者のロジックを混ぜない — 維持
+
+詳細な作業記録 (計画 Codex 相談 → 本体 → 横断レビュー 8 件吸収 → 本体 1 コミット) は `journal/phase1-step6c.md`。本体 commit `0a77ca2`。テスト 266 → 327 件、ruff clean。
 
 #### Step 6d — design-stages / scaffold
 
