@@ -178,10 +178,149 @@ verify 撤回は CLI stub の削除のみで、本体テストへの影響はゼ
 - `development/docs/stage-design.md` §3.1 (verify 不採用、REQ 分割の利用者向け指針)
 - `~/.claude/projects/.../memory/verify-not-adopted.md` (再実装の歯止め)
 
-## 次のステップ (Step 6b 本体)
+## 項目 1〜3 (Step 6b 本体) の作業記録
 
-1. `qgb run --yes` フラグの実装 (実行前確認プロンプト)
-2. `_replace_dir_contents()` の atomic 化 (Codex Step 5 M4/M5、`latest.tmp-<ts>` で書いて rename)
-3. `QGB_KEEP_RUNS` 不正値の warning (Codex Step 5 L4)
+verify 撤回 (項目 0) に続いて、技術的補修 3 項目を順次実装した。
 
-これら 3 項目は spec 議論なしで実装可能な技術的タスク。memory の review-process 通り、各完了時に Codex レビュー → 補修サイクル。完了時に Step 6b ジャーナル本体 (項目 1〜3) を本書に追記して Step 6b 完結とする。
+### 項目 1: `qgb run --yes` フラグ + 確認プロンプト (commit `980c733`)
+
+要件 §F-008 (要件§448 「qgb run は実行前に確認プロンプトを出す、--yes でスキップ可」) の実装。
+
+設計判断:
+
+- 既定 (TTY) 時は `Proceed? [y/N]:` を出し、`y` / `yes` のみ続行、それ以外 NOT_READY (curated evidence は触らない)
+- `--yes` で完全スキップ
+- 非 TTY (CI / パイプ) で `--yes` 未指定 → 明示的に abort + 「--yes を付けろ」ヒント。CI で気付かず走るのを防ぐ
+- preflight 成功後に確認 (失敗時は確認する意味がないので即 NOT_READY)
+- プロンプト出力先は stderr (`--json` の stdout を汚さない)
+
+既存テストへの影響: `test_run_generic_minimal.py` の `qgb run` 呼び出し 27 箇所を `--yes` 付きに更新。自動実行コンテキストだから `--yes` が必要、で正しい。
+
+Codex 横断レビュー指摘 (1 件、medium):
+
+- `--json` モードで abort 経路も JSON 出力にすべき (preflight NOT_READY と同じ契約)
+
+→ `_abort_to_json()` を追加して `reason` フィールド (`declined` / `non_tty_without_yes`) で区別。
+
+新規テスト 12 件。テスト 238 → 250 件。
+
+### 項目 2: curated/latest/ の atomic 入れ替え (commit `e19a8b5`)
+
+Codex Step 5 M4/M5 の指摘への対応。直接書き込み式 (`_replace_dir_contents` → write_text 連発) を、テンポラリ + rename 方式に切り替える。
+
+設計 (`_atomic_swap_curated`):
+
+```
+0. recovery: latest/ 欠落 + latest.old-* 残存 = 前回中断 → old を戻す
+1. latest.tmp-<run_id>/ にフル一式 (gate.json/summary.md/stages/*.log)
+2. 既存 latest/ → latest.old-<run_id>/ にリネーム
+3. latest.tmp-<run_id>/ → latest/ にリネーム
+4. latest.old-<run_id>/ をベストエフォート削除
+```
+
+失敗時:
+
+- step 1 失敗: latest/ 無傷、tmp は調査用に残す
+- step 3 失敗: old を final に戻して前回 latest を復元してから raise
+
+保証する性質:
+
+- reader が中間状態 (stages 空 + 古い gate.json) を観測する窓が無い
+- 書き込み中の中断で前回の合格証跡が失われない
+
+Phase 1 out-of-scope (Codex 横断レビューで明示的に保留した項目):
+
+- fsync / 電源断耐性 (Phase 2 課題)
+- 並行書き込み (single-writer 前提を docstring に明記)
+
+Codex 横断レビュー指摘 (5 件):
+
+| 重要度 | 内容 | 対応 |
+|---|---|---|
+| High | fsync 無し、power-loss 耐性なし | Phase 2 out-of-scope、docstring に明記 |
+| Medium | 起動時 recovery (`latest/` 欠落 + `latest.old-*` 残存) が無い | `_recover_orphan_latest()` 追加 |
+| Medium | 並行書き込み未対応 | single-writer 前提を docstring に明記 |
+| Medium | Windows reader 握り → rename 失敗 | docstring に明記、対処は前回 latest 保持 |
+| テスト | tmp→final 失敗復元の直接テストが無い | テスト追加 |
+
+新規テスト 7 件。テスト 250 → 257 件。
+
+### 項目 3: QGB_KEEP_RUNS 不正値の warning (commit `234177e`)
+
+Codex Step 5 L4 の指摘への対応。非整数 / 負値 / 0 が silent fallback で気付けなかったので、stderr に warning を出して既定値 10 にフォールバックする仕様化。
+
+仕様:
+
+| 入力 | 結果 | warning |
+|---|---|---|
+| 未設定 / 空文字 | 既定 10 | なし |
+| 1 以上の整数 (前後空白許容) | 採用 | なし |
+| 非整数 / 0 以下 / 空白だけ | 既定 10 | あり |
+
+警告文に raw 値 (`repr`)、理由、fallback 先を含めて利用者が即判別できるようにする。
+
+Codex 横断レビュー: 中程度以上の指摘なし。低優先度で `" 5 "` (前後空白付き整数) のテスト追加のみ反映。
+
+新規テスト 8 件。テスト 257 → 266 件。
+
+## コミット履歴 (Step 6b 完結)
+
+```
+234177e Step 6b 項目 3: QGB_KEEP_RUNS 不正値の warning
+e19a8b5 Step 6b 項目 2: curated/latest/ の atomic 入れ替え
+980c733 Step 6b 項目 1: qgb run --yes フラグ + 確認プロンプト
+fedb106 Step 6b 項目 0 (qgb verify 撤回) の作業記録を追加
+b9029ab Phase 1 spec を改訂し qgb verify (軽量入口) を撤回する
+```
+
+## テストと品質指標の推移
+
+| 段階 | テスト件数 | ruff |
+|---|---|---|
+| Step 6a 完結時 | 238 | clean |
+| 項目 0 (verify 撤回) 完了 | 238 | clean |
+| 項目 1 (--yes) 完了 | 250 | clean |
+| 項目 2 (atomic) 完了 | 257 | clean |
+| 項目 3 (KEEP_RUNS warning) 完了 | **266** | clean |
+
+## 振り返り (項目 1〜3)
+
+### 7. Codex 連携の許可設定整理
+
+項目 2 作業中に、Codex wrapper を呼ぶ経路の許可プロンプトが頻発した。原因は:
+
+- Write tool で `/tmp/...` に書けない (許可は Windows ネイティブ TEMP のみ)
+- `(echo; echo; git diff) > /tmp/file` の subshell + redirect が許可テンプレートにマッチしない
+- Skill(ask-codex-with-context) は許可されているが、skill 内部の `Bash(powershell ...)` は別途許可必要
+- `rm -f /c/Users/vz7a-/AppData/Local/Temp/...` の rm 傘が無かった
+
+settings に以下を追加して、Codex 連携サイクル (Write context → wrapper 呼び出し → rm context) を全てプロンプト無しに:
+
+- `Bash(powershell -ExecutionPolicy Bypass -NoProfile -File *codex-wrapper.ps1*)` (wrapper パス固定の傘)
+- `Bash(rm -f /c/Users/vz7a-/AppData/Local/Temp/*)` (Windows TEMP の rm 傘)
+
+memory の `codex-context-files.md` に動線を永続化。今後同じ作業で躓かない。
+
+### 8. Codex wrapper の UTF-8 出力問題
+
+項目 2 のレビュー取得時に Codex の日本語応答が文字化け。原因は wrapper の `[Console]::OutputEncoding` が既定の Shift-JIS (OEM 932) になっていて、Bash msys 経由でパイプすると UTF-8 解釈で壊れる。
+
+wrapper の param 直後に `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` を追加して解決。修正は wrapper の元リポジトリ ([Yumeno/add_codexcli](https://github.com/Yumeno/add_codexcli)) に [issue #12](https://github.com/Yumeno/add_codexcli/issues/12) として起票。
+
+### 9. Codex 横断レビューが out-of-scope 判断の根拠になった
+
+項目 2 で Codex が指摘した「fsync が無いので power-loss 耐性が無い」は技術的には正しい。しかし Phase 1 MVP のスコープは「reader 不整合観測の防止」が主目的で、power-loss 耐性は別レイヤ。レビュー結果を **対応する / Phase 2 に倒す / docstring で明示的に out-of-scope と書く** に三分類して整理することで、「指摘されたから全部直す」を避けられた。これは Step 5/6a でやった「LLM の細部走り」を人間判断で引き戻すパターンの自動化。
+
+### 10. memory が permission 設定の方針として効いた
+
+「ワイルドカードを広げすぎない」「副作用の形が決まっている粒度」という Step 6a の方針が memory に書かれていたおかげで、項目 2 で許可プロンプト連発を解決するときに **`Bash(powershell *)` のような広い傘を貼らない判断** ができた。代わりに `Bash(powershell -ExecutionPolicy Bypass -NoProfile -File *codex-wrapper.ps1*)` のように **wrapper パスに固定** した傘を選んだ。memory が方針の連続性を担保した実例。
+
+## Step 6b 全体の総括
+
+verify 撤回 (項目 0) で Phase 1 のスコープを **「採用判定の実行入口は qgb run 単一」「部分検証は REQ 分割で解く」** に確定させ、項目 1〜3 で run の運用品質を補修した:
+
+- 項目 1: 実行前確認 (誤発射防止)
+- 項目 2: curated/latest/ の不整合観測 / 破壊状態回避
+- 項目 3: 環境変数の設定ミス検知
+
+これにより `qgb run` は Phase 1 MVP として「人と CI 両方から安全に使える」「中断耐性がある (前回証跡を破壊しない)」「設定ミスが silent fail しない」状態になった。次は Step 6c (`detect` + `adapters/python` + `adapters/generic`) でターゲット言語検出に進む。

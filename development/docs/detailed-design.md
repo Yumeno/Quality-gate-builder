@@ -837,7 +837,7 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 | 項目 | 確定予定 Step |
 |---|---|
 | `qgb validate-policy` 本体 + preflight 診断 API + fixture 復活 | Step 6a |
-| `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b |
+| `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b (完結 2026-05-31) |
 | `qgb detect` + adapters/python + adapters/generic | Step 6c |
 | `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 |
@@ -899,16 +899,18 @@ Step 6 は規模が Step 1〜5 全体に匹敵するため、4 サブステッ�
 - 「stderr に何か出たら失敗」扱いの CI wrapper はこの規約と衝突するので、`--json` 経由で `summary.blockers` / `summary.warnings` を見る運用に統一する
 - `qgb run` の text 出力で ALLOW を stdout、DENY を stderr に分けているのも同じ理由
 
-#### Step 6b — run 周辺 (verify 撤回後)
+#### Step 6b — run 周辺 (verify 撤回後、**完結 2026-05-31**)
 
-**スコープ (実装順):**
+**スコープ (実装順、全て完了):**
 
-0. `qgb verify` 撤回の spec 反映 + cli.py stub 削除 (Step 6b 着手時の spec-review で決定。経緯は `journal/phase1-step6b-spec-review.md`、根拠は §3.1 と思想憲章 P3)
-1. `qgb run --yes` (実行前確認プロンプト)
-2. `_replace_dir_contents()` の atomic 化 (Codex M4 / M5): `latest.tmp-<ts>` で書いて rename
-3. `QGB_KEEP_RUNS` 不正値の warning (Codex L4)
+0. `qgb verify` 撤回の spec 反映 + cli.py stub 削除 — 完了 (`b9029ab` / `fedb106`)
+1. `qgb run --yes` (実行前確認プロンプト) — 完了 (`980c733`)
+2. `_replace_dir_contents()` の atomic 化 (Codex M4 / M5): `latest.tmp-<run_id>` で書いて rename — 完了 (`e19a8b5`)
+3. `QGB_KEEP_RUNS` 不正値の warning (Codex L4) — 完了 (`234177e`)
 
-> 当初の Step 6b は `qgb verify` を最初に実装し「preflight API の最初の消費者」とする計画だったが、着手時の spec-review で verify 撤回が決まった (P3 との緊張)。これにより Step 6b は run の採用フロー整備 (--yes / atomic / QGB_KEEP_RUNS) と verify 撤回の反映に絞られる。「部分検証は REQ 分割で解く」という設計指針は §3.1 / stage-design §3.1 / 要件 F-008 に明記済み。
+詳細な作業記録 (Codex 横断レビュー指摘の三分類: 対応 / Phase 2 / docstring out-of-scope) は `journal/phase1-step6b.md`。テスト 238 → 266 件、ruff clean。
+
+> 当初の Step 6b は `qgb verify` を最初に実装し「preflight API の最初の消費者」とする計画だったが、着手時の spec-review で verify 撤回が決まった (P3 との緊張)。これにより Step 6b は run の採用フロー整備 (--yes / atomic / QGB_KEEP_RUNS) と verify 撤回の反映に絞られた。「部分検証は REQ 分割で解く」という設計指針は §3.1 / stage-design §3.1 / 要件 F-008 に明記済み。
 
 #### Step 6c — detect / adapters
 
