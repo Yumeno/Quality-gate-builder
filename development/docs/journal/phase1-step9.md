@@ -279,4 +279,6 @@ Phase 1 完結により、qgb は次の状態:
 - 導入マニュアル + 依存ポリシーで初期利用者を受け入れる準備完了
 - skills/source/ + F-019 で Phase 5 への構造的予約完了
 
-Phase 2 は adapter 量産 (Go / Rust / Java / .NET / PHP) と `qgb add-knowledge` 等の専用 CLI、fsync / Popen 等の hardening が主軸。Phase 1 で確立した思想 / プロセス / API 境界を基盤に進める。
+Phase 2 は **「編集を安全にする」が主軸** (Codex 計画レビュー 2026-06-01)。`qgb add-waiver` / `qgb add-knowledge` 等の専用 CLI、JSON Patch subset、`qgb check` / `qgb dev`、Pattern B (qgb は LLM を直接呼ばない)、設計例パック追加 (FastAPI / Go / Next.js) を 7 サブステップに分割して進める (詳細は `detailed-design.md` §14、spec §13)。
+
+adapter 量産 (Go / Rust / Java / .NET / PHP) と Phase 1 負債 (fsync / Popen / process tree kill / `.bat` ハンドリング) は **Phase 3** に統合された。Phase 1 で確立した思想 / プロセス / API 境界を基盤に Phase 2 に進む。

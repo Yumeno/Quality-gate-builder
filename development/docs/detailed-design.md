@@ -1006,7 +1006,184 @@ Codex 横断レビュー指摘 8 件 (blocker 0、major 2、minor 4、clean 2 �
 
 6d は生成系の「出力仕様の納得感」「既存 docs との整合」「idempotency」「既存ファイルがある場合の挙動」で補修が出やすいため、Claude 当初見積もり (0.7) より厚めに見る。
 
-## 13. 改訂履歴
+## 13. Phase 2 計画 (Codex 計画レビュー 2026-06-01 採用版)
+
+Phase 2 の主軸は **「編集を安全にする」**。Phase 1 で確立した検証装置 (validate / validate-policy / run / decision / evidence) の上に、修正手段の構造化を載せる。adapter 量産 (Phase 3) と provider integration (Phase 4) には踏み込まない。
+
+Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模感は Phase 1 Step 5 を 1.0 として **6.2〜10.0** (Phase 1 全体と同等以上)。Phase 1 で確立した「観点別レビュー → 集約 → Codex 横断 → 補修 → 収束ループ」サイクルを各サブステップで再利用する。
+
+### 13.1 着手前確定の設計境界 5 件
+
+実装に入る前に Phase 2 全体を貫く設計境界を固定し、各サブステップで判断が揺れないようにする。
+
+1. **Pattern B の LLM 境界** (Phase 2 全体に適用): qgb 本体は LLM を直接呼ばない。context export + proposal/patch import + validate + atomic apply の構造化 interface に徹する。LLM 側は Claude Code / Codex CLI / Gemini CLI / Phase 5 skill が担当する。
+    - 理由: 依存ライブラリ追加回避 (NF-010)、秘密情報を qgb 設定に持たせない、プロバイダ差を抽象化しない、テスト困難性を本体に持ち込まない、思想 P2 (AI は探索装置) / P6 (LLM 単独 ALLOW 禁止) の境界を実装段階で曖昧化させない
+    - 命名規約: `--interactive` のような自然言語匂いの UI を qgb 本体に持ち込まない。`propose-context` / `adopt` のような API 寄り命名にする
+2. **JSON Patch subset**: Step 2.2 で実装する patch は `add` / `replace` / `remove` / `test` の 4 op のみ。`move` / `copy` は Phase 3 送り
+3. **`qgb check` / `qgb dev` の証跡境界**: tmp artifacts は出すが (デバッグ可能性のため必須)、curated `evidence/latest/` は更新しない。tmp は `.qgb/tmp/check/<timestamp>/gate.json` のような揮発パスに書く
+4. **schema strict mode**: 段階的導入。Step 2.1 で format assertion + `$ref` allowlist を強制、`additionalProperties: false` は `--strict` フラグで独立 (Step 2.7 で全面適用判断)
+5. **waiver 削除**: Phase 2 では `add-waiver` のみ。削除 / revoke / supersede モデルは Phase 3 送り
+
+### 13.2 サブステップ計画
+
+着手順は **2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7**。理由は「2.2 (JSON Patch) が 2.1 (schema strictness) の上に成り立つ」「2.5 (Pattern B) は最も設計が重く、2.1〜2.4 を踏まえてから着手する方が安全」。
+
+#### Step 2.1 — schema baseline
+
+**スコープ:**
+
+- format assertion 強制 (RFC3339 date-time、URI、UUID 等): Phase 1 では opt-out していた format checker を `jsonschema` の format-checker 経由で強制有効化
+- `$ref` allowlist: contract.json / knowledge.json で `$ref` を許容するときの参照先を allowlist で限定 (Phase 1 では `$ref` を runtime レベルで拒否、Phase 2 で限定的に解禁)
+- 後方互換監査: Phase 1 で書かれた既存 example (generic-minimal / python-cli-pytest / markdown-docs) と fixture が新 schema で通ることを test 化
+- `qgb validate-policy --strict` フラグの skeleton 追加 (中身は Step 2.7 で `additionalProperties: false` を入れる)
+
+**完了条件:**
+
+- format violation が validate / validate-policy で blocker として検出される
+- `$ref` allowlist 違反が schema レベルで拒否される
+- 既存 example / fixture が無変更で通る (後方互換)
+
+**規模感:** 0.8 (Phase 1 Step 5 = 1.0 基準)
+
+#### Step 2.2 — patch substrate
+
+**スコープ:**
+
+- JSON Patch subset (`add` / `replace` / `remove` / `test`) の実装 (RFC 6902 サブセット、stdlib 実装)
+- atomic apply 基盤: patch 適用は Step 6d で確立した atomic swap pattern (sibling tmp + os.replace) を流用
+- validate-policy integration: patch 適用後の policy / contract / REQ-meta が schema + validate-policy を通ることを apply の事前検査として強制 (通らない patch は拒否、原本は touch しない)
+- `qgb patch <target> <patch.json>` CLI (低レベル、Step 2.3 の domain edit commands の下層になる)
+
+**完了条件:**
+
+- 4 op の patch がそれぞれテストされる
+- apply 前 validate で reject されたら原本は touch されない (atomic 保証)
+- patch 適用後に validate-policy が通ることを自動検査
+
+**規模感:** 1.2
+
+**Phase 3 送り (Step 2.2 では実装しない):**
+
+- `move` / `copy` op
+- patch の reverse (rollback)
+
+#### Step 2.3 — domain edit commands
+
+**スコープ:**
+
+- `qgb add-waiver REQ-APP-001 L6 --reason "..."` (受け入れ条件 phase-1 既達の手編集を CLI 化)
+- `qgb add-knowledge <knowledge.json>` (受け入れ条件 17 の手編集を CLI 化、append-only + partial-tail tolerant を維持)
+- knowledge orphan check: knowledge.jsonl 内で参照される REQ / contract が存在することの整合性検査 (`qgb validate-policy` に統合 or 独立 sub-command)
+- 内部実装は Step 2.2 の patch substrate を使う
+
+**完了条件:**
+
+- `add-waiver` / `add-knowledge` が atomic / idempotent / `--force` 有り
+- orphan check が validate-policy 経由で blocker として出る (`add-waiver` を打った後に元 REQ を削除したら検出されること)
+
+**規模感:** 1.0
+
+**Phase 3 送り:**
+
+- waiver の削除 / revoke / supersede
+- knowledge entry の削除
+
+#### Step 2.4 — daily verification channel
+
+**スコープ:**
+
+- `qgb check [REQ-ID]` — preflight + validate-policy + (該当 REQ があれば) verification を dry-run 的に実行。**curated `evidence/latest/` は更新しない**、`.qgb/tmp/check/<timestamp>/gate.json` に揮発出力
+- `qgb dev [REQ-ID]` — `qgb check` の連続実行版 (watch mode は Phase 3、Step 2.4 では一回実行のみ)
+- 出力形式: text human-readable + `--json`、exit code は `qgb run` と同じ (0=OK, 1=DENY, 2=NOT_READY)
+
+**完了条件:**
+
+- `qgb check` が curated `evidence/latest/` を一切 touch しない (テストで machine-verify)
+- tmp artifacts が `.gitignore` に自動追加される (init で既に予約されている `.qgb/` 配下)
+- `qgb run` と `qgb check` の preflight 経路が同じ関数を共有 (DRY、P9)
+
+**規模感:** 1.0
+
+**Phase 3 送り:**
+
+- `qgb dev` の changed-files 絞り込み (P3 緊張、REQ ↔ source の依存マッピングが必要)
+- watch mode (filesystem 監視)
+
+#### Step 2.5 — Pattern B external-LLM interface
+
+**スコープ:**
+
+- `qgb design-stages propose-context` — 対象プロジェクトの detect 結果 + 既存 policy + REQ 一覧を構造化 JSON で出力 (外部 LLM への入力素材)
+- `qgb design-stages adopt <proposal.json>` — 外部 LLM が生成した提案 JSON を受け取り、validate + atomic apply
+- proposal JSON schema を `qgb/schemas/proposal.schema.json` として定義 (Step 2.1 で確立した format / `$ref` allowlist を継承)
+- `qgb patch policy <proposal.patch.json>` — JSON Patch 形式の提案を受け取る (Step 2.2 の patch substrate を直接消費)
+
+**完了条件:**
+
+- qgb 本体に LLM SDK 依存が増えない (`pip list` で確認可能)
+- proposal を input にした end-to-end テストが通る (sample proposal.json を fixture として配置)
+- validate-policy を通らない proposal は reject、原本は touch されない
+
+**規模感:** 1.5
+
+**Phase 5 送り:**
+
+- skill 側で context → proposal を生成するロジック (qgb 外)
+- proposal の human-in-the-loop diff UI (qgb 外、Claude Code / Codex CLI 等の責務)
+
+#### Step 2.6 — example packs (FastAPI / Go / Next.js)
+
+**スコープ (3 サブサブステップに分割):**
+
+- **Step 2.6a — examples/python-fastapi-pytest/**: pytest + httpx + FastAPI 起動なしの contract test
+- **Step 2.6b — examples/go-cli/**: `go test` + `go vet` での L1 + L5
+- **Step 2.6c — examples/node-cli-vitest/** または **examples/next-app/**: Next.js は重い `npm install` を必須にしない設計余地を検討 (実 Next.js or Node CLI の選択は 2.6c 着手時判断)
+
+**完了条件 (各サブサブステップ):**
+
+- design-notes.md (7 項目) + README + 整合性テスト
+- Phase 1 で確立した「対象系に近い例から始める」運用が成立
+
+**規模感:** 1.5 (3 サブサブステップで均等配分、Next.js が重ければ繰り下げ判断)
+
+#### Step 2.7 — strictness review
+
+**スコープ:**
+
+- `additionalProperties: false` の全面適用 / 部分適用 / 見送りの判断 (Step 2.1〜2.6 の運用結果を見て決定)
+- migration notes: Phase 1 → Phase 2 schema 変更点を `docs/migration-phase1-to-phase2.md` にまとめる
+- 全 docs (phase1-manual.md / security-dependency-policy.md / detailed-design.md) の Phase 2 反映
+- Phase 2 完結ジャーナル作成 (`journal/phase2-step{1..7}.md` + `journal/phase2-summary.md`)
+
+**完了条件:**
+
+- 全 spec / docs が Phase 2 反映済
+- Phase 3 申し送り項目が明確化されている
+
+**規模感:** 0.5
+
+### 13.3 規模感サマリ
+
+| サブステップ | 規模 (Phase 1 Step 5 = 1.0) | 主要リスク |
+|---|---|---|
+| 2.1 schema baseline | 0.8 | 後方互換破壊 |
+| 2.2 patch substrate | 1.2 | atomic 保証 |
+| 2.3 domain edit commands | 1.0 | knowledge orphan の判定基準 |
+| 2.4 daily verification channel | 1.0 | curated 不変の machine-verify |
+| 2.5 Pattern B external-LLM | 1.5 | proposal schema 設計、命名 |
+| 2.6 example packs | 1.5 | Next.js の重さ |
+| 2.7 strictness review | 0.5 | 判断のみ |
+| **合計** | **6.2〜10.0** | (補修込みの上限) |
+
+### 13.4 Phase 1 で確立したパターンの再利用
+
+- **観点別 5 subagent 並列 → 集約 → Codex 横断 → 補修 → 収束ループ** (memory `review-process`)
+- **計画 Codex 相談 → 着手前構造修正 → 実装 → 統合レビュー** (Step 6 全体で確立、Step 7-9 で安定運用)
+- **本体 + 補修を 1 コミットにまとめる** (Step 6c から定着)
+- **Codex sandbox 起動失敗時の Claude 実コード証明 → 2 周目で収束宣言** (Step 6+7 / 8 / 9 で繰り返し成功)
+- **memory への永続化判断**: 設計境界に関わる判断 (Pattern B など) は memory に独立記録
+
+## 14. 改訂履歴
 
 | 版 | 日付 | 内容 |
 |---|---|---|
@@ -1024,3 +1201,4 @@ Codex 横断レビュー指摘 8 件 (blocker 0、major 2、minor 4、clean 2 �
 | 0.12 | 2026-05-23 | Step 6a 本体 3 コミット完了 (Codex レビュー待ち): Commit 1 で `PreflightReport` 診断 API (`iter_issues(severity)` / `blocking_issues` / `warnings` / `has_blockers` / `ready_for_run`) を整理。Commit 2 で 5 つの新 issue kind (`duplicate_stage_id` / `misplaced_contract` / `missing_contract_field` / `stage_count_out_of_range` warning / `wrong_type`) と `check_runtime_support(mode="run"|"validate_policy")` を追加、`validate_policy_preflight()` 新規 entry point。Codex L2 (substring_match の "byte offset" → "char offset" 表記) と L3 (LoaderError.wrong_type の preflight 側分類) を同時に解消。Commit 3 で `qgb validate-policy [REQ-ID]` CLI を実装 (exit code: blocker→2 / warning のみ→0 stderr / clean→0 stdout、`--json` 対応)。tests/fixtures/validate_policy/{missing_required, dangling_ref, misplaced_contract}/ を「validate-policy の仕様固定装置」として作成。テスト 204 → 234 件 (+30)、ruff clean |
 | 0.13 | 2026-05-25 | Step 6a 補修 1 次 (Codex レビュー反映): **M1** misplaced_contract と wrong_type の優先順位を仕様化 (`resolve_adopted_stages` docstring に明記、テスト名も spec lock 名に変更)。canonical-layout 検査が path 解決より先に走る設計を確定し、contract_ref 経由の wrong_type は「canonical 文字列に合致したうえで symlink で root を escape する」狭い経路でしか出ないことを明記。**M2** graph integrity blocker (`duplicate_stage_id` / `depends_on_cycle`) があるとき adopted resolution を short-circuit する `_has_graph_integrity_blockers` ヘルパーを導入し、run_preflight と validate_policy_preflight 両方で適用 (`depends_on_unknown` は意図的に対象外)。**m1** runner.py の char offset コメントを「Python code point index」に修正 (旧記述「UTF-16 code unit」は内部表現露出の誤解)。**m3** detailed-design に CLI 出力規約節を新設 (機械処理は `--json` + exit code を正とする、stderr に warning を出すのは advisory の silent 化を防ぐためで「stderr=失敗」扱いの CI wrapper との衝突は --json で回避)。テスト 234 → 238 件 (+4)、ruff clean |
 | 0.14 | 2026-05-28 | Step 6a 補修 2 次 (Codex 二次レビュー反映、**Step 6a 完結**): docs-only の小修正。Codex 二次レビューの major 指摘 (validate-policy の short-circuit は設計意図を明文化すべき) と minor 指摘 ("cheaper diagnostic first" を一般原則にしすぎない) の 2 件を反映。`_has_graph_integrity_blockers` コメントに「validate-policy でも止める理由」を追記 (誤った/不安定な findings を正しい一次 finding に重ねるとフィードバック品質が劣化するため、integrity blocker を先に修正させてから再実行する運用)。`resolve_adopted_stages` docstring の "cheaper diagnostic first" 説明を「本ケース限定の judgment」に書き換え、M2 が逆方向のトレードオフを採用していることに言及して両者の共存を明確化。§12 Step 6a 同じ趣旨で更新。コード変更なし、テスト件数 238 件のまま、ruff clean。**Codex 二次レビュー判定: blocker なし、Step 6b へ進んでよい** |
+| 0.15 | 2026-06-02 | Phase 2 計画確定 (Codex 計画レビュー 2026-06-01 反映、Phase 1 完結後の初版改訂): §13 を新設し Phase 2 を 7 サブステップ (2.1 schema baseline / 2.2 patch substrate / 2.3 domain edit commands / 2.4 daily verification channel / 2.5 Pattern B external-LLM / 2.6 example packs / 2.7 strictness review) に分解。着手前確定の設計境界 5 件を §13.1 に明文化 (Pattern B の LLM 境界 / JSON Patch subset / check 証跡境界 / schema strict mode / waiver 削除 Phase 3 送り)。規模感 6.2〜10.0 (Phase 1 全体と同等以上)。requirements_and_development.md §13 を同時改訂し Phase 2 主軸を「編集を安全にする」、Phase 3 を「adapter 拡張 + Phase 2 繰越 + Phase 1 負債」に再編。journal/phase1-step9.md の Phase 2 引き継ぎ段落も Codex 計画レビュー反映後の正しい主軸に修正。memory に `qgb-llm-boundary` を独立記録 (Phase 2 Pattern B / Phase 5 skill の核心境界)。コード変更なし。**Step 2.1 着手準備完了** |

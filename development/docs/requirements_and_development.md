@@ -1256,18 +1256,45 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 ### Phase 2: 編集安全化と拡張入口
 
-- JSON Patch 対応
-- 専用 CLI による policy 編集
-- waiver 追加コマンド、knowledge 追加コマンド
-- `qgb check` / `qgb dev` のような日常確認入口
-- schema 強化
-- 段階設計フェーズ（パターン B: 対話的設計）
-- 設計例パック追加（FastAPI / Next.js / Go）
+> 主軸: **「編集を安全にする」**。Phase 1 で確立した検証装置の上に「修正手段の構造化」を載せる。adapter 量産 (Phase 3) と provider integration (Phase 4) には踏み込まない。
+>
+> Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。詳細は `detailed-design.md` §14。規模感は Phase 1 Step 5 を 1.0 として **6.2〜10.0** (Phase 1 全体と同等以上)。
 
-### Phase 3: adapter 拡張
+**サブステップ:**
 
-- Go adapter、Rust adapter、.NET adapter、Java adapter、PHP adapter
+- **Step 2.1 schema baseline** — format assertion / `$ref` allowlist / 後方互換監査
+- **Step 2.2 patch substrate** — JSON Patch subset (`add` / `replace` / `remove` / `test`) の atomic apply 基盤
+- **Step 2.3 domain edit commands** — `qgb add-waiver` / `qgb add-knowledge` / knowledge orphan check
+- **Step 2.4 daily verification channel** — `qgb check` / `qgb dev` (tmp artifacts、curated `evidence/latest/` 不変)
+- **Step 2.5 Pattern B external-LLM interface** — context export / proposal import (qgb は LLM を直接呼ばない)
+- **Step 2.6 example packs** — FastAPI / Go / Next.js (3 サブステップに分割)
+- **Step 2.7 strictness review** — `additionalProperties: false` 判断 / docs / migration notes
+
+**Phase 2 着手前確定の設計境界 5 件:**
+
+1. **Pattern B の LLM 境界**: qgb は LLM を直接呼ばない。context export + proposal/patch import + validate に徹する (思想 P2 / P6 / NF-010、Phase 5 skill との接続)
+2. **JSON Patch subset**: `add` / `replace` / `remove` / `test` のみ。`move` / `copy` は Phase 3
+3. **`qgb check` / `qgb dev` の証跡**: tmp artifacts は出すが、curated `evidence/latest/` は更新しない
+4. **schema strict mode**: 段階的。前半 format + `$ref` allowlist、`additionalProperties: false` は `--strict` フラグで独立
+5. **waiver 削除**: Phase 2 では add のみ。削除 / revoke / supersede モデルは Phase 3
+
+### Phase 3: adapter 拡張 + Phase 2 繰越 + Phase 1 負債
+
+> Codex 計画レビュー (2026-06-01) で Phase 2 から繰り越された項目と、Phase 1 で確定した out-of-scope 負債を統合した。Phase 3 規模は Phase 1 / Phase 2 と同等以上が想定される。
+
+- **adapter 量産**: Go adapter / Rust adapter / .NET adapter / Java adapter / PHP adapter / Markdown adapter
 - 言語ごとの設計例パック追加
+- **Phase 2 繰越**:
+  - JSON Patch の `move` / `copy`
+  - waiver の削除 / revoke / supersede モデル
+  - `qgb dev` の changed-files 絞り込み (P3 緊張のため REQ 単位の依存マッピングが必要)
+  - schema `additionalProperties: false` の全面適用 (Phase 2 後半判断次第)
+- **Phase 1 負債 (技術的負債、Phase 2 中心軸とは別枠の hotfix 扱い)**:
+  - `subprocess.run` の process tree kill (Windows Job Objects / Unix process groups)
+  - Windows `.bat` / `.cmd` argument escaping
+  - `command` runner の Popen ベース incremental memory cap
+  - fsync / power-loss durability (curated atomic swap の延長)
+  - bare `qgb` entry point (Phase 1 は `python -m qgb` のみ)
 
 ### Phase 4: CI 連携
 
@@ -1275,6 +1302,7 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 - JUnit XML 出力
 - PR コメント用 summary
 - 採用判定のレビュー連動
+- CI による依存 audit / SBOM 生成 (Phase 1 から繰越)
 
 ### Phase 5: Skill Creator 化（エージェント中立）
 
