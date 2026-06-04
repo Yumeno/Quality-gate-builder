@@ -1191,6 +1191,34 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - **Codex sandbox 起動失敗時の Claude 実コード証明 → 2 周目で収束宣言** (Step 6+7 / 8 / 9 で繰り返し成功)
 - **memory への永続化判断**: 設計境界に関わる判断 (Pattern B など) は memory に独立記録
 
+### 13.5 Phase 2 完了時の繰越判定パート (Step 2.7 完了後の必須プロセス)
+
+Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 3 送り** として確定した:
+
+- JSON Patch `move` / `copy` op (Step 2.2 で 4 op 限定)
+- waiver の削除 / revoke / supersede モデル (Step 2.3 で `add-waiver` のみ)
+- `qgb dev` の changed-files 絞り込み (Step 2.4 で `--all` 経路のみ、P3 緊張のため REQ ↔ source の依存マッピングが必要)
+- `additionalProperties: false` の全面適用 (Step 2.7 で Step 2.1〜2.6 の運用結果を見て判断)
+- Phase 1 から繰越された負債: Popen / process tree kill (Windows Job Objects / Unix process groups)、`.bat` argument escaping、`command` runner の真の memory cap、fsync / power-loss durability、bare `qgb` entry point、CI 依存 audit / SBOM 生成
+
+加えて Phase 2 の各 Step 完了時に発見される新規 Phase 3 送り (各 Step の journal に「申し送り」セクションで列挙される) も累積する。
+
+**Step 2.7 完了直後に user と相談する必須パート** を設定する。具体的な相談項目:
+
+1. **Phase 2 繰越項目の Phase 3 への流し込み**: 上記 Phase 3 送り項目を Phase 3 (adapter 拡張 + Phase 2 繰越 + Phase 1 負債) のスコープにそのまま入れるか、一部の項目を Phase 4 (CI 連携) や Phase 5 (Skill Creator 化) に再配置するか、いくつかの項目を「将来の Phase」(Phase 6 以降) に降格して当面の負債整理を絞るか
+2. **Phase 2 中に新規発生した負債の重要度判定**: Phase 1 が「`qgb verify` 撤回」のような **着手前構造修正** で負債を未然に防いだ事例があったように、Phase 2 で新規発生した負債のうち「Phase 3 着手前に解決すべき」ものと「Phase 3 と並行で良い」ものを区別する
+3. **`additionalProperties: false` の判断**: Step 2.7 strictness review の結果 (全面 / 部分 / 見送り) を踏まえて、Phase 3 で `--strict` フラグを実体化するか、Phase 4 以降に送るかを判断
+4. **Phase 3 規模感の再確認**: Phase 1 / Phase 2 はそれぞれ Step 5 = 1.0 基準で 7〜8 規模だったが、Phase 3 は adapter 量産 6 言語 (Go / Rust / .NET / Java / PHP / Markdown) + Phase 2 繰越 5 件 + Phase 1 負債 6 件 = 17 項目で、規模感が Phase 1 / Phase 2 の倍以上になる可能性。Phase 3 を 3a (adapter 量産) と 3b (繰越 + 負債) に分割する案を user と相談
+5. **Phase 2 完結ジャーナル + 全体振り返り**: Phase 1 完結時に作成した `journal/phase1-step9.md` の Phase 1 全体振り返りパートと同じ粒度で、Phase 2 全体の思想軸 / プロセス軸 / 技術軸の振り返りを `journal/phase2-summary.md` (Step 2.7 で作成) にまとめる
+
+**相談の媒体:**
+
+- Step 2.7 の commit + journal 作成時に user に提示
+- `/ask-codex-with-context` skill 経由で Codex のセカンドオピニオンも取得 (Phase 2 規律の継続)
+- user 判断後、`requirements_and_development.md` §13 (Phase 3 / 4 / 5) を相応に改訂し、新規 commit にする
+
+このパートは Step 2.7 完了の **必須プロセス**として detailed-design.md に明記しておく (Step 2.7 完了 = Phase 2 完結ではない、user 相談を経て初めて Phase 2 完結とする)。
+
 ## 14. 改訂履歴
 
 | 版 | 日付 | 内容 |
@@ -1211,3 +1239,4 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 | 0.14 | 2026-05-28 | Step 6a 補修 2 次 (Codex 二次レビュー反映、**Step 6a 完結**): docs-only の小修正。Codex 二次レビューの major 指摘 (validate-policy の short-circuit は設計意図を明文化すべき) と minor 指摘 ("cheaper diagnostic first" を一般原則にしすぎない) の 2 件を反映。`_has_graph_integrity_blockers` コメントに「validate-policy でも止める理由」を追記 (誤った/不安定な findings を正しい一次 finding に重ねるとフィードバック品質が劣化するため、integrity blocker を先に修正させてから再実行する運用)。`resolve_adopted_stages` docstring の "cheaper diagnostic first" 説明を「本ケース限定の judgment」に書き換え、M2 が逆方向のトレードオフを採用していることに言及して両者の共存を明確化。§12 Step 6a 同じ趣旨で更新。コード変更なし、テスト件数 238 件のまま、ruff clean。**Codex 二次レビュー判定: blocker なし、Step 6b へ進んでよい** |
 | 0.15 | 2026-06-02 | Phase 2 計画確定 (Codex 計画レビュー 2026-06-01 反映、Phase 1 完結後の初版改訂): §13 を新設し Phase 2 を 7 サブステップ (2.1 schema baseline / 2.2 patch substrate / 2.3 domain edit commands / 2.4 daily verification channel / 2.5 Pattern B external-LLM / 2.6 example packs / 2.7 strictness review) に分解。着手前確定の設計境界 5 件を §13.1 に明文化 (Pattern B の LLM 境界 / JSON Patch subset / check 証跡境界 / schema strict mode / waiver 削除 Phase 3 送り)。規模感 6.2〜10.0 (Phase 1 全体と同等以上)。requirements_and_development.md §13 を同時改訂し Phase 2 主軸を「編集を安全にする」、Phase 3 を「adapter 拡張 + Phase 2 繰越 + Phase 1 負債」に再編。journal/phase1-step9.md の Phase 2 引き継ぎ段落も Codex 計画レビュー反映後の正しい主軸に修正。memory に `qgb-llm-boundary` を独立記録 (Phase 2 Pattern B / Phase 5 skill の核心境界)。コード変更なし。**Step 2.1 着手準備完了** |
 | 0.16 | 2026-06-05 | **Phase 2 Step 2.1 完結**: schema baseline (Codex 計画レビュー 8 指摘吸収後 → 本体 → 観点別 5 subagent → Codex 横断 → A1-A4 補修 → Codex 2 周目「指摘なし収束」)。`contract.enforce_format` (default false) で format checker opt-in、`contract.allow_internal_ref` (default false) で `#` / `#/...` の internal JSON Pointer のみ accept (anchor / 絶対 URI / 相対 URI / file / http / sibling-file は引き続き reject)、`build_qgb_format_checker()` を public 化 (P9)、`_collect_dollar_refs` / `_is_internal_pointer_ref` / `_collect_format_names` 新設、`formats_seen` / `formats_checked` / `formats_ignored` ログ粒度で typo'd format 名を audit 可能に。`--strict` skeleton は Codex 指摘 5 採用で Step 2.7 へ送り。Phase 1 挙動は default false 経路で完全保存 (既存 example 3 例 + fixture 9 個 + 既存 12 テスト無変更通過)。memory 改定: `parallel-strategy` に subagent prompt 冒頭テンプレ v3 必須を昇格 (Bash 完全禁止 + 許可が通る経路の例示 + 論証で詰める指針 + 退路)、`codex-context-files` に skill 経路と wrapper 経路の使い分け併記。詳細は `journal/phase2-step2-1.md`。テスト 470 → 487 件 (+17)、ruff clean |
+| 0.17 | 2026-06-05 | §13.5 Phase 2 完了時の繰越判定パート新設: Phase 3 送り項目 (JSON Patch move/copy、waiver 削除、changed-files 絞り込み、additionalProperties: false 全面適用、Phase 1 負債 6 件) を Step 2.7 完了直後に user と相談して Phase 3 / 4 / 5 / Phase 6 以降への流し込みを判断する **必須プロセス** として明文化。相談項目 5 点 (繰越流し込み / 新規負債重要度 / additionalProperties 判断 / Phase 3 規模再確認 / Phase 2 全体振り返り `journal/phase2-summary.md`)。`/ask-codex-with-context` skill 経由 Codex セカンドオピニオン併用。Step 2.7 完了 = Phase 2 完結ではなく、user 相談を経て初めて Phase 2 完結とする規律。コード変更なし。**Step 2.2 着手前 spec 改訂** |
