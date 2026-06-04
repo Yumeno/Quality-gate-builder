@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jq -r *)",
+      "Bash(jq -c *)",
+      "Bash(awk *)",
+      "Bash(xargs jq *)",
+      "Bash(xargs ls *)"
+    ]
+  }
+}

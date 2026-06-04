@@ -66,7 +66,7 @@ _RFC3339_DATE_TIME_RE = re.compile(
 )
 
 
-def _build_format_checker() -> FormatChecker:
+def build_qgb_format_checker() -> FormatChecker:
     """Return a FormatChecker that enforces the formats qgb relies on.
 
     ``jsonschema`` ships built-in checkers for ``date``, ``email``, ``ipv4``,
@@ -77,6 +77,12 @@ def _build_format_checker() -> FormatChecker:
     (preserving NF-010, minimal dependencies). The checker validates the
     RFC3339 *shape* qgb uses (YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)); it does
     not aim for full RFC3339 conformance (e.g. leap seconds).
+
+    Phase 2 Step 2.1: this helper became public so the ``json_schema``
+    verification runner (``qgb/core/runner.py``) can share the same checker
+    when ``contract.enforce_format=true``. Centralising the format set in
+    one place keeps P9 (single responsibility): one canonical answer to
+    "which formats does qgb actually check?".
     """
     checker = FormatChecker()
     # Copy the bundled checkers from the canonical FORMAT_CHECKER (date, email,
@@ -99,7 +105,19 @@ def _build_format_checker() -> FormatChecker:
     return checker
 
 
-_FORMAT_CHECKER = _build_format_checker()
+def qgb_format_names() -> frozenset[str]:
+    """Return the set of format names that ``build_qgb_format_checker`` checks.
+
+    Used by the ``json_schema`` runner to compute
+    ``formats_seen`` / ``formats_checked`` / ``formats_ignored`` for the
+    evidence log (Codex Step 2.1 計画レビュー指摘 3). The set is computed once
+    at module import and never mutated, so callers can cache it.
+    """
+    return _QGB_FORMAT_NAMES
+
+
+_FORMAT_CHECKER = build_qgb_format_checker()
+_QGB_FORMAT_NAMES: frozenset[str] = frozenset(_FORMAT_CHECKER.checkers.keys())
 
 
 def get_validator(schema_name: str) -> Draft202012Validator:

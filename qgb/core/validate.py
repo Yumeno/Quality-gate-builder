@@ -44,7 +44,9 @@ _CONTRACT_TYPE_FIELDS: dict[str, frozenset[str]] = {
     "command": frozenset({"command", "expected_exit_code", "working_dir", "timeout_seconds"}),
     "file_exists": frozenset({"target"}),
     "substring_match": frozenset({"target", "must_contain"}),
-    "json_schema": frozenset({"target", "schema"}),
+    "json_schema": frozenset(
+        {"target", "schema", "enforce_format", "allow_internal_ref"}
+    ),
     "manual_check": frozenset({"description"}),
 }
 

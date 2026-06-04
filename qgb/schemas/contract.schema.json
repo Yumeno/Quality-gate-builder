@@ -115,6 +115,16 @@
             "type": "string",
             "minLength": 1,
             "description": "Workspace-relative path to the JSON Schema file that target must satisfy."
+          },
+          "enforce_format": {
+            "type": "boolean",
+            "default": false,
+            "description": "Phase 2 Step 2.1: when true, the json_schema runner attaches the qgb format checker so format violations become stage failures. Default false preserves Phase 1 behaviour (formats are not enforced)."
+          },
+          "allow_internal_ref": {
+            "type": "boolean",
+            "default": false,
+            "description": "Phase 2 Step 2.1: when true, the json_schema runner accepts JSON Pointer self-refs that match exactly '#' or start with '#/'. Anchor refs (#name), absolute URIs, file URIs, http(s) URIs, and relative URIs remain rejected so the jsonschema resolver is never asked to fetch anything. Default false preserves Phase 1 behaviour (any $ref is rejected)."
           }
         }
       }

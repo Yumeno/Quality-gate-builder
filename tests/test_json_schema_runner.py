@@ -349,3 +349,422 @@ def test_json_schema_no_longer_unsupported_in_run(tmp_path: Path) -> None:
     exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
     # NOT_READY ではなく実行される (passed)
     assert exit_code != EXIT_NOT_READY
+
+
+# ---- Phase 2 Step 2.1: enforce_format / allow_internal_ref ---------------
+
+
+def _set_contract_flags(
+    project: Path,
+    *,
+    enforce_format: bool | None = None,
+    allow_internal_ref: bool | None = None,
+) -> None:
+    """Mutate the S1 contract to add Step 2.1 opt-in flags."""
+    path = (
+        project
+        / ".quality-system"
+        / "contracts"
+        / "REQ-APP-001"
+        / "S1.json"
+    )
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    if enforce_format is not None:
+        contract["enforce_format"] = enforce_format
+    if allow_internal_ref is not None:
+        contract["allow_internal_ref"] = allow_internal_ref
+    path.write_text(
+        json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+# enforce_format: 4 cases (default opt-out / opt-in pass / opt-in fail /
+# unknown format silent-ignore w/ log).
+
+
+def test_format_default_off_lets_bad_date_time_pass(tmp_path: Path) -> None:
+    """Codex 指摘 (後方互換固定点): enforce_format 未指定で format 違反は
+    従来通り passed のまま (Phase 1 挙動を保存).
+
+    Step 2.1 補修 A3: formats_seen が「存在する」だけでなく schema 上の
+    具体的な format 名 (``date-time``) を含むことを assert する。`formats_seen`
+    キーが空のままでテストが偶発的に通る回帰を防ぐ。
+    """
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"when": "not-a-date-time"}), encoding="utf-8"
+    )
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"when": {"type": "string", "format": "date-time"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_OK
+    log = _stage_log(project, "S1")
+    assert "enforce_format: false" in log
+    # Step 2.1 補修 A3: 具体的な format 名 ('date-time') を含むことを確認
+    assert "formats_seen" in log
+    assert "date-time" in log
+    # enforce_format=false のときは formats_checked / formats_ignored は出ない
+    # (Codex 横断レビュー: 非対称性は仕様通り)
+    assert "formats_checked" not in log
+    assert "formats_ignored" not in log
+
+
+def test_format_enforced_passes_on_valid_date_time(tmp_path: Path) -> None:
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"when": "2026-06-04T12:34:56Z"}), encoding="utf-8"
+    )
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"when": {"type": "string", "format": "date-time"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, enforce_format=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_OK
+    log = _stage_log(project, "S1")
+    assert "enforce_format: true" in log
+    assert "formats_checked" in log
+    assert "date-time" in log
+
+
+def test_format_enforced_fails_on_invalid_date_time(tmp_path: Path) -> None:
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"when": "not-a-date-time"}), encoding="utf-8"
+    )
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"when": {"type": "string", "format": "date-time"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, enforce_format=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "result: failed" in log
+
+
+def test_format_enforced_logs_unknown_format_as_ignored(tmp_path: Path) -> None:
+    """Codex 指摘 3: typo'd format name (e.g. 'datetime') is silently ignored
+    by jsonschema, but must appear in ``formats_ignored`` so the author can
+    catch the typo from the evidence."""
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"when": "not-a-date-time"}), encoding="utf-8"
+    )
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "when": {"type": "string", "format": "datetime"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, enforce_format=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_OK
+    log = _stage_log(project, "S1")
+    assert "formats_ignored" in log
+    assert "datetime" in log
+
+
+# allow_internal_ref: 11 cases (Codex 指摘 1/2/8).
+
+
+def _schema_with_ref(ref: str) -> dict:
+    return {
+        "type": "object",
+        "$defs": {"X": {"type": "string"}},
+        "properties": {"y": {"$ref": ref}},
+    }
+
+
+def _setup_ref_project(
+    tmp_path: Path,
+    *,
+    ref: str,
+    allow_internal_ref: bool | None = None,
+) -> Path:
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"y": "string-value"}), encoding="utf-8"
+    )
+    (project / "data.schema.json").write_text(
+        json.dumps(_schema_with_ref(ref)), encoding="utf-8"
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    if allow_internal_ref is not None:
+        _set_contract_flags(project, allow_internal_ref=allow_internal_ref)
+    return project
+
+
+def test_pointer_ref_rejected_when_flag_default(tmp_path: Path) -> None:
+    """default false → 既存挙動 (どんな $ref も failed)."""
+    project = _setup_ref_project(tmp_path, ref="#/$defs/X")
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "$ref" in log
+    assert "found_refs" in log
+    assert "#/$defs/X" in log
+
+
+def test_pointer_ref_allowed_when_flag_true(tmp_path: Path) -> None:
+    """allow_internal_ref=true で `#/...` は許容、validator が解決して passed."""
+    project = _setup_ref_project(
+        tmp_path, ref="#/$defs/X", allow_internal_ref=True
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_OK
+    log = _stage_log(project, "S1")
+    assert "internal_refs_accepted" in log
+    assert "#/$defs/X" in log
+
+
+def test_root_ref_hash_only_allowed(tmp_path: Path) -> None:
+    """`ref == "#"` (root pointer) は許容."""
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(json.dumps({}), encoding="utf-8")
+    # root pointer = self-reference. validation depth limit kicks in eventually,
+    # but the ref-collection phase must accept it.
+    (project / "data.schema.json").write_text(
+        json.dumps({"type": "object", "properties": {"x": {"$ref": "#"}}}),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, allow_internal_ref=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    # validation outcome is not important; what matters is the ref was accepted.
+    log = _stage_log(project, "S1")
+    assert "internal_refs_accepted" in log
+    assert "#" in log
+    assert exit_code in (EXIT_OK, EXIT_DENY)
+
+
+def test_anchor_ref_rejected_even_when_flag_true(tmp_path: Path) -> None:
+    """Codex 指摘 1: `#foo` is an $anchor ref, NOT a JSON Pointer.
+    Must be rejected even with allow_internal_ref=true."""
+    project = _setup_ref_project(
+        tmp_path, ref="#foo", allow_internal_ref=True
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "non-internal $ref rejected" in log
+    assert "disallowed_refs" in log
+    assert "#foo" in log
+
+
+def test_relative_uri_ref_rejected_even_when_flag_true(tmp_path: Path) -> None:
+    project = _setup_ref_project(
+        tmp_path, ref="../other.json#/x", allow_internal_ref=True
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs" in log
+    assert "../other.json#/x" in log
+
+
+def test_file_uri_ref_rejected_even_when_flag_true(tmp_path: Path) -> None:
+    project = _setup_ref_project(
+        tmp_path, ref="file:///etc/passwd", allow_internal_ref=True
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs" in log
+    assert "file:///etc/passwd" in log
+
+
+def test_http_uri_ref_rejected_even_when_flag_true(tmp_path: Path) -> None:
+    project = _setup_ref_project(
+        tmp_path,
+        ref="https://example.com/schema.json",
+        allow_internal_ref=True,
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs" in log
+    assert "https://example.com/schema.json" in log
+
+
+def test_sibling_file_ref_rejected_even_when_flag_true(tmp_path: Path) -> None:
+    """`schema.json#/x` (relative file ref with pointer suffix) は拒否."""
+    project = _setup_ref_project(
+        tmp_path, ref="schema.json#/x", allow_internal_ref=True
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs" in log
+    assert "schema.json#/x" in log
+
+
+def test_empty_string_ref_rejected_even_when_flag_true(tmp_path: Path) -> None:
+    """空文字列 $ref は拒否 (Codex 指摘 1 の境界例)."""
+    project = _setup_ref_project(
+        tmp_path, ref="", allow_internal_ref=True
+    )
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs" in log
+
+
+def test_mixed_refs_logs_all_disallowed(tmp_path: Path) -> None:
+    """Codex 指摘 8: 複数の disallowed ref は log にすべて列挙."""
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"y": "v"}), encoding="utf-8"
+    )
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "$defs": {"X": {"type": "string"}},
+                "properties": {
+                    "y": {"$ref": "#/$defs/X"},  # internal — allowed
+                    "z": {"$ref": "#foo"},        # anchor — disallowed
+                    "w": {"$ref": "https://example.com/s.json"},  # http
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, allow_internal_ref=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs (2)" in log
+    assert "#foo" in log
+    assert "https://example.com/s.json" in log
+
+
+def test_self_reference_does_not_crash(tmp_path: Path) -> None:
+    """Codex 指摘 2: self-reference (root) schema は crash しない."""
+    project = _copy_generic_minimal(tmp_path)
+    # ``true`` schema (always-pass) avoids actual recursion blow-up while
+    # exercising the root-pointer accept path.
+    (project / "data.json").write_text(json.dumps({}), encoding="utf-8")
+    (project / "data.schema.json").write_text(
+        json.dumps({"$ref": "#"}), encoding="utf-8"
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, allow_internal_ref=True)
+    # Whether passed or failed is irrelevant; the runner must not crash.
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code in (EXIT_OK, EXIT_DENY)
+
+
+def test_non_string_ref_value_does_not_crash(tmp_path: Path) -> None:
+    """Step 2.1 補修 A2 (Codex Step 2.1 計画レビュー指摘 8 強化):
+
+    `$ref` 値が文字列でない malformed schema (例: ``$ref: 123``) でも runner
+    は crash せず、`_collect_dollar_refs` が ``repr(123)`` = ``'123'`` を
+    収集して disallowed として扱う。schema.SchemaError 経路に逃がさず、
+    Step 2.1 の ref allowlist 経路で precise にログ列挙できることを spec lock。
+    """
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(json.dumps({}), encoding="utf-8")
+    # Note: jsonschema's check_schema may or may not reject non-string $ref
+    # depending on draft version. The Step 2.1 contract is that
+    # ``_collect_dollar_refs`` runs BEFORE ``check_schema`` so a non-string
+    # $ref is always surfaced through the allowlist path, not as a generic
+    # SchemaError.
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {"type": "object", "properties": {"x": {"$ref": 123}}}
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, allow_internal_ref=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    # Must not crash. The non-string $ref is repr()-ed to '123' which is not
+    # an internal pointer, so it ends up in disallowed_refs.
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "disallowed_refs" in log
+    assert "123" in log
+
+
+def test_duplicate_ref_unique_count_and_listing(tmp_path: Path) -> None:
+    """Step 2.1 補修 A1 (Codex 横断レビュー指摘):
+
+    同じ `$ref` が複数箇所に出現したとき、`internal_refs_accepted` の
+    count と列挙は **unique 基準** で揃っている (count = 列挙数)。
+    生 list の長さ (重複含む) を見せる旧設計の回帰を防ぐ。
+    """
+    project = _copy_generic_minimal(tmp_path)
+    (project / "data.json").write_text(
+        json.dumps({"a": "x", "b": "y"}), encoding="utf-8"
+    )
+    # Same `$ref` appearing in two distinct properties → refs list has length 2
+    # but the unique set has size 1.
+    (project / "data.schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "$defs": {"S": {"type": "string"}},
+                "properties": {
+                    "a": {"$ref": "#/$defs/S"},
+                    "b": {"$ref": "#/$defs/S"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _replace_with_json_schema_contract(
+        project, target="data.json", schema="data.schema.json"
+    )
+    _set_contract_flags(project, allow_internal_ref=True)
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_OK
+    log = _stage_log(project, "S1")
+    # Step 2.1 補修 A1: count は dedup 後の 1、列挙も 1 件のみ
+    assert "internal_refs_accepted (1):" in log
+    assert "#/$defs/S" in log

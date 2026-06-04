@@ -595,33 +595,97 @@ def _run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
 
 # ---- json_schema verification_type (Step 8 項目 1) ----------------------
 
-# Codex 計画レビュー: Phase 1 では JSON Schema の $ref を意図的にサポート
-# しない。$ref が schema 内に存在したら failed として扱う。これにより
-# R1 ガード (target / schema 両方が project root 配下に閉じ込められる)
-# を ``jsonschema`` ライブラリの ref 解決経路と切り離せる。
+# Codex 計画レビュー (Phase 1 / Phase 2 Step 2.1): Phase 1 では JSON Schema
+# の $ref を意図的にサポートしない。Phase 2 Step 2.1 で
+# ``contract.allow_internal_ref=true`` のときだけ「self-ref (RFC 6901 JSON
+# Pointer) のみ」を allowlist として許容する。それ以外 (anchor / 絶対 URI /
+# 相対 URI / network) は引き続き failed として扱う。これにより R1 ガード
+# (target / schema 両方が project root 配下に閉じ込められる) を
+# ``jsonschema`` ライブラリの ref 解決経路と切り離せる。
 
 
-def _schema_contains_dollar_ref(node: object) -> bool:
-    """Recursively detect any ``$ref`` key in a parsed JSON Schema.
+def _collect_dollar_refs(node: object) -> list[str]:
+    """Walk a parsed JSON Schema and return all ``$ref`` *string* values.
 
-    Phase 1 contract: ``json_schema`` verification rejects schemas that
-    use ``$ref`` (internal or external). This keeps R1 path resolution
-    the only entry point for filesystem access — the ``jsonschema``
-    library is never asked to resolve a reference.
+    Phase 2 Step 2.1 (Codex 指摘 1/2 反映):
+
+    * Returns a list (not a bool) so the runner can build a precise log
+      line listing every disallowed ref it found, not just "some ref".
+    * Order is depth-first / insertion-order; callers should sort if they
+      want a stable output ordering.
+    * Non-string ``$ref`` values are still collected (as their ``repr``)
+      so a malformed ``$ref`` cannot silently bypass the allowlist check.
+      A real JSON Schema with a non-string ``$ref`` is invalid, but the
+      runner must not crash on it.
     """
-    if isinstance(node, dict):
-        if "$ref" in node:
-            return True
-        return any(_schema_contains_dollar_ref(v) for v in node.values())
-    if isinstance(node, list):
-        return any(_schema_contains_dollar_ref(v) for v in node)
-    return False
+    found: list[str] = []
+
+    def _walk(n: object) -> None:
+        if isinstance(n, dict):
+            if "$ref" in n:
+                ref_val = n["$ref"]
+                if isinstance(ref_val, str):
+                    found.append(ref_val)
+                else:
+                    found.append(repr(ref_val))
+            for v in n.values():
+                _walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                _walk(v)
+
+    _walk(node)
+    return found
+
+
+def _collect_format_names(node: object) -> set[str]:
+    """Walk a parsed JSON Schema and return the set of ``format`` string values.
+
+    Phase 2 Step 2.1 (Codex 指摘 3): used to compute the
+    ``formats_seen`` / ``formats_checked`` / ``formats_ignored`` evidence
+    lines. Non-string format values are skipped — a malformed ``format``
+    value is invalid schema, ``check_schema`` will surface that earlier.
+    """
+    found: set[str] = set()
+
+    def _walk(n: object) -> None:
+        if isinstance(n, dict):
+            fmt = n.get("format")
+            if isinstance(fmt, str):
+                found.add(fmt)
+            for v in n.values():
+                _walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                _walk(v)
+
+    _walk(node)
+    return found
+
+
+def _is_internal_pointer_ref(ref: str) -> bool:
+    """True iff ``ref`` is a self-document JSON Pointer (RFC 6901) ref.
+
+    Codex Step 2.1 指摘 1 (許可条件の厳密化):
+
+    * ``"#"`` (root pointer) — allowed
+    * ``"#/..."`` (proper JSON Pointer starting with ``#/``) — allowed
+    * Everything else (``#anchor``, ``""``, absolute URI, ``file://``,
+      ``http://``, ``../foo.json#/y``, ``schema.json#/x``) — rejected
+
+    Crucially this does NOT call ``startswith("#")``; ``#foo`` is the
+    ``$anchor`` form and triggers identifier-based resolution rather than
+    pure pointer traversal. Phase 2 Step 2.1 only allowlists pointer-only
+    refs whose resolution is purely lexical inside the same document.
+    """
+    return ref == "#" or ref.startswith("#/")
 
 
 def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
     """Execute a ``verification_type=json_schema`` stage.
 
-    Phase 1 design (Codex 計画レビュー 2026-05-31):
+    Phase 1 design (Codex 計画レビュー 2026-05-31) + Phase 2 Step 2.1
+    extensions (Codex 計画レビュー 2026-06-04):
 
     * ``target`` (workspace-relative) is parsed as JSON.
     * ``schema`` (workspace-relative) is parsed as JSON and
@@ -631,24 +695,47 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
       :func:`qgb.core.loader.resolve_project_relative` — escapes
       (absolute, ``..``-relative, symlinks pointing outside) are
       rejected as failed.
-    * ``$ref`` in the schema (internal or external) is unsupported
-      and treated as failed (see :func:`_schema_contains_dollar_ref`).
+    * **``$ref`` handling (Phase 2 Step 2.1, Codex 指摘 1/2):**
+
+      Order is **spec-locked**: every ``$ref`` value is collected via
+      :func:`_collect_dollar_refs` BEFORE the validator is constructed.
+      If ``contract.allow_internal_ref`` is ``true`` (default ``false``),
+      pointer-only refs (``"#"`` or ``"#/..."``) are accepted; anchor
+      refs (``#name``), absolute / file / http(s) / relative URIs are
+      still rejected as failed. If ``allow_internal_ref`` is absent or
+      ``false`` (Phase 1 behaviour), **any** ``$ref`` is rejected.
+    * **``format`` handling (Phase 2 Step 2.1, Codex 指摘 3):**
+
+      ``format`` assertions are opt-in via ``contract.enforce_format``
+      (default ``false``). When ``true``, the validator is wired with
+      :func:`qgb.core.schema.build_qgb_format_checker` so the same
+      format set used for qgb's own spec files (``date``,
+      ``date-time``, ``email``, ``ipv4``, ``ipv6``, ``regex``, ``uuid``,
+      ``idn-email``) is applied to the user's target. The runner emits
+      ``formats_seen`` / ``formats_checked`` / ``formats_ignored`` log
+      lines so a typo'd format in the user's schema is visible in the
+      evidence even though ``jsonschema`` silently ignores unknown
+      formats.
     * Validation failures are reported as failed with the violation
       path + message in ``log_text``.
 
-    **Phase 1 out-of-scope** (Codex 計画レビュー):
+    **Out-of-scope (Phase 3 or later):**
 
-    * ``$ref`` resolution (Phase 2 allowlist-based support).
-    * JSON Schema ``format`` assertions (Phase 2 strict-mode opt-in).
-    * Streaming validation / memory caps for large JSON inputs
-      (Phase 2; current implementation buffers the full target).
+    * Streaming validation / memory caps for large JSON inputs.
     * Remote / network schema fetch (always unsupported in qgb).
+    * External-file ``$ref`` (``../x.json#/y`` / ``schema.json#/x``):
+      reopens path-escape, base-URI, and symlink concerns; deferred.
     """
     import json as _json
+
+    from qgb.core.schema import build_qgb_format_checker, qgb_format_names
 
     contract = stage.contract
     target = contract.get("target")
     schema_path_str = contract.get("schema")
+    # Phase 2 Step 2.1: opt-in flags (default false → Phase 1 behaviour).
+    enforce_format = bool(contract.get("enforce_format", False))
+    allow_internal_ref = bool(contract.get("allow_internal_ref", False))
 
     log_lines = [
         f"stage_id: {stage.stage_id}",
@@ -657,6 +744,8 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
         f"contract_ref: {stage.contract_ref}",
         f"target: {target}",
         f"schema: {schema_path_str}",
+        f"enforce_format: {str(enforce_format).lower()}",
+        f"allow_internal_ref: {str(allow_internal_ref).lower()}",
     ]
 
     if (
@@ -780,22 +869,69 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
             log_text="\n".join(log_lines) + "\n",
         )
 
-    # Phase 1: $ref unsupported. Reject before handing the schema to
-    # ``jsonschema`` so its resolver is never invoked.
-    if _schema_contains_dollar_ref(schema_data):
-        log_lines.append(
-            "result: failed ($ref in schema is unsupported in Phase 1; "
-            "see contract docs)"
-        )
-        return StageResult(
-            stage_id=stage.stage_id,
-            name=stage.name,
-            verification_type=stage.verification_type,
-            contract_ref=stage.contract_ref,
-            result="failed",
-            exit_code=None,
-            log_text="\n".join(log_lines) + "\n",
-        )
+    # Phase 2 Step 2.1: collect every $ref string up front (Codex 指摘 2:
+    # spec-locked order — refs are screened BEFORE validator construction
+    # so ``jsonschema`` is never asked to resolve anything).
+    refs = _collect_dollar_refs(schema_data)
+    if refs:
+        if allow_internal_ref:
+            # Internal-only allowlist: '#' or '#/...'. Anchor refs (#name),
+            # absolute / file / http(s) / relative URIs are still rejected.
+            disallowed = sorted(
+                {r for r in refs if not _is_internal_pointer_ref(r)}
+            )
+            if disallowed:
+                log_lines.append(
+                    "result: failed (non-internal $ref rejected; "
+                    "allow_internal_ref accepts '#' or '#/...' only)"
+                )
+                log_lines.append(
+                    f"disallowed_refs ({len(disallowed)}):"
+                )
+                for r in disallowed:
+                    log_lines.append(f"  - {r}")
+                return StageResult(
+                    stage_id=stage.stage_id,
+                    name=stage.name,
+                    verification_type=stage.verification_type,
+                    contract_ref=stage.contract_ref,
+                    result="failed",
+                    exit_code=None,
+                    log_text="\n".join(log_lines) + "\n",
+                )
+            # All refs are internal pointer refs → fall through to validator.
+            # Step 2.1 補修 A1: count と列挙を unique 基準で揃える。生 list
+            # `refs` は同じ ref が複数箇所に出現すれば重複を含むので、
+            # `sorted(set(refs))` で dedup したものを正本とし、count もその
+            # 長さで合わせる (Codex 横断レビュー指摘)。
+            unique_refs = sorted(set(refs))
+            log_lines.append(
+                f"internal_refs_accepted ({len(unique_refs)}): "
+                + ", ".join(unique_refs)
+            )
+        else:
+            # Phase 1 behaviour (allow_internal_ref absent or false): reject
+            # every $ref. The log lists what was found so authors can decide
+            # whether to opt in to allow_internal_ref or rewrite the schema.
+            # Step 2.1 補修 A1: count と列挙を unique 基準で揃える。
+            unique_refs = sorted(set(refs))
+            log_lines.append(
+                "result: failed ($ref in schema is rejected; "
+                "set contract.allow_internal_ref=true to allow "
+                "'#' / '#/...' pointer refs)"
+            )
+            log_lines.append(f"found_refs ({len(unique_refs)}):")
+            for r in unique_refs:
+                log_lines.append(f"  - {r}")
+            return StageResult(
+                stage_id=stage.stage_id,
+                name=stage.name,
+                verification_type=stage.verification_type,
+                contract_ref=stage.contract_ref,
+                result="failed",
+                exit_code=None,
+                log_text="\n".join(log_lines) + "\n",
+            )
 
     # Schema must itself be a valid JSON Schema.
     try:
@@ -815,8 +951,45 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
             log_text="\n".join(log_lines) + "\n",
         )
 
-    # Phase 1: format is NOT enforced (Codex 計画レビュー方針).
+    # Phase 2 Step 2.1: format is enforced only when contract.enforce_format
+    # is true. Default (false) preserves Phase 1 behaviour. Codex Step 2.1
+    # 指摘 3 反映: emit formats_seen / formats_checked / formats_ignored to
+    # the log so a typo'd format name in the user's schema is auditable.
     #
+    # ``formats_seen`` is the set of format names that actually appear in
+    # the user's schema. ``formats_checked`` is the subset qgb's format
+    # checker knows about (and will assert when enforce_format=true).
+    # ``formats_ignored`` is whatever ``jsonschema`` would silently skip —
+    # the diff exposes typos like ``"datetime"`` for ``"date-time"``.
+    # Step 2.1 補修 A4: format checker の構築ポリシー (Codex 横断レビュー指摘):
+    #
+    # * ``qgb_format_names()`` は module import 時に一度だけ計算した
+    #   ``_QGB_FORMAT_NAMES`` (frozenset、L120) を返す。「qgb が知っている
+    #   format 名の集合」は実行時に変化しないので import-time cache でよい。
+    # * ``build_qgb_format_checker()`` は呼ぶたびに新しい ``FormatChecker``
+    #   インスタンスを返す。Phase 2 Step 2.1 ではすべての stage 実行で fresh
+    #   な checker を構築する設計を採用 (将来 jsonschema 側が checker を
+    #   stateful 化したり stage 間で副作用を持ち込むのを防ぐため)。
+    # * ``qgb_format_names()`` のキャッシュ集合と、毎回新規構築する checker
+    #   の ``checkers.keys()`` は同じ format set を返す (どちらも
+    #   ``build_qgb_format_checker()`` の checkers ロジック由来)。
+    formats_seen = sorted(_collect_format_names(schema_data))
+    if enforce_format:
+        known_formats = qgb_format_names()
+        formats_checked = sorted(f for f in formats_seen if f in known_formats)
+        formats_ignored = sorted(f for f in formats_seen if f not in known_formats)
+        log_lines.append(f"formats_seen ({len(formats_seen)}): {formats_seen}")
+        log_lines.append(
+            f"formats_checked ({len(formats_checked)}): {formats_checked}"
+        )
+        log_lines.append(
+            f"formats_ignored ({len(formats_ignored)}): {formats_ignored}"
+        )
+        _qgb_format_checker = build_qgb_format_checker()
+    else:
+        log_lines.append(f"formats_seen ({len(formats_seen)}): {formats_seen}")
+        _qgb_format_checker = None
+
     # Step 8 統合レビュー C1: defensive try/except around validator
     # instantiation and iter_errors. ``check_schema`` above filters out
     # the common malformed-schema case, but the jsonschema library can
@@ -835,7 +1008,12 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
     # element (``str(p) for p in e.absolute_path``) gives a deterministic
     # ordering across runs while staying robust to mixed-type paths.
     try:
-        validator = validator_cls(schema_data)
+        if _qgb_format_checker is not None:
+            validator = validator_cls(
+                schema_data, format_checker=_qgb_format_checker
+            )
+        else:
+            validator = validator_cls(schema_data)
         errors = sorted(
             validator.iter_errors(target_data),
             key=lambda e: [str(p) for p in e.absolute_path],

@@ -1028,22 +1028,30 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 
 着手順は **2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7**。理由は「2.2 (JSON Patch) が 2.1 (schema strictness) の上に成り立つ」「2.5 (Pattern B) は最も設計が重く、2.1〜2.4 を踏まえてから着手する方が安全」。
 
-#### Step 2.1 — schema baseline
+#### Step 2.1 — schema baseline (**完結 2026-06-05**)
 
-**スコープ:**
+**スコープ (全項目完了):**
 
-- format assertion 強制 (RFC3339 date-time、URI、UUID 等): Phase 1 では opt-out していた format checker を `jsonschema` の format-checker 経由で強制有効化
-- `$ref` allowlist: contract.json / knowledge.json で `$ref` を許容するときの参照先を allowlist で限定 (Phase 1 では `$ref` を runtime レベルで拒否、Phase 2 で限定的に解禁)
-- 後方互換監査: Phase 1 で書かれた既存 example (generic-minimal / python-cli-pytest / markdown-docs) と fixture が新 schema で通ることを test 化
-- `qgb validate-policy --strict` フラグの skeleton 追加 (中身は Step 2.7 で `additionalProperties: false` を入れる)
+- format assertion **opt-in** 強制 — 完了 (Codex 計画レビュー指摘で「全面強制でなく contract.enforce_format=true で opt-in」に変更、後方互換を保護)
+- `$ref` allowlist — 完了 (contract.allow_internal_ref=true のとき `#` または `#/...` の internal JSON Pointer のみ accept、anchor/絶対URI/相対URI/file URI/http URI/sibling-file は引き続き reject)
+- 後方互換監査 — 完了 (既存 example 3 例 + 全 fixture が新 schema で無変更通過、既存 12 テスト全緑)
+- `qgb validate-policy --strict` skeleton — **Step 2.1 では先出ししない判断** (Codex 計画レビュー指摘 5 採用、Step 2.7 で実体と同時公開)
 
-**完了条件:**
+**完了条件 (全達成):**
 
-- format violation が validate / validate-policy で blocker として検出される
-- `$ref` allowlist 違反が schema レベルで拒否される
-- 既存 example / fixture が無変更で通る (後方互換)
+- format violation が runner で `enforce_format=true` のとき blocker — 達成
+- `$ref` allowlist 違反が事前収集経路で reject (`jsonschema` resolver は呼ばれない) — 達成
+- 既存 example / fixture が無変更で通る — 達成 (487 件全緑、Phase 1 = 470 + Step 2.1 +17)
 
-**規模感:** 0.8 (Phase 1 Step 5 = 1.0 基準)
+詳細な作業記録 (Codex 計画レビュー 8 指摘吸収 → 本体 → 段 1 観点別 5 subagent (reject → memory 改定 → 再投入で完走) → 段 3 Codex 横断 → A1-A4 補修 → 段 5 Codex 2 周目「指摘なし収束」) は `journal/phase2-step2-1.md`。テスト 470 → 487 件、ruff clean。
+
+**Step 2.2 / 2.5 / 2.7 への申し送り:**
+
+- Step 2.2 (patch substrate): patch 適用後の validate-policy で Step 2.1 `_collect_dollar_refs` / `_is_internal_pointer_ref` 経路が走ることを確認
+- Step 2.5 (Pattern B): proposal schema (`qgb/schemas/proposal.schema.json`) は Step 2.1 で確立した format / `$ref` allowlist を継承
+- Step 2.7 (strictness review): `formats_checked` / `formats_ignored` の strict mode 必須化、unknown format の warning/failure 昇格、`$id` / base URI と internal-only `$ref` の関係明文化 (Codex 横断レビュー Minor 指摘)、log アサーション規約整備、`*_when_flag_default` / `*_even_when_flag_true` 命名統一、`qgb validate-policy --strict` 実体実装
+
+**規模感:** 0.8 (Phase 1 Step 5 = 1.0 基準) で着地、Codex 計画レビューの見立て通り
 
 #### Step 2.2 — patch substrate
 
@@ -1202,3 +1210,4 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 | 0.13 | 2026-05-25 | Step 6a 補修 1 次 (Codex レビュー反映): **M1** misplaced_contract と wrong_type の優先順位を仕様化 (`resolve_adopted_stages` docstring に明記、テスト名も spec lock 名に変更)。canonical-layout 検査が path 解決より先に走る設計を確定し、contract_ref 経由の wrong_type は「canonical 文字列に合致したうえで symlink で root を escape する」狭い経路でしか出ないことを明記。**M2** graph integrity blocker (`duplicate_stage_id` / `depends_on_cycle`) があるとき adopted resolution を short-circuit する `_has_graph_integrity_blockers` ヘルパーを導入し、run_preflight と validate_policy_preflight 両方で適用 (`depends_on_unknown` は意図的に対象外)。**m1** runner.py の char offset コメントを「Python code point index」に修正 (旧記述「UTF-16 code unit」は内部表現露出の誤解)。**m3** detailed-design に CLI 出力規約節を新設 (機械処理は `--json` + exit code を正とする、stderr に warning を出すのは advisory の silent 化を防ぐためで「stderr=失敗」扱いの CI wrapper との衝突は --json で回避)。テスト 234 → 238 件 (+4)、ruff clean |
 | 0.14 | 2026-05-28 | Step 6a 補修 2 次 (Codex 二次レビュー反映、**Step 6a 完結**): docs-only の小修正。Codex 二次レビューの major 指摘 (validate-policy の short-circuit は設計意図を明文化すべき) と minor 指摘 ("cheaper diagnostic first" を一般原則にしすぎない) の 2 件を反映。`_has_graph_integrity_blockers` コメントに「validate-policy でも止める理由」を追記 (誤った/不安定な findings を正しい一次 finding に重ねるとフィードバック品質が劣化するため、integrity blocker を先に修正させてから再実行する運用)。`resolve_adopted_stages` docstring の "cheaper diagnostic first" 説明を「本ケース限定の judgment」に書き換え、M2 が逆方向のトレードオフを採用していることに言及して両者の共存を明確化。§12 Step 6a 同じ趣旨で更新。コード変更なし、テスト件数 238 件のまま、ruff clean。**Codex 二次レビュー判定: blocker なし、Step 6b へ進んでよい** |
 | 0.15 | 2026-06-02 | Phase 2 計画確定 (Codex 計画レビュー 2026-06-01 反映、Phase 1 完結後の初版改訂): §13 を新設し Phase 2 を 7 サブステップ (2.1 schema baseline / 2.2 patch substrate / 2.3 domain edit commands / 2.4 daily verification channel / 2.5 Pattern B external-LLM / 2.6 example packs / 2.7 strictness review) に分解。着手前確定の設計境界 5 件を §13.1 に明文化 (Pattern B の LLM 境界 / JSON Patch subset / check 証跡境界 / schema strict mode / waiver 削除 Phase 3 送り)。規模感 6.2〜10.0 (Phase 1 全体と同等以上)。requirements_and_development.md §13 を同時改訂し Phase 2 主軸を「編集を安全にする」、Phase 3 を「adapter 拡張 + Phase 2 繰越 + Phase 1 負債」に再編。journal/phase1-step9.md の Phase 2 引き継ぎ段落も Codex 計画レビュー反映後の正しい主軸に修正。memory に `qgb-llm-boundary` を独立記録 (Phase 2 Pattern B / Phase 5 skill の核心境界)。コード変更なし。**Step 2.1 着手準備完了** |
+| 0.16 | 2026-06-05 | **Phase 2 Step 2.1 完結**: schema baseline (Codex 計画レビュー 8 指摘吸収後 → 本体 → 観点別 5 subagent → Codex 横断 → A1-A4 補修 → Codex 2 周目「指摘なし収束」)。`contract.enforce_format` (default false) で format checker opt-in、`contract.allow_internal_ref` (default false) で `#` / `#/...` の internal JSON Pointer のみ accept (anchor / 絶対 URI / 相対 URI / file / http / sibling-file は引き続き reject)、`build_qgb_format_checker()` を public 化 (P9)、`_collect_dollar_refs` / `_is_internal_pointer_ref` / `_collect_format_names` 新設、`formats_seen` / `formats_checked` / `formats_ignored` ログ粒度で typo'd format 名を audit 可能に。`--strict` skeleton は Codex 指摘 5 採用で Step 2.7 へ送り。Phase 1 挙動は default false 経路で完全保存 (既存 example 3 例 + fixture 9 個 + 既存 12 テスト無変更通過)。memory 改定: `parallel-strategy` に subagent prompt 冒頭テンプレ v3 必須を昇格 (Bash 完全禁止 + 許可が通る経路の例示 + 論証で詰める指針 + 退路)、`codex-context-files` に skill 経路と wrapper 経路の使い分け併記。詳細は `journal/phase2-step2-1.md`。テスト 470 → 487 件 (+17)、ruff clean |
