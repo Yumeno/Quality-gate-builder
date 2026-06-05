@@ -1053,27 +1053,36 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 
 **規模感:** 0.8 (Phase 1 Step 5 = 1.0 基準) で着地、Codex 計画レビューの見立て通り
 
-#### Step 2.2 — patch substrate
+#### Step 2.2 — patch substrate (**完結 2026-06-05**)
 
-**スコープ:**
+**スコープ (全項目完了):**
 
-- JSON Patch subset (`add` / `replace` / `remove` / `test`) の実装 (RFC 6902 サブセット、stdlib 実装)
-- atomic apply 基盤: patch 適用は Step 6d で確立した atomic swap pattern (sibling tmp + os.replace) を流用
-- validate-policy integration: patch 適用後の policy / contract / REQ-meta が schema + validate-policy を通ることを apply の事前検査として強制 (通らない patch は拒否、原本は touch しない)
-- `qgb patch <target> <patch.json>` CLI (低レベル、Step 2.3 の domain edit commands の下層になる)
+- JSON Patch subset (`add` / `replace` / `remove` / `test`) の実装 — 完了 (stdlib のみ、`qgb/core/patch.py` + `qgb/core/json_pointer.py`)
+- atomic apply 基盤 — 完了 (Phase 1 Step 6d / Step 7 で確立した sibling tmp + `os.replace` pattern を継承、`qgb/core/patch_apply.py`)
+- validate-policy integration — 完了 (**案 X**: `validate_policy_preflight` に in-memory override seam (`policy_override` / `req_meta_override` / `contract_overrides`) を追加、disk 痕跡ゼロで検査)
+- `qgb patch <target> <patch.json>` CLI — 完了 (`--dry-run` あり、`--force` なし、`--json` 構造化出力、PatchApplyError reason code 9 種)
 
-**完了条件:**
+**完了条件 (全達成):**
 
-- 4 op の patch がそれぞれテストされる
-- apply 前 validate で reject されたら原本は touch されない (atomic 保証)
-- patch 適用後に validate-policy が通ることを自動検査
+- 4 op の patch がそれぞれテストされる — 達成 (`apply_patch` 単体 46 件 + apply_patch_to_target 18 件 + CLI 9 件)
+- apply 前 validate で reject されたら原本は touch されない — 達成 (atomic 保証、patch schema reject / target schema reject / validate-policy blocker のすべての経路で `_snapshot_dir` テスト)
+- patch 適用後に validate-policy が通ることを自動検査 — 達成 (override seam 経由)
 
-**規模感:** 1.2
+詳細な作業記録 (Codex 計画レビュー 18 指摘 + 5 着手前修正要件 → prejournal で案 X 採用判断 → 本体 → 段 1 観点別 5 subagent → 段 3 Codex 横断 → A1-A6 補修 → 段 5 Codex 2 周目「指摘なし収束」) は `journal/phase2-step2-2.md`。テスト 487 → 614 件、ruff clean。
+
+**規模感:** prejournal 見積 1.7 (1.2 + 案 X 上振れ 0.5) → 実績 2.0 (補修込み)。Step 2.3/2.4/2.5 で前借り回収する設計。
+
+**Step 2.3 / 2.4 / 2.5 への申し送り:**
+
+- Step 2.3 (`add-waiver` / `add-knowledge`): 内部で patch_apply.apply_patch_to_target を呼ぶ設計、knowledge.jsonl は append-only として patch substrate 対象外で別経路実装
+- Step 2.4 (`qgb check` / `qgb dev`): override seam を最大限活用、`apply_patch_to_target(dry_run=True)` を内部で呼ぶ
+- Step 2.5 (Pattern B `propose-context` / `adopt`): `contract_overrides` の key は **canonical `contract_ref` 文字列に統一** (Codex 横断レビュー追加申し送り)、複数 document 変更時は **全 override を同一 world として渡す規約** (同上)
 
 **Phase 3 送り (Step 2.2 では実装しない):**
 
 - `move` / `copy` op
 - patch の reverse (rollback)
+- multi-file lock / multi-file rollback (quality-system 全体 transaction)
 
 #### Step 2.3 — domain edit commands
 
@@ -1241,3 +1250,4 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 | 0.16 | 2026-06-05 | **Phase 2 Step 2.1 完結**: schema baseline (Codex 計画レビュー 8 指摘吸収後 → 本体 → 観点別 5 subagent → Codex 横断 → A1-A4 補修 → Codex 2 周目「指摘なし収束」)。`contract.enforce_format` (default false) で format checker opt-in、`contract.allow_internal_ref` (default false) で `#` / `#/...` の internal JSON Pointer のみ accept (anchor / 絶対 URI / 相対 URI / file / http / sibling-file は引き続き reject)、`build_qgb_format_checker()` を public 化 (P9)、`_collect_dollar_refs` / `_is_internal_pointer_ref` / `_collect_format_names` 新設、`formats_seen` / `formats_checked` / `formats_ignored` ログ粒度で typo'd format 名を audit 可能に。`--strict` skeleton は Codex 指摘 5 採用で Step 2.7 へ送り。Phase 1 挙動は default false 経路で完全保存 (既存 example 3 例 + fixture 9 個 + 既存 12 テスト無変更通過)。memory 改定: `parallel-strategy` に subagent prompt 冒頭テンプレ v3 必須を昇格 (Bash 完全禁止 + 許可が通る経路の例示 + 論証で詰める指針 + 退路)、`codex-context-files` に skill 経路と wrapper 経路の使い分け併記。詳細は `journal/phase2-step2-1.md`。テスト 470 → 487 件 (+17)、ruff clean |
 | 0.17 | 2026-06-05 | §13.5 Phase 2 完了時の繰越判定パート新設: Phase 3 送り項目 (JSON Patch move/copy、waiver 削除、changed-files 絞り込み、additionalProperties: false 全面適用、Phase 1 負債 6 件) を Step 2.7 完了直後に user と相談して Phase 3 / 4 / 5 / Phase 6 以降への流し込みを判断する **必須プロセス** として明文化。相談項目 5 点 (繰越流し込み / 新規負債重要度 / additionalProperties 判断 / Phase 3 規模再確認 / Phase 2 全体振り返り `journal/phase2-summary.md`)。`/ask-codex-with-context` skill 経由 Codex セカンドオピニオン併用。Step 2.7 完了 = Phase 2 完結ではなく、user 相談を経て初めて Phase 2 完結とする規律。コード変更なし。**Step 2.2 着手前 spec 改訂** |
 | 0.18 | 2026-06-05 | **Phase 2 Step 2.2 着手前判断確定** (`journal/phase2-step2-2-prejournal.md` で詳細記録): Codex 計画レビュー (skill 経由) で 18 指摘 + 5 着手前修正要件を受領後、最大の構造リスク (validate-policy が file 読込前提で in-memory doc を受け取れない) について案 X (preflight に override seam) と案 Y (sibling tmp で実 file 入れ替え) を検討。思想憲章 P3 (コード不変仮定の禁止) / P7 (再現可能証跡) / P9 (単一責任の本質) / NF-004 (Windows first-class) で **案 X が全面的に有利**、Phase 1 Step 6a の `iter_issues(severity)` 先払いと同型と判断、user により案 X 採用確定。規模感は Step 2.2 単独で 1.2 → 1.7 に上振れだが、Step 2.3 / 2.4 / 2.5 で同 seam を再利用できるため Phase 2 全体では 7.5 → 7.4 でほぼ不変 (前借り回収)。Step 2.2 着手前確定事項 5 件 (override seam / json_pointer.py 分離 / patch.schema.json 厳密化 / PatchError reason code / `--force` 撤回 + `--dry-run` 完全実行)。コード変更なし、prejournal 作成のみ。**Step 2.2 実装着手準備完了** |
+| 0.19 | 2026-06-05 | **Phase 2 Step 2.2 完結**: patch substrate (Codex 計画レビュー 18 指摘 + 5 着手前修正要件 → prejournal で案 X 採用判断 → 本体実装 → 段 1 観点別 5 subagent → 段 3 Codex 横断 → A1-A6 補修 → 段 5 Codex 2 周目「指摘なし収束」)。`qgb/core/json_pointer.py` (encode/decode/parse_array_index、ASCII digit 限定 [A1])、`qgb/core/patch.py` (4 op、PatchError 8 reason)、`qgb/schemas/patch.schema.json` (op 別 required/forbidden、remove で value 完全禁止 [A3])、`qgb/core/preflight.py` の override seam 追加 (案 X、default 経路 Phase 1 完全互換)、`qgb/core/patch_apply.py` (target classify [A2 segment 厳密チェック]、atomic swap [A4 suffix 明示]、PatchApplyError 9 reason)、`qgb/cli.py` の `qgb patch` (`--dry-run` 完全実行、`--force` なし)、`tests/conftest.py` 集約 [A5]。Codex 横断レビュー追加申し送り 2 件 (contract_overrides key 統一 / 複数 doc 同一 world 規約) を Step 2.5 規約として journal に明文化。Phase 1 挙動は default 経路で完全保存、既存 example 3 例 + fixture すべて無変更通過。詳細は `journal/phase2-step2-2.md`。テスト 487 → 614 件 (+127)、ruff clean。**Step 2.3 着手準備完了** |

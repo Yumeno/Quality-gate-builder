@@ -22,21 +22,30 @@ SCHEMA_FILES = {
     "gate": "gate.schema.json",
     "gate-runtime": "gate.runtime.schema.json",
     "knowledge": "knowledge.schema.json",
+    # Phase 2 Step 2.2: JSON Patch subset documents accepted by `qgb patch`.
+    "patch": "patch.schema.json",
 }
 
 
 def _json_pointer_escape(token: object) -> str:
-    """Escape a JSON Pointer reference token per RFC 6901 §4."""
-    s = str(token)
-    return s.replace("~", "~0").replace("/", "~1")
+    """Escape a JSON Pointer reference token per RFC 6901 §4.
+
+    Phase 2 Step 2.2 で実装は :mod:`qgb.core.json_pointer` に移植された
+    (P9 集約)。ここでは呼び出し互換のため private alias として残す。
+    """
+    from qgb.core import json_pointer
+    return json_pointer.encode([token]).lstrip("/")
 
 
 def _to_pointer(parts: object) -> str:
-    """Convert a jsonschema deque/iterable of path tokens to an RFC 6901 pointer."""
+    """Convert a jsonschema deque/iterable of path tokens to an RFC 6901 pointer.
+
+    Phase 2 Step 2.2 で実装は :mod:`qgb.core.json_pointer` に移植された
+    (P9 集約)。ここでは呼び出し互換のため private alias として残す。
+    """
+    from qgb.core import json_pointer
     tokens = list(parts) if parts is not None else []
-    if not tokens:
-        return ""
-    return "/" + "/".join(_json_pointer_escape(t) for t in tokens)
+    return json_pointer.encode(tokens)
 
 
 def schemas_root() -> Traversable:

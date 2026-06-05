@@ -8,6 +8,11 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+# Phase 2 Step 2.2: imported only for type hints to avoid hot import on every
+# CLI entry. ``_handle_patch`` imports them at call time for the same reason
+# (keeps `python -m qgb --help` fast for users who never touch `qgb patch`).
+from typing import TYPE_CHECKING
+
 from qgb import __version__
 from qgb.adapters.base import DetectionResult
 from qgb.core import evidence as evidence_mod
@@ -29,6 +34,9 @@ from qgb.core.preflight import (
 from qgb.core.runner import run_stages
 from qgb.core.scaffold import ScaffoldOutcome, scaffold_req
 from qgb.core.validate import ValidateReport, run_validate
+
+if TYPE_CHECKING:
+    from qgb.core.patch_apply import PatchApplyError, PatchApplyResult
 
 EXIT_OK = 0
 EXIT_DENY = 1
@@ -857,6 +865,165 @@ def _handle_scaffold(args: argparse.Namespace) -> int:
     return EXIT_OK if outcome.ok else EXIT_NOT_READY
 
 
+# ---- qgb patch (Phase 2 Step 2.2) ---------------------------------------
+
+
+def _patch_result_to_json(
+    result: PatchApplyResult,
+    *,
+    dry_run: bool,
+) -> dict[str, object]:
+    """Serialize PatchApplyResult into a JSON-friendly dict."""
+    return {
+        "ok": True,
+        "target": str(result.target),
+        "target_kind": result.target_kind.value,
+        "would_write": result.would_write,
+        "written": result.written,
+        "dry_run": dry_run,
+        "warnings": result.warnings,
+        "warning_count": len(result.warnings),
+    }
+
+
+def _patch_error_to_json(
+    err: PatchApplyError,
+    *,
+    target_rel: str,
+    patch_path: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    """Serialize PatchApplyError into a JSON-friendly dict."""
+    payload: dict[str, object] = {
+        "ok": False,
+        "target": target_rel,
+        "patch": patch_path,
+        "dry_run": dry_run,
+        "reason": err.reason,
+        "message": err.message,
+    }
+    if err.detail:
+        payload["detail"] = err.detail
+    return payload
+
+
+def _handle_patch(args: argparse.Namespace) -> int:
+    """Apply a JSON Patch file to a target under .quality-system/.
+
+    Phase 2 Step 2.2 (prejournal §6.5). Exit codes:
+
+    * ``EXIT_OK`` (0): patch applied successfully (or dry-run succeeded)
+    * ``EXIT_DENY`` (1): validate-policy blocker prevented application
+    * ``EXIT_NOT_READY`` (2): schema / path / parse error
+    * ``EXIT_USAGE`` (64): argument-level problem
+    """
+    from qgb.core.patch_apply import (
+        PatchApplyError,
+        apply_patch_to_target,
+    )
+
+    project_root = Path(args.path).resolve()
+    patch_path = Path(args.patch)
+    target_rel = args.target
+    dry_run = bool(args.dry_run)
+
+    if not patch_path.exists():
+        if args.json:
+            json.dump(
+                {
+                    "ok": False,
+                    "target": target_rel,
+                    "patch": str(patch_path),
+                    "dry_run": dry_run,
+                    "reason": "patch_not_found",
+                    "message": f"patch file does not exist: {patch_path}",
+                },
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(
+                f"qgb patch: patch file does not exist: {patch_path}",
+                file=sys.stderr,
+            )
+        return EXIT_NOT_READY
+
+    try:
+        result = apply_patch_to_target(
+            project_root,
+            target_rel,
+            patch_path,
+            dry_run=dry_run,
+        )
+    except PatchApplyError as exc:
+        if args.json:
+            json.dump(
+                _patch_error_to_json(
+                    exc,
+                    target_rel=target_rel,
+                    patch_path=str(patch_path),
+                    dry_run=dry_run,
+                ),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(f"qgb patch: {exc}", file=sys.stderr)
+            for line in exc.detail.get("blockers", []) or []:
+                if isinstance(line, dict):
+                    print(
+                        f"  blocker: {line.get('kind')} at {line.get('where')}: "
+                        f"{line.get('message')}",
+                        file=sys.stderr,
+                    )
+            for issue in exc.detail.get("issues", []) or []:
+                if isinstance(issue, dict):
+                    print(
+                        f"  schema: {issue.get('path')} — {issue.get('message')}",
+                        file=sys.stderr,
+                    )
+        # validate_policy_blocker is the only "soft" DENY; other reasons are
+        # schema/path/parse problems → NOT_READY (Codex 計画レビュー指摘 11).
+        if exc.reason == "validate_policy_blocker":
+            return EXIT_DENY
+        return EXIT_NOT_READY
+
+    # Success path (including dry-run).
+    if args.json:
+        json.dump(
+            _patch_result_to_json(result, dry_run=dry_run),
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        if dry_run:
+            print(
+                f"qgb patch: would write {result.target} "
+                f"({result.target_kind.value})",
+                file=sys.stdout,
+            )
+        else:
+            print(
+                f"qgb patch: wrote {result.target} "
+                f"({result.target_kind.value})",
+                file=sys.stdout,
+            )
+        if result.warnings:
+            print(
+                f"qgb patch: applied with {len(result.warnings)} warning(s):",
+                file=sys.stderr,
+            )
+            for w in result.warnings:
+                print(f"  - {w}", file=sys.stderr)
+    return EXIT_OK
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -1154,6 +1321,61 @@ def build_parser() -> QgbArgumentParser:
         help="Emit a machine-readable JSON report to stdout instead of text",
     )
     vp_p.set_defaults(handler=_handle_validate_policy)
+
+    # ---- qgb patch (Phase 2 Step 2.2) -----------------------------------
+    patch_p = subparsers.add_parser(
+        "patch",
+        help=(
+            "Apply a JSON Patch (RFC 6902 subset) to a .quality-system/ "
+            "target with atomic swap and validate-policy gating "
+            "(Phase 2 Step 2.2)"
+        ),
+        description=(
+            "Apply a JSON Patch to a target file under .quality-system/. "
+            "The patch is validated against patch.schema.json (Phase 2 op "
+            "subset: add/replace/remove/test), applied in-memory, then the "
+            "patched document is validated against its own schema and the "
+            "project-wide validate-policy preflight. Only if every check "
+            "passes is the target replaced atomically via sibling tmp + "
+            "os.replace. This guarantees target-file atomicity; quality-"
+            "system-wide transactions are NOT provided (Codex 計画レビュー "
+            "指摘 7、Phase 3 送り)."
+        ),
+    )
+    patch_p.add_argument(
+        "target",
+        help=(
+            "Project-relative target path. Accepts "
+            ".quality-system/policy.json, "
+            ".quality-system/req/<REQ>.meta.json, or "
+            ".quality-system/contracts/<REQ>/<stage>.json. "
+            "Absolute paths and out-of-tree paths are rejected."
+        ),
+    )
+    patch_p.add_argument(
+        "patch",
+        help="Path to the JSON Patch file (any location).",
+    )
+    patch_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root containing .quality-system/ (default: current directory)",
+    )
+    patch_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Run all validations (patch schema, target schema, "
+            "validate-policy) but do not write. Returns the same exit "
+            "code that a real run would have produced."
+        ),
+    )
+    patch_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    patch_p.set_defaults(handler=_handle_patch)
 
     return parser
 

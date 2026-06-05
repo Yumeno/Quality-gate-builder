@@ -383,6 +383,8 @@ def resolve_adopted_stages(
     policy_stages: dict[str, dict[str, Any]],
     req_meta: dict[str, Any],
     report: PreflightReport,
+    *,
+    contract_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> list[AdoptedStage]:
     """Resolve REQ meta entries to (policy, contract) triples.
 
@@ -509,25 +511,33 @@ def resolve_adopted_stages(
             )
             continue
 
-        try:
-            contract = load_contract(project_root, contract_ref)
-        except LoaderError as exc:
-            # L3: distinguish "the spec is malformed" (wrong_type:
-            # absolute path, root escape) from "the artefact is
-            # missing" (missing_file). Both block ``qgb run`` but the
-            # remediation differs, and validate-policy needs the
-            # distinction for accurate diagnostics.
-            kind: PreflightIssueKind = (
-                "wrong_type" if exc.kind == "wrong_type" else "missing_contract"
-            )
-            report.issues.append(
-                PreflightIssue(
-                    kind=kind,
-                    where=str(exc.path),
-                    message=exc.message,
+        # Phase 2 Step 2.2 (案 X): contract_overrides は canonical
+        # contract_ref → contract dict の mapping。提供された ref があれば
+        # file 読込を bypass。後段の required_fields check / verification_type
+        # 一致 check は file 経路と完全に同じロジックを通すので、ここでは
+        # ``contract`` 変数の取得元を切り替えるだけ。
+        if contract_overrides is not None and contract_ref in contract_overrides:
+            contract = contract_overrides[contract_ref]
+        else:
+            try:
+                contract = load_contract(project_root, contract_ref)
+            except LoaderError as exc:
+                # L3: distinguish "the spec is malformed" (wrong_type:
+                # absolute path, root escape) from "the artefact is
+                # missing" (missing_file). Both block ``qgb run`` but the
+                # remediation differs, and validate-policy needs the
+                # distinction for accurate diagnostics.
+                kind: PreflightIssueKind = (
+                    "wrong_type" if exc.kind == "wrong_type" else "missing_contract"
                 )
-            )
-            continue
+                report.issues.append(
+                    PreflightIssue(
+                        kind=kind,
+                        where=str(exc.path),
+                        message=exc.message,
+                    )
+                )
+                continue
 
         # Step 6a Commit 2: policy.stages[].required_contract_fields ⊆
         # contract.json keys. The schema validator (qgb validate) only
@@ -789,7 +799,12 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
 
 
 def validate_policy_preflight(
-    project_root: Path, req_id: str | None = None
+    project_root: Path,
+    req_id: str | None = None,
+    *,
+    policy_override: dict[str, Any] | None = None,
+    req_meta_override: dict[str, Any] | None = None,
+    contract_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> PreflightReport:
     """Run the design-quality preflight for ``qgb validate-policy``.
 
@@ -808,6 +823,36 @@ def validate_policy_preflight(
     :meth:`PreflightReport.has_blockers` (not ``ready_for_run``) to
     decide exit status: blockers → exit 2 (NOT_READY), warnings only
     → exit 0 + stderr advisory.
+
+    **Phase 2 Step 2.2 (案 X, prejournal §6.1) — in-memory override seam:**
+
+    すべての ``*_override`` 引数は **default None で Phase 1 完全互換**
+    (file 読込)。提供されたときだけ、対応する loader 呼び出しを bypass し
+    て in-memory dict をそのまま使う。これは Step 2.2 の patch substrate
+    が「patch を memory に当てた結果」を disk に書かずに validate-policy
+    にかけるための shim。Step 2.4 (`qgb check` / `qgb dev`) と Step 2.5
+    (Pattern B propose/adopt) でも同じ seam を再利用する。
+
+    引数:
+
+    * ``policy_override``: ``load_policy(project_root)`` の代わりに使う
+      policy dict。schema 検証は呼び出し側責務 (patch_apply 側で apply 後
+      schema 検証を済ませる)。
+    * ``req_meta_override``: ``load_req_meta(project_root, req_id)`` の代
+      わりに使う req-meta dict。``req_id`` が None なら無視。
+    * ``contract_overrides``: ``contract_ref`` (canonical 文字列) →
+      contract dict の mapping。:func:`resolve_adopted_stages` の
+      ``load_contract`` 呼び出しが、まずこの mapping を確認し、見つかれば
+      使う。見つからなければ通常通り file 読込にフォールバック。
+
+    思想憲章整合 (prejournal §4):
+
+    * **P3**: disk を触らないので「観測されない一瞬の disk 状態」が存在
+      しない。validate-policy が見る world は呼び出し側が責任を持つ。
+    * **P7**: 失敗時の証跡は呼び出し側 (patch) が持つ patch.json で完結。
+      preflight 側に痕跡は残らない。
+    * **P9**: preflight の検出ロジック (graph integrity / adopted stage
+      resolution / runtime support 判定) は無変更。読み口だけ拡張。
     """
     report = PreflightReport()
 
@@ -818,18 +863,22 @@ def validate_policy_preflight(
     ):
         return report
 
-    try:
-        policy = load_policy(project_root)
+    if policy_override is not None:
+        policy = policy_override
         report.policy = policy
-    except LoaderError as exc:
-        report.issues.append(
-            PreflightIssue(
-                kind=_loader_kind_for_policy(exc.kind),
-                where=str(exc.path),
-                message=exc.message,
+    else:
+        try:
+            policy = load_policy(project_root)
+            report.policy = policy
+        except LoaderError as exc:
+            report.issues.append(
+                PreflightIssue(
+                    kind=_loader_kind_for_policy(exc.kind),
+                    where=str(exc.path),
+                    message=exc.message,
+                )
             )
-        )
-        return report
+            return report
 
     policy_stages = inspect_policy_graph(policy, report)
 
@@ -844,21 +893,30 @@ def validate_policy_preflight(
         return report
 
     meta_path = req_meta_path(project_root, req_id)
-    try:
-        req_meta = load_req_meta(project_root, req_id)
+    if req_meta_override is not None:
+        req_meta = req_meta_override
         report.req_meta = req_meta
-    except LoaderError as exc:
-        report.issues.append(
-            PreflightIssue(
-                kind=_loader_kind_for_meta(exc.kind),
-                where=str(meta_path),
-                message=exc.message,
+    else:
+        try:
+            req_meta = load_req_meta(project_root, req_id)
+            report.req_meta = req_meta
+        except LoaderError as exc:
+            report.issues.append(
+                PreflightIssue(
+                    kind=_loader_kind_for_meta(exc.kind),
+                    where=str(meta_path),
+                    message=exc.message,
+                )
             )
-        )
-        return report
+            return report
 
     adopted = resolve_adopted_stages(
-        project_root, req_id, policy_stages, req_meta, report
+        project_root,
+        req_id,
+        policy_stages,
+        req_meta,
+        report,
+        contract_overrides=contract_overrides,
     )
     adopted = check_runtime_support(adopted, report, mode="validate_policy")
     report.adopted_stages = adopted

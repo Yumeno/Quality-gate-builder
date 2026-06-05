@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/patch.schema.json",
+  "title": "qgb JSON Patch document (Phase 2 subset)",
+  "description": "JSON Patch subset accepted by `qgb patch` (Phase 2 Step 2.2). RFC 6902 subset: add / replace / remove / test only. move / copy are reserved for Phase 3 and rejected at the schema layer along with the `from` field.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["op", "path"],
+    "properties": {
+      "op": {
+        "type": "string",
+        "enum": ["add", "replace", "remove", "test"]
+      },
+      "path": {
+        "type": "string",
+        "description": "RFC 6901 JSON Pointer. Empty string '' addresses the root. Validation of escapes and array indices is enforced at apply time (qgb/core/patch.py); the schema only checks the type."
+      },
+      "value": {
+        "description": "Required for add / replace / test. Forbidden for remove."
+      }
+    },
+    "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "properties": { "op": { "const": "remove" } },
+          "required": ["op"]
+        },
+        "then": {
+          "description": "Step 2.2 補修 A3 (Codex / subagent correctness 中): RFC 6902 §4.2 で remove op は value を禁止。`not: {required: [value]}` (旧) は value 必須を否定するだけで存在を許してしまうため、`properties: {value: false}` で value 出現自体を schema reject する形に変更。",
+          "properties": {
+            "value": false
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": { "op": { "const": "add" } },
+          "required": ["op"]
+        },
+        "then": {
+          "required": ["value"]
+        }
+      },
+      {
+        "if": {
+          "properties": { "op": { "const": "replace" } },
+          "required": ["op"]
+        },
+        "then": {
+          "required": ["value"]
+        }
+      },
+      {
+        "if": {
+          "properties": { "op": { "const": "test" } },
+          "required": ["op"]
+        },
+        "then": {
+          "required": ["value"]
+        }
+      }
+    ]
+  }
+}
