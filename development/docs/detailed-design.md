@@ -1084,25 +1084,33 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - patch の reverse (rollback)
 - multi-file lock / multi-file rollback (quality-system 全体 transaction)
 
-#### Step 2.3 — domain edit commands
+#### Step 2.3 — domain edit commands (**完結 2026-06-10**)
 
-**スコープ:**
+**スコープ (全項目完了):**
 
-- `qgb add-waiver REQ-APP-001 L6 --reason "..."` (受け入れ条件 phase-1 既達の手編集を CLI 化)
-- `qgb add-knowledge <knowledge.json>` (受け入れ条件 17 の手編集を CLI 化、append-only + partial-tail tolerant を維持)
-- knowledge orphan check: knowledge.jsonl 内で参照される REQ / contract が存在することの整合性検査 (`qgb validate-policy` に統合 or 独立 sub-command)
-- 内部実装は Step 2.2 の patch substrate を使う
+- `qgb add-waiver <REQ> <stage-id> --reason "..."` — 完了 (req-meta は patch substrate 経由 + knowledge.jsonl へ即時 evidence 記録 [F-007]、`--decided-by` / `--force` / `--dry-run` / `--json`)
+- `qgb add-knowledge <file>` — 完了 (object/array 両対応、all-or-nothing schema 検証、既存 id skip、created_at 補完なし、`--force` なし [append-only と意味論衝突のため意図的に非搭載、spec の「--force 有り」は add-waiver で充足])
+- knowledge orphan check — 完了 (`validate_policy_preflight` に `knowledge_orphan` kind で統合。waiver/REQ 不在 = blocker、waiver/stage 不在 = blocker、非 waiver = warning。**run_preflight には統合しない** — P9: REQ-A の orphan が `qgb run REQ-B` を塞がない)
+- patch substrate 消費 — 完了 (`apply_patch_doc_to_target` を内部 API として切り出し、add-waiver が in-memory patch を直接流す)
 
-**完了条件:**
+**完了条件 (全達成):**
 
-- `add-waiver` / `add-knowledge` が atomic / idempotent / `--force` 有り
-- orphan check が validate-policy 経由で blocker として出る (`add-waiver` を打った後に元 REQ を削除したら検出されること)
+- atomic / idempotent / `--force` — 達成 (atomicity は「file 単位の保証 + idempotent recovery」と定義: req-meta は atomic swap、knowledge は append-only + partial-tail tolerant。meta / knowledge を独立判定して欠けている方だけ埋める収束動作)
+- orphan check が validate-policy 経由で blocker — 達成 (`add-waiver` → REQ 削除 → `qgb validate-policy` exit 2 を CLI レベルでテスト)
 
-**規模感:** 1.0
+詳細な作業記録 (Codex 計画レビュー 10 観点 → 着手前 3 仕様確定 → 本体 → 段 1 [hook 注入初実地、reject ゼロ] → 補修 A1-A3 → Codex 横断 → 補修 B1-B3 → 2 周目「指摘なし収束」) は `journal/phase2-step2-3.md`。テスト 614 → 666 件、ruff clean。
+
+**規模感:** 0.9 で着地 (計画通り、Step 2.2 前借り効果が発現)
+
+**Step 2.4 / 2.5 / 2.7 への申し送り:**
+
+- Step 2.4: unrelated orphan blocker が patch 経由 edit を止める挙動の設計確認、`qgb check` は `add_waiver(dry_run=True)` / `apply_patch_doc_to_target(dry_run=True)` の組合せで実装可
+- Step 2.5: knowledge.jsonl は JSON Patch 対象外を維持 (`qgb.core.knowledge` 経由限定)、`EditError.reason` / `PatchApplyError.reason` を安定 API として扱う
+- Step 2.7: helper 重複整理 (A4)、複数回 force 時の warning 文言明確化 (Codex 2 周目軽微注記)
 
 **Phase 3 送り:**
 
-- waiver の削除 / revoke / supersede
+- waiver の削除 / revoke / supersede (--force の正式な reason 改訂もここ)
 - knowledge entry の削除
 
 #### Step 2.4 — daily verification channel
@@ -1251,3 +1259,4 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 | 0.17 | 2026-06-05 | §13.5 Phase 2 完了時の繰越判定パート新設: Phase 3 送り項目 (JSON Patch move/copy、waiver 削除、changed-files 絞り込み、additionalProperties: false 全面適用、Phase 1 負債 6 件) を Step 2.7 完了直後に user と相談して Phase 3 / 4 / 5 / Phase 6 以降への流し込みを判断する **必須プロセス** として明文化。相談項目 5 点 (繰越流し込み / 新規負債重要度 / additionalProperties 判断 / Phase 3 規模再確認 / Phase 2 全体振り返り `journal/phase2-summary.md`)。`/ask-codex-with-context` skill 経由 Codex セカンドオピニオン併用。Step 2.7 完了 = Phase 2 完結ではなく、user 相談を経て初めて Phase 2 完結とする規律。コード変更なし。**Step 2.2 着手前 spec 改訂** |
 | 0.18 | 2026-06-05 | **Phase 2 Step 2.2 着手前判断確定** (`journal/phase2-step2-2-prejournal.md` で詳細記録): Codex 計画レビュー (skill 経由) で 18 指摘 + 5 着手前修正要件を受領後、最大の構造リスク (validate-policy が file 読込前提で in-memory doc を受け取れない) について案 X (preflight に override seam) と案 Y (sibling tmp で実 file 入れ替え) を検討。思想憲章 P3 (コード不変仮定の禁止) / P7 (再現可能証跡) / P9 (単一責任の本質) / NF-004 (Windows first-class) で **案 X が全面的に有利**、Phase 1 Step 6a の `iter_issues(severity)` 先払いと同型と判断、user により案 X 採用確定。規模感は Step 2.2 単独で 1.2 → 1.7 に上振れだが、Step 2.3 / 2.4 / 2.5 で同 seam を再利用できるため Phase 2 全体では 7.5 → 7.4 でほぼ不変 (前借り回収)。Step 2.2 着手前確定事項 5 件 (override seam / json_pointer.py 分離 / patch.schema.json 厳密化 / PatchError reason code / `--force` 撤回 + `--dry-run` 完全実行)。コード変更なし、prejournal 作成のみ。**Step 2.2 実装着手準備完了** |
 | 0.19 | 2026-06-05 | **Phase 2 Step 2.2 完結**: patch substrate (Codex 計画レビュー 18 指摘 + 5 着手前修正要件 → prejournal で案 X 採用判断 → 本体実装 → 段 1 観点別 5 subagent → 段 3 Codex 横断 → A1-A6 補修 → 段 5 Codex 2 周目「指摘なし収束」)。`qgb/core/json_pointer.py` (encode/decode/parse_array_index、ASCII digit 限定 [A1])、`qgb/core/patch.py` (4 op、PatchError 8 reason)、`qgb/schemas/patch.schema.json` (op 別 required/forbidden、remove で value 完全禁止 [A3])、`qgb/core/preflight.py` の override seam 追加 (案 X、default 経路 Phase 1 完全互換)、`qgb/core/patch_apply.py` (target classify [A2 segment 厳密チェック]、atomic swap [A4 suffix 明示]、PatchApplyError 9 reason)、`qgb/cli.py` の `qgb patch` (`--dry-run` 完全実行、`--force` なし)、`tests/conftest.py` 集約 [A5]。Codex 横断レビュー追加申し送り 2 件 (contract_overrides key 統一 / 複数 doc 同一 world 規約) を Step 2.5 規約として journal に明文化。Phase 1 挙動は default 経路で完全保存、既存 example 3 例 + fixture すべて無変更通過。詳細は `journal/phase2-step2-2.md`。テスト 487 → 614 件 (+127)、ruff clean。**Step 2.3 着手準備完了** |
+| 0.20 | 2026-06-10 | **Phase 2 Step 2.3 完結**: domain edit commands (Codex 計画レビュー 10 観点 → 着手前 3 仕様確定 [--force は req-meta のみ更新 + knowledge 歴史保持 / atomicity = file 単位保証 + idempotent recovery / add-knowledge は補完なし・--force なし・all-or-nothing] → 本体 → 段 1 観点別 5 subagent [PreToolUse hook によるテンプレ自動注入の初実地、reject ゼロ] → 補修 A1-A3 [dry-run would-be 値 / OSError→EditError(io_error) / テスト 6 件] → Codex 横断 → 補修 B1-B3 [force+knowledge 欠落の warning 真実性 / 生成 entry の schema validate / append 保証境界の文言+実装] → 2 周目「指摘なし収束」)。`qgb/core/knowledge.py` (store 層: append_knowledge_entries / build_waiver_knowledge_entry / waiver_knowledge_id 正本移管 / check_knowledge_orphans) + `qgb/core/edit_commands.py` (orchestration 層: add_waiver / add_knowledge / EditError reason enum) の 2 module 構成。`apply_patch_doc_to_target` を patch substrate の内部 API として切り出し。`knowledge_orphan` kind を validate_policy_preflight に統合 (run_preflight には入れない、P9)。実装中に waiver id 形式の不一致 (`KNOWLEDGE-WAIVER-` vs 正本 `WAIVER-`) を自己検出し knowledge.py を正本に一元化。詳細は `journal/phase2-step2-3.md`。テスト 614 → 666 件 (+52)、ruff clean。**Step 2.4 着手準備完了** |

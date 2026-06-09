@@ -55,6 +55,7 @@ __all__ = [
     "PatchApplyResult",
     "TargetKind",
     "ALLOWED_TARGETS",
+    "apply_patch_doc_to_target",
     "apply_patch_to_target",
     "classify_target",
 ]
@@ -403,6 +404,34 @@ def apply_patch_to_target(
     :returns: :class:`PatchApplyResult` on success (including dry-run).
     :raises PatchApplyError: on any of the 8 reason codes (see class).
     """
+    # 3 (file front-end). Read the patch document; everything after parse
+    # is shared with the in-memory entry point below (Step 2.3 切り出し).
+    patch_doc = _load_json_file(patch_path, reason_on_error="patch_not_json")
+    return apply_patch_doc_to_target(
+        project_root, target_rel, patch_doc, dry_run=dry_run
+    )
+
+
+def apply_patch_doc_to_target(
+    project_root: Path,
+    target_rel: str,
+    patch_doc: Any,
+    *,
+    dry_run: bool = False,
+) -> PatchApplyResult:
+    """Apply an in-memory JSON Patch document to a target file.
+
+    Phase 2 Step 2.3 で :func:`apply_patch_to_target` から切り出した
+    **core 内部向けの低水準 API** (Codex Step 2.3 計画レビュー指摘 8)。
+    `qgb add-waiver` (edit_commands) のような domain edit command が patch
+    を file 経由でなく直接組み立てて流すための入口。
+
+    file path 版との意味一致 (テストで固定):
+
+    * patch schema 検証 / apply / target schema 検証 / validate-policy /
+      atomic swap / dry-run の全段が file path 版と同一コード経路
+    * 違いは「patch document を file から読むか引数で受けるか」のみ
+    """
     # 1. Resolve target.
     target, kind = classify_target(project_root, target_rel)
     if not target.exists():
@@ -414,9 +443,8 @@ def apply_patch_to_target(
     # 2. Read target as JSON.
     original = _load_json_file(target, reason_on_error="target_not_json")
 
-    # 3. Read and validate patch.
-    patch_doc = _load_json_file(patch_path, reason_on_error="patch_not_json")
-    _validate_patch_against_schema(patch_doc, patch_path)
+    # 3. Validate the patch document shape.
+    _validate_patch_against_schema(patch_doc, Path("<in-memory>"))
 
     # 4. Apply patch in memory.
     try:

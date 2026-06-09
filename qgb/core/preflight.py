@@ -63,6 +63,7 @@ PreflightIssueKind = Literal[
     "no_required_stages",
     "verification_type_mismatch",
     "stage_count_out_of_range",
+    "knowledge_orphan",
 ]
 
 
@@ -798,6 +799,40 @@ def run_preflight(project_root: Path, req_id: str) -> PreflightReport:
     return report
 
 
+def check_knowledge_orphans_preflight(
+    project_root: Path, report: PreflightReport
+) -> None:
+    """Surface knowledge.jsonl orphans as preflight issues (Step 2.3 軸 4).
+
+    Delegates the scan to :func:`qgb.core.knowledge.check_knowledge_orphans`
+    (the store layer owns what "orphan" means; this shim owns how it maps
+    onto PreflightIssue — P9). Severity comes from the finding itself:
+    waiver orphans are blockers (spec 完了条件: add-waiver 後に REQ を
+    削除したら検出される)、非 waiver orphans are warnings.
+
+    This check belongs to ``qgb validate-policy`` only — ``run_preflight``
+    deliberately does NOT call it, because an orphaned waiver for REQ-A
+    must not block ``qgb run REQ-B`` (P9: design-quality diagnostics live
+    in validate-policy).
+    """
+    from qgb.core.knowledge import check_knowledge_orphans
+
+    for finding in check_knowledge_orphans(project_root):
+        severity: PreflightSeverity = (
+            "blocker" if finding.severity == "blocker" else "warning"
+        )
+        report.issues.append(
+            PreflightIssue(
+                kind="knowledge_orphan",
+                where=(
+                    f"knowledge.jsonl::id={finding.knowledge_id}"
+                ),
+                message=finding.message,
+                severity=severity,
+            )
+        )
+
+
 def validate_policy_preflight(
     project_root: Path,
     req_id: str | None = None,
@@ -882,8 +917,13 @@ def validate_policy_preflight(
 
     policy_stages = inspect_policy_graph(policy, report)
 
+    # Phase 2 Step 2.3: knowledge orphan scan runs in BOTH the project-wide
+    # and the per-REQ path (it reads knowledge.jsonl + req metas directly,
+    # independent of the policy graph above).
+    check_knowledge_orphans_preflight(project_root, report)
+
     if req_id is None:
-        # Project-wide check: policy graph quality only.
+        # Project-wide check: policy graph quality + knowledge integrity.
         return report
 
     # Same short-circuit as run_preflight (Codex M2): graph integrity

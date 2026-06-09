@@ -1024,6 +1024,171 @@ def _handle_patch(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ---- qgb add-waiver / add-knowledge (Phase 2 Step 2.3) -------------------
+
+
+def _edit_error_to_json(err, *, command: str, dry_run: bool) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "ok": False,
+        "command": command,
+        "dry_run": dry_run,
+        "reason": err.reason,
+        "message": err.message,
+    }
+    if err.detail:
+        payload["detail"] = err.detail
+    return payload
+
+
+def _handle_add_waiver(args: argparse.Namespace) -> int:
+    """Waive a REQ stage via the patch substrate + knowledge store.
+
+    Exit codes: 0 success (including no-op), 1 validate-policy blocker,
+    2 other errors (REQ/stage not found, waiver conflict, schema issues).
+    """
+    from qgb.core.edit_commands import EditError, add_waiver
+
+    project_root = Path(args.path).resolve()
+    dry_run = bool(args.dry_run)
+
+    try:
+        result = add_waiver(
+            project_root,
+            args.req_id,
+            args.stage_id,
+            args.reason,
+            decided_by=args.decided_by,
+            force=bool(args.force),
+            dry_run=dry_run,
+        )
+    except EditError as exc:
+        if args.json:
+            json.dump(
+                _edit_error_to_json(exc, command="add-waiver", dry_run=dry_run),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(f"qgb add-waiver: {exc}", file=sys.stderr)
+            for b in exc.detail.get("blockers", []) or []:
+                if isinstance(b, dict):
+                    print(
+                        f"  blocker: {b.get('kind')} at {b.get('where')}: "
+                        f"{b.get('message')}",
+                        file=sys.stderr,
+                    )
+        return EXIT_DENY if exc.reason == "validate_policy_blocker" else EXIT_NOT_READY
+
+    if args.json:
+        json.dump(
+            {
+                "ok": True,
+                "command": "add-waiver",
+                "req_id": result.req_id,
+                "stage_id": result.stage_id,
+                "no_op": result.no_op,
+                "meta_changed": result.meta_changed,
+                "knowledge_appended": result.knowledge_appended,
+                "forced": result.forced,
+                "dry_run": dry_run,
+                "would_write": result.would_write,
+                "warnings": result.warnings,
+            },
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        if result.no_op:
+            print(
+                f"qgb add-waiver: {result.req_id}/{result.stage_id} is "
+                f"already waived with this reason (no-op)",
+                file=sys.stdout,
+            )
+        elif dry_run:
+            print(
+                f"qgb add-waiver: would waive {result.req_id}/{result.stage_id}",
+                file=sys.stdout,
+            )
+        else:
+            print(
+                f"qgb add-waiver: waived {result.req_id}/{result.stage_id}"
+                + (" (meta updated)" if result.meta_changed else "")
+                + (" (knowledge recorded)" if result.knowledge_appended else ""),
+                file=sys.stdout,
+            )
+        for w in result.warnings:
+            print(f"qgb add-waiver: warning: {w}", file=sys.stderr)
+    return EXIT_OK
+
+
+def _handle_add_knowledge(args: argparse.Namespace) -> int:
+    """Append knowledge entries from a JSON file (append-only store).
+
+    Exit codes: 0 success (including all-skip), 2 schema / parse errors.
+    """
+    from qgb.core.edit_commands import EditError, add_knowledge
+
+    project_root = Path(args.path).resolve()
+    dry_run = bool(args.dry_run)
+
+    try:
+        result = add_knowledge(
+            project_root, Path(args.file), dry_run=dry_run
+        )
+    except EditError as exc:
+        if args.json:
+            json.dump(
+                _edit_error_to_json(
+                    exc, command="add-knowledge", dry_run=dry_run
+                ),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(f"qgb add-knowledge: {exc}", file=sys.stderr)
+            for issue in exc.detail.get("issues", []) or []:
+                if isinstance(issue, dict):
+                    print(
+                        f"  entry[{issue.get('index')}] "
+                        f"{issue.get('path') or '/'}: {issue.get('message')}",
+                        file=sys.stderr,
+                    )
+        return EXIT_NOT_READY
+
+    if args.json:
+        json.dump(
+            {
+                "ok": True,
+                "command": "add-knowledge",
+                "appended": result.appended_ids,
+                "skipped": result.skipped_ids,
+                "appended_count": len(result.appended_ids),
+                "skipped_count": len(result.skipped_ids),
+                "dry_run": dry_run,
+                "would_write": result.would_write,
+                "written": result.written,
+            },
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        verb = "would append" if dry_run else "appended"
+        print(
+            f"qgb add-knowledge: {verb} {len(result.appended_ids)} "
+            f"entr(y/ies), skipped {len(result.skipped_ids)} existing",
+            file=sys.stdout,
+        )
+    return EXIT_OK
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -1376,6 +1541,103 @@ def build_parser() -> QgbArgumentParser:
         help="Emit a machine-readable JSON report to stdout instead of text",
     )
     patch_p.set_defaults(handler=_handle_patch)
+
+    # ---- qgb add-waiver (Phase 2 Step 2.3) -------------------------------
+    aw_p = subparsers.add_parser(
+        "add-waiver",
+        help=(
+            "Waive a stage of a REQ with a recorded reason "
+            "(req-meta via patch substrate + knowledge.jsonl evidence, "
+            "Phase 2 Step 2.3)"
+        ),
+        description=(
+            "Mark a stage as waived in the REQ meta (validated through the "
+            "Step 2.2 patch substrate: schema + validate-policy gated, "
+            "atomic swap) and record the decision as a kind=waiver entry "
+            "in knowledge.jsonl (append-only, idempotent). Re-running with "
+            "the same reason is a no-op; a different reason requires "
+            "--force, which updates the req-meta only and keeps the "
+            "existing knowledge entry as audit history (formal revision is "
+            "Phase 3 revoke/supersede). Atomicity is per-file with "
+            "idempotent recovery: if the knowledge append fails after the "
+            "meta update, re-running the command converges."
+        ),
+    )
+    aw_p.add_argument("req_id", help="REQ id (e.g. REQ-APP-001)")
+    aw_p.add_argument("stage_id", help="Stage id declared in the REQ meta")
+    aw_p.add_argument(
+        "--reason",
+        required=True,
+        help="Justification recorded as evidence (F-007; non-empty)",
+    )
+    aw_p.add_argument(
+        "--decided-by",
+        default="user",
+        help="Who decided the waiver (recorded in knowledge.jsonl; default: user)",
+    )
+    aw_p.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite the req-meta reason when the stage is already waived "
+            "with a different reason (the existing knowledge entry is kept)"
+        ),
+    )
+    aw_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate everything but write nothing",
+    )
+    aw_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root containing .quality-system/ (default: current directory)",
+    )
+    aw_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    aw_p.set_defaults(handler=_handle_add_waiver)
+
+    # ---- qgb add-knowledge (Phase 2 Step 2.3) ----------------------------
+    ak_p = subparsers.add_parser(
+        "add-knowledge",
+        help=(
+            "Append knowledge entries from a JSON file to knowledge.jsonl "
+            "(append-only, schema-validated, Phase 2 Step 2.3)"
+        ),
+        description=(
+            "Validate one entry (object) or several (array) against "
+            "knowledge.schema.json and append them to "
+            ".quality-system/knowledge/knowledge.jsonl. The input file is "
+            "the source of truth: no fields are backfilled (created_at "
+            "must be present). Entries whose id already exists are "
+            "skipped (idempotent). If any entry fails validation, nothing "
+            "is appended (all-or-nothing). There is no --force: the store "
+            "is append-only and entry removal is Phase 3."
+        ),
+    )
+    ak_p.add_argument(
+        "file",
+        help="Path to a JSON file containing one entry or an array of entries",
+    )
+    ak_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and report what would be appended, write nothing",
+    )
+    ak_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root containing .quality-system/ (default: current directory)",
+    )
+    ak_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    ak_p.set_defaults(handler=_handle_add_knowledge)
 
     return parser
 
