@@ -1020,7 +1020,7 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
     - 理由: 依存ライブラリ追加回避 (NF-010)、秘密情報を qgb 設定に持たせない、プロバイダ差を抽象化しない、テスト困難性を本体に持ち込まない、思想 P2 (AI は探索装置) / P6 (LLM 単独 ALLOW 禁止) の境界を実装段階で曖昧化させない
     - 命名規約: `--interactive` のような自然言語匂いの UI を qgb 本体に持ち込まない。`propose-context` / `adopt` のような API 寄り命名にする
 2. **JSON Patch subset**: Step 2.2 で実装する patch は `add` / `replace` / `remove` / `test` の 4 op のみ。`move` / `copy` は Phase 3 送り
-3. **`qgb check` / `qgb dev` の証跡境界**: tmp artifacts は出すが (デバッグ可能性のため必須)、curated `evidence/latest/` は更新しない。tmp は `.qgb/tmp/check/<timestamp>/gate.json` のような揮発パスに書く
+3. **`qgb check` / `qgb dev` の証跡境界**: tmp artifacts は出すが (デバッグ可能性のため必須)、curated `evidence/latest/` は更新しない。tmp は `.quality-system/artifacts/<REQ>/checks/<ts>-<runid>/` に書く (Step 2.4 着手前確定 2026-06-11: 当初例示の `.qgb/tmp/check/` は「init が `.qgb/` を .gitignore 予約済み」という事実誤認に基づいていた。実際の init 予約は `.quality-system/artifacts/` のみ。check 出力は run の揮発出力と同種の「REQ に対する検証機構の出力」であり tool-private キャッシュではないため、既予約の揮発木に同居させる。境界の本質 = **curated 不変 + 揮発出力** は不変、パス字面のみ改訂)
 4. **schema strict mode**: 段階的導入。Step 2.1 で format assertion + `$ref` allowlist を強制、`additionalProperties: false` は `--strict` フラグで独立 (Step 2.7 で全面適用判断)
 5. **waiver 削除**: Phase 2 では `add-waiver` のみ。削除 / revoke / supersede モデルは Phase 3 送り
 
@@ -1113,18 +1113,22 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - waiver の削除 / revoke / supersede (--force の正式な reason 改訂もここ)
 - knowledge entry の削除
 
-#### Step 2.4 — daily verification channel
+#### Step 2.4 — daily verification channel (着手前確定 2026-06-11、`journal/phase2-step2-4-prejournal.md`)
 
-**スコープ:**
+**スコープ (Codex 計画レビュー 2026-06-11 反映):**
 
-- `qgb check [REQ-ID]` — preflight + validate-policy + (該当 REQ があれば) verification を dry-run 的に実行。**curated `evidence/latest/` は更新しない**、`.qgb/tmp/check/<timestamp>/gate.json` に揮発出力
-- `qgb dev [REQ-ID]` — `qgb check` の連続実行版 (watch mode は Phase 3、Step 2.4 では一回実行のみ)
-- 出力形式: text human-readable + `--json`、exit code は `qgb run` と同じ (0=OK, 1=DENY, 2=NOT_READY)
+- `qgb check REQ-ID` — **official run rehearsal**: `run_preflight` (run と同一関数) → `run_stages` → `decide` を共有し、`write_evidence` は呼ばず check 専用 writer で `.quality-system/artifacts/<REQ>/checks/<ts>-<runid>/` にのみ揮発出力 (境界 3 改訂版)。knowledge orphan scan は advisory 表示 (exit code を支配しない — unrelated orphan blocker が daily check を止めない、Step 2.3 申し送りの解)
+- `qgb check` (REQ 省略) — project-wide `validate_policy_preflight(req_id=None)` 診断のみ (verification なし、揮発出力なし、exit は blocker 有無で 0/2)
+- `qgb dev [REQ-ID]` — `qgb check` への thin alias (watch mode は Phase 3、help に「currently equivalent to check」明記)
+- 出力形式: text human-readable + `--json`、exit code は `qgb run` と同じ (0=OK, 1=DENY, 2=NOT_READY)。ただし表示は「would ALLOW / would DENY」(rehearsal であることの明示)
+- gate.json は schema 共用で `mode: "check"` を追加 (専用 schema は作らない)。decision.meaning に「not an official gate; curated evidence was not updated」を明記 (C-002 整合)
+- check は command stage も実行する (リハーサルの価値)。**"read-only" とは呼ばない** (NF-010)。F-008 確認プロンプトは check では出さない (daily channel の摩擦回避)、help に「verification commands may run」明記
+- check tmp の prune: `QGB_KEEP_RUNS` を流用 (専用 env は Phase 3)
 
 **完了条件:**
 
-- `qgb check` が curated `evidence/latest/` を一切 touch しない (テストで machine-verify)
-- tmp artifacts が `.gitignore` に自動追加される (init で既に予約されている `.qgb/` 配下)
+- `qgb check` が curated `evidence/latest/` / `knowledge.jsonl` / `artifacts/<REQ>/runs/` を一切 touch しない (テストで machine-verify)
+- tmp artifacts は init が既に .gitignore 予約済みの `.quality-system/artifacts/` 配下 (追加の gitignore 手当て不要)
 - `qgb run` と `qgb check` の preflight 経路が同じ関数を共有 (DRY、P9)
 
 **規模感:** 1.0
@@ -1133,6 +1137,7 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 
 - `qgb dev` の changed-files 絞り込み (P3 緊張、REQ ↔ source の依存マッピングが必要)
 - watch mode (filesystem 監視)
+- 全 REQ 一括 check、check 専用 keep env (`QGB_KEEP_CHECKS`)、check 専用 schema
 
 #### Step 2.5 — Pattern B external-LLM interface
 
@@ -1260,3 +1265,4 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 | 0.18 | 2026-06-05 | **Phase 2 Step 2.2 着手前判断確定** (`journal/phase2-step2-2-prejournal.md` で詳細記録): Codex 計画レビュー (skill 経由) で 18 指摘 + 5 着手前修正要件を受領後、最大の構造リスク (validate-policy が file 読込前提で in-memory doc を受け取れない) について案 X (preflight に override seam) と案 Y (sibling tmp で実 file 入れ替え) を検討。思想憲章 P3 (コード不変仮定の禁止) / P7 (再現可能証跡) / P9 (単一責任の本質) / NF-004 (Windows first-class) で **案 X が全面的に有利**、Phase 1 Step 6a の `iter_issues(severity)` 先払いと同型と判断、user により案 X 採用確定。規模感は Step 2.2 単独で 1.2 → 1.7 に上振れだが、Step 2.3 / 2.4 / 2.5 で同 seam を再利用できるため Phase 2 全体では 7.5 → 7.4 でほぼ不変 (前借り回収)。Step 2.2 着手前確定事項 5 件 (override seam / json_pointer.py 分離 / patch.schema.json 厳密化 / PatchError reason code / `--force` 撤回 + `--dry-run` 完全実行)。コード変更なし、prejournal 作成のみ。**Step 2.2 実装着手準備完了** |
 | 0.19 | 2026-06-05 | **Phase 2 Step 2.2 完結**: patch substrate (Codex 計画レビュー 18 指摘 + 5 着手前修正要件 → prejournal で案 X 採用判断 → 本体実装 → 段 1 観点別 5 subagent → 段 3 Codex 横断 → A1-A6 補修 → 段 5 Codex 2 周目「指摘なし収束」)。`qgb/core/json_pointer.py` (encode/decode/parse_array_index、ASCII digit 限定 [A1])、`qgb/core/patch.py` (4 op、PatchError 8 reason)、`qgb/schemas/patch.schema.json` (op 別 required/forbidden、remove で value 完全禁止 [A3])、`qgb/core/preflight.py` の override seam 追加 (案 X、default 経路 Phase 1 完全互換)、`qgb/core/patch_apply.py` (target classify [A2 segment 厳密チェック]、atomic swap [A4 suffix 明示]、PatchApplyError 9 reason)、`qgb/cli.py` の `qgb patch` (`--dry-run` 完全実行、`--force` なし)、`tests/conftest.py` 集約 [A5]。Codex 横断レビュー追加申し送り 2 件 (contract_overrides key 統一 / 複数 doc 同一 world 規約) を Step 2.5 規約として journal に明文化。Phase 1 挙動は default 経路で完全保存、既存 example 3 例 + fixture すべて無変更通過。詳細は `journal/phase2-step2-2.md`。テスト 487 → 614 件 (+127)、ruff clean。**Step 2.3 着手準備完了** |
 | 0.20 | 2026-06-10 | **Phase 2 Step 2.3 完結**: domain edit commands (Codex 計画レビュー 10 観点 → 着手前 3 仕様確定 [--force は req-meta のみ更新 + knowledge 歴史保持 / atomicity = file 単位保証 + idempotent recovery / add-knowledge は補完なし・--force なし・all-or-nothing] → 本体 → 段 1 観点別 5 subagent [PreToolUse hook によるテンプレ自動注入の初実地、reject ゼロ] → 補修 A1-A3 [dry-run would-be 値 / OSError→EditError(io_error) / テスト 6 件] → Codex 横断 → 補修 B1-B3 [force+knowledge 欠落の warning 真実性 / 生成 entry の schema validate / append 保証境界の文言+実装] → 2 周目「指摘なし収束」)。`qgb/core/knowledge.py` (store 層: append_knowledge_entries / build_waiver_knowledge_entry / waiver_knowledge_id 正本移管 / check_knowledge_orphans) + `qgb/core/edit_commands.py` (orchestration 層: add_waiver / add_knowledge / EditError reason enum) の 2 module 構成。`apply_patch_doc_to_target` を patch substrate の内部 API として切り出し。`knowledge_orphan` kind を validate_policy_preflight に統合 (run_preflight には入れない、P9)。実装中に waiver id 形式の不一致 (`KNOWLEDGE-WAIVER-` vs 正本 `WAIVER-`) を自己検出し knowledge.py を正本に一元化。詳細は `journal/phase2-step2-3.md`。テスト 614 → 666 件 (+52)、ruff clean。**Step 2.4 着手準備完了** |
+| 0.21 | 2026-06-11 | **Phase 2 Step 2.4 着手前判断確定** (`journal/phase2-step2-4-prejournal.md` で詳細記録): Codex 計画レビューで方向性承認 + 中程度以上 5 指摘 (per-REQ check は unrelated orphan blocker で止めない / tmp パス変更は境界 3 の明示承認必須 / mode:"check" の機械可読誤認対策 / "read-only" と呼ばない / check tmp の prune 必須) を受領。最大の判断点 = 揮発出力先について、init の .gitignore 予約が `.quality-system/artifacts/` のみで `.qgb/` 未予約という事実誤認を発見し、案 A (`artifacts/<REQ>/checks/<ts>-<runid>/`、既予約木に同居) を理念照合 4 点 (P7 同種同所 / tool-private でないものを `.qgb/` に置くのは分類の誤り / NF-010 表面積最小化 / 境界 3 の正本は curated 不変でありパスは例示) で user 確定。§13.1 境界 3 と §13.2 Step 2.4 スコープを改訂。コード変更なし。**Step 2.4 実装着手準備完了** |
