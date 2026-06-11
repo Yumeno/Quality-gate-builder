@@ -96,13 +96,24 @@ def read_existing_ids(kjsonl: Path) -> set[str]:
 
     Malformed lines (including a partial tail) are skipped silently —
     surfacing them is ``qgb validate``'s responsibility (P9).
+
+    Step 2.4 補修 A2: bytes are decoded with ``errors="replace"`` so a
+    tail torn mid-multi-byte-character (the crash-mid-append shape this
+    reader exists to tolerate — reasons routinely contain Japanese) lands
+    in the same skip branch as a text-level torn tail instead of raising
+    ``UnicodeDecodeError`` out of every caller.
     """
     existing: set[str] = set()
     if not kjsonl.is_file():
         return existing
-    for line in kjsonl.read_text(encoding="utf-8").splitlines():
+    for line in kjsonl.read_bytes().decode("utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line:
+            continue
+        # 補修 B1: a line carrying U+FFFD was byte-corrupted; its id (or
+        # any other field) cannot be trusted, so derive nothing from it.
+        # qgb validate reports the corruption loudly (P9).
+        if "�" in line:
             continue
         try:
             entry = json.loads(line)
@@ -265,15 +276,24 @@ def check_knowledge_orphans(project_root: Path) -> list[OrphanFinding]:
 
     See module docstring for the severity design. Findings are returned in
     file order (stable for tests and reports).
+
+    Step 2.4 補修 A2: decoded with ``errors="replace"`` for the same
+    reason as :func:`read_existing_ids` — this scan is advisory context
+    for ``qgb check`` and must not crash on a byte-torn partial tail.
     """
     findings: list[OrphanFinding] = []
     kjsonl = knowledge_jsonl_path(project_root)
     if not kjsonl.is_file():
         return findings
 
-    for line in kjsonl.read_text(encoding="utf-8").splitlines():
+    for line in kjsonl.read_bytes().decode("utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line:
+            continue
+        # 補修 B1: never derive findings from a byte-corrupted line — a
+        # garbled applies_to would fabricate a bogus orphan blocker.
+        # qgb validate reports the corruption loudly (P9).
+        if "�" in line:
             continue
         try:
             entry = json.loads(line)

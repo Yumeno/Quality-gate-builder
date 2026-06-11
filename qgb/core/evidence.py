@@ -185,9 +185,19 @@ def build_gate_document(
     results: list[StageResult],
     basis: list[str],
     run_dir_rel: str,
-    curated_latest_rel: str,
+    curated_latest_rel: str | None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the dict that becomes gate.json (both copies).
+
+    Phase 2 Step 2.4: ``mode`` / ``curated_latest_rel=None`` support the
+    ``qgb check`` rehearsal gate. ``mode=None`` (official ``qgb run``)
+    keeps the Phase 1 document byte-identical: no ``mode`` field is
+    emitted and ``paths.curated_latest_dir`` stays present. A check gate
+    passes ``mode="check"`` and ``curated_latest_rel=None`` — the field
+    is omitted entirely (not pointed at a curated dir that was never
+    updated) so machine consumers cannot mistake the rehearsal for an
+    official gate.
 
     Step 6+7 統合レビュー補修 (Codex A6): if the runner produced no
     result for an adopted stage (which should not happen in normal
@@ -238,7 +248,11 @@ def build_gate_document(
             }
         )
 
-    return {
+    paths: dict[str, Any] = {"run_dir": run_dir_rel}
+    if curated_latest_rel is not None:
+        paths["curated_latest_dir"] = curated_latest_rel
+
+    gate: dict[str, Any] = {
         "schema_version": "1.0",
         "req_id": req_id,
         "timestamp_utc": timestamps.compact,
@@ -258,13 +272,13 @@ def build_gate_document(
             "scope": decision.scope,
         },
         "runner": {"name": "qgb", "version": __version__},
-        "paths": {
-            "run_dir": run_dir_rel,
-            "curated_latest_dir": curated_latest_rel,
-        },
+        "paths": paths,
         "stages": stages_payload,
         "basis": basis,
     }
+    if mode is not None:
+        gate["mode"] = mode
+    return gate
 
 
 def build_summary_md(gate: dict[str, Any]) -> str:
@@ -278,8 +292,18 @@ def build_summary_md(gate: dict[str, Any]) -> str:
     req_id = gate["req_id"]
     status = gate["status"]
     meaning = gate["decision"]["meaning"]
+    is_check = gate.get("mode") == "check"
 
-    lines.append(f"# {req_id} 採用判定サマリ")
+    if is_check:
+        lines.append(f"# {req_id} check リハーサル結果")
+        lines.append("")
+        lines.append(
+            "> **これは `qgb check` のリハーサル結果であり、正式な採用判定では"
+            "ない。** curated evidence (`evidence/<REQ>/latest/`) は更新されて"
+            "いない。"
+        )
+    else:
+        lines.append(f"# {req_id} 採用判定サマリ")
     lines.append("")
     lines.append("## 判定結果")
     lines.append("")
@@ -300,7 +324,9 @@ def build_summary_md(gate: dict[str, Any]) -> str:
         f"| Runner | {gate['runner']['name']} {gate['runner']['version']} |"
     )
     lines.append(f"| run_dir | `{gate['paths']['run_dir']}` |")
-    lines.append(f"| curated_latest_dir | `{gate['paths']['curated_latest_dir']}` |")
+    curated_latest = gate["paths"].get("curated_latest_dir")
+    if curated_latest is not None:
+        lines.append(f"| curated_latest_dir | `{curated_latest}` |")
     if status == "DENY":
         lines.append(f"| failed_stage | `{gate['failed_stage']}` |")
     lines.append("")

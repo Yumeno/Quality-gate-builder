@@ -261,7 +261,16 @@ def run_validate(root: Path) -> ValidateReport:
     for path, schema_name in _iter_jsonl_files(root):
         report.files_checked.append((path, schema_name))
         try:
-            text = path.read_text(encoding="utf-8")
+            # Step 2.4 補修 A2: decode with errors="replace" instead of
+            # strict. A crash mid-append can cut a multi-byte UTF-8
+            # sequence (knowledge entries carry Japanese reasons), and a
+            # strict read_text would raise UnicodeDecodeError before the
+            # line logic below ever runs — crashing every caller
+            # (run/check preflight) instead of hitting the partial-tail
+            # skip. Byte corruption on a terminated line is re-detected
+            # loudly via the U+FFFD check in the line loop (補修 B1) so
+            # tolerance stays scoped to the torn tail.
+            text = path.read_bytes().decode("utf-8", errors="replace")
         except OSError as exc:
             report.read_errors.append(
                 ReadError(file=path, message=f"read error: {exc}")
@@ -287,6 +296,28 @@ def run_validate(root: Path) -> ValidateReport:
             if not line:
                 continue
             is_last_line = line_no == len(lines)
+            # Step 2.4 補修 B1 (Codex/段 1 backward-compat 指摘): a byte
+            # corrupted INSIDE a JSON string value (Japanese reasons are
+            # the common content) decodes to U+FFFD and would otherwise
+            # parse as valid JSON — silently passing a file the old
+            # strict decoder loudly crashed on. Treat any replacement
+            # character on a *terminated* line as corruption; the torn
+            # tail (last line, no trailing newline) keeps its Step 7
+            # silent-skip semantics.
+            if "�" in line:
+                if is_last_line and not ends_with_newline:
+                    continue
+                report.read_errors.append(
+                    ReadError(
+                        file=path,
+                        message=(
+                            f"line {line_no} contains U+FFFD replacement "
+                            f"characters: byte-level corruption in a "
+                            f"terminated line"
+                        ),
+                    )
+                )
+                continue
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError as exc:

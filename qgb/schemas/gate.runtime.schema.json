@@ -29,6 +29,11 @@
       "type": "string",
       "pattern": "^REQ-[A-Z0-9]+-[0-9]{3,}$"
     },
+    "mode": {
+      "type": "string",
+      "enum": ["check"],
+      "description": "Phase 2 Step 2.4: present (value 'check') only on gates produced by 'qgb check'. Official 'qgb run' gates omit this field (absence = official). When mode=check, paths.curated_latest_dir must be absent (see allOf)."
+    },
     "timestamp_utc": {
       "type": "string",
       "description": "Compact UTC timestamp (wall-clock truth, seconds precision): YYYY-MM-DDTHHMMSSZ. Same instant as timestamp_rfc3339. paths.run_dir uses <timestamp_utc>-<run_id> so collisions are absorbed by run_id, not by walking timestamps forward.",
@@ -73,7 +78,7 @@
     },
     "paths": {
       "type": "object",
-      "required": ["run_dir", "curated_latest_dir"],
+      "required": ["run_dir"],
       "properties": {
         "run_dir": {
           "type": "string",
@@ -94,7 +99,11 @@
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
-          "result": { "type": "string", "enum": ["passed", "failed"] },
+          "result": {
+            "type": "string",
+            "enum": ["passed", "failed", "waived"],
+            "description": "Step 2.4 補修 A3: 'waived' was added in Step 7 to the curated schema but this volatile schema had drifted (kept ['passed','failed']). A waived stage appears in every gate the runner writes — volatile runs/, curated latest/, and Step 2.4 check rehearsals (which exist ONLY in the volatile tree) — so the volatile schema must accept it too."
+          },
           "verification_type": {
             "type": "string",
             "enum": [
@@ -125,7 +134,31 @@
   },
   "allOf": [
     {
-      "description": "ALLOW: failed_stage must be empty, decision.result must be ALLOW, every stage must have result=passed. Same semantic constraints as the curated schema; only the additionalProperties policy differs.",
+      "description": "Official run gate (mode absent): paths.curated_latest_dir is required (Phase 1 invariant, byte-compatible with pre-mode gates).",
+      "if": {
+        "not": { "required": ["mode"] }
+      },
+      "then": {
+        "properties": {
+          "paths": { "required": ["curated_latest_dir"] }
+        }
+      }
+    },
+    {
+      "description": "Check rehearsal gate (mode=check, Phase 2 Step 2.4): paths.curated_latest_dir must be ABSENT.",
+      "if": {
+        "required": ["mode"]
+      },
+      "then": {
+        "properties": {
+          "paths": {
+            "not": { "required": ["curated_latest_dir"] }
+          }
+        }
+      }
+    },
+    {
+      "description": "ALLOW: failed_stage must be empty, decision.result must be ALLOW, every non-waived stage must have result=passed, and at least one passed stage must exist. Same semantic constraints as the curated schema (Step 2.4 補修 A3 で waived 対応の乖離を解消); only the additionalProperties policy differs.",
       "if": {
         "properties": { "status": { "const": "ALLOW" } },
         "required": ["status"]
@@ -138,14 +171,20 @@
           "failed_stage": { "const": "" },
           "stages": {
             "items": {
-              "properties": { "result": { "const": "passed" } }
+              "properties": {
+                "result": { "enum": ["passed", "waived"] }
+              }
+            },
+            "contains": {
+              "properties": { "result": { "const": "passed" } },
+              "required": ["result"]
             }
           }
         }
       }
     },
     {
-      "description": "DENY: failed_stage must be non-empty, decision.result must be DENY, at least one stage must have result=failed.",
+      "description": "DENY: decision.result must be DENY. Either a stage actually failed (failed_stage non-empty, at least one stage.result=failed) OR every adopted stage is waived (failed_stage empty, no stages.result=failed) — Step 7's 'no judgement material' branch, mirrored from the curated schema (Step 2.4 補修 A3).",
       "if": {
         "properties": { "status": { "const": "DENY" } },
         "required": ["status"]
@@ -154,15 +193,33 @@
         "properties": {
           "decision": {
             "properties": { "result": { "const": "DENY" } }
+          }
+        },
+        "oneOf": [
+          {
+            "description": "Normal DENY: a stage failed.",
+            "properties": {
+              "failed_stage": { "minLength": 1 },
+              "stages": {
+                "contains": {
+                  "properties": { "result": { "const": "failed" } },
+                  "required": ["result"]
+                }
+              }
+            }
           },
-          "failed_stage": { "minLength": 1 },
-          "stages": {
-            "contains": {
-              "properties": { "result": { "const": "failed" } },
-              "required": ["result"]
+          {
+            "description": "All-waived DENY (Step 7): no judgement material. failed_stage is empty and no stage has result=failed.",
+            "properties": {
+              "failed_stage": { "const": "" },
+              "stages": {
+                "items": {
+                  "properties": { "result": { "const": "waived" } }
+                }
+              }
             }
           }
-        }
+        ]
       }
     }
   ]

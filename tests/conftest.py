@@ -65,13 +65,29 @@ def read_json():
 
 @pytest.fixture
 def snapshot_dir():
-    """Return a callable that snapshots every file under a directory as a dict."""
+    """Return a callable that snapshots a directory tree as a dict.
 
-    def _snapshot(path: Path) -> dict[str, str]:
-        snap: dict[str, str] = {}
+    Step 2.4 補修 (段 1 test-quality 中×2): values are raw ``bytes`` (not
+    ``read_text``) so the equality comparison is genuinely byte-identical
+    — a CRLF rewrite or an encoding change is a detectable mutation, and
+    non-UTF-8 files cannot crash the snapshot. Directories are recorded
+    too (marker value) so "command created an empty directory where it
+    must not" regressions are visible.
+    """
+
+    # A unique object, not bytes: no file content can ever collide with
+    # it (補修 B3 — a file whose content happened to equal a bytes
+    # marker could be silently swapped for a same-named directory).
+    _dir_marker = object()
+
+    def _snapshot(path: Path) -> dict[str, object]:
+        snap: dict[str, object] = {}
         for f in path.rglob("*"):
+            rel = str(f.relative_to(path))
             if f.is_file():
-                snap[str(f.relative_to(path))] = f.read_text(encoding="utf-8")
+                snap[rel] = f.read_bytes()
+            elif f.is_dir():
+                snap[rel] = _dir_marker
         return snap
 
     return _snapshot

@@ -11,7 +11,7 @@
 | `req-meta.schema.json` | `.quality-system/req/<REQ>.meta.json` の構造（REQ ごとの段階選択） | true |
 | `contract.schema.json` | `.quality-system/contracts/<REQ>/<stage>.json` の構造 | true |
 | `gate.schema.json` | `evidence/<REQ>/latest/gate.json` の構造（**採用判定証跡、厳格**） | **false** |
-| `gate.runtime.schema.json` | `artifacts/<REQ>/runs/<ts>/gate.json` の構造（揮発、拡張可） | true |
+| `gate.runtime.schema.json` | `artifacts/<REQ>/runs/<ts>/gate.json` と `artifacts/<REQ>/checks/<ts>-<runid>/gate.json` の構造（揮発、拡張可） | true |
 | `knowledge.schema.json` | `knowledge.jsonl` の各行の構造 | true |
 
 ## 厳格性の使い分け
@@ -36,7 +36,8 @@ Phase 1 で対応:
 - **`responsibility` は単一文を要求**: minLength: 1 にとどめ、複数センテンスかどうかは validate-policy 側で警告する。
 - **REQ id 形式**: `^REQ-[A-Z0-9]+-[0-9]{3,}$` (core 互換)。
 - **timestamp 二系統**: `YYYY-MM-DDTHHMMSSZ` (履歴・ファイルパス互換) と RFC3339 (ツール互換) を両方記録。
-- **gate.json の `if/then` 制約**: `status: ALLOW` のとき `failed_stage` は空文字、`decision.result` は `ALLOW`、全 `stages[].result` は `passed`。`status: DENY` のとき `failed_stage` は非空、`decision.result` は `DENY`、少なくとも 1 つの `stages[].result` が `failed`。
+- **gate.json の `if/then` 制約**: `status: ALLOW` のとき `failed_stage` は空文字、`decision.result` は `ALLOW`、全ての非 waived `stages[].result` は `passed` かつ passed が 1 件以上。`status: DENY` のとき `decision.result` は `DENY` で、(a) `failed_stage` 非空 + 少なくとも 1 つの `failed`、または (b) 全 stage が `waived` (判定材料なし、Step 7) のいずれか。Phase 2 Step 2.4 補修 A3 で揮発側 (`gate.runtime.schema.json`) も同じ意味論に揃えた (旧版は `waived` 非対応のまま乖離していた)。
+- **`mode` フィールド (Phase 2 Step 2.4)**: `qgb check` のリハーサル gate のみ `mode: "check"` を持つ。**公式 `qgb run` の gate は `mode` を持たない (不在 = 公式)**。`mode: "check"` のとき `paths.curated_latest_dir` は禁止 (curated は更新されていないため)、不在のとき必須。注意: mode=check の文書も厳格 schema (`gate.schema.json`) を通過するので、「schema valid = 公式 gate」とは読めない — 機械消費者は `mode` の不在を公式の印として確認すること。
 - **`exit_code` は null 許容、ただし必須**: `file_exists` や `json_schema` など外部プロセスを起動しない stage では null を入れる（フィールド自体は必須）。
 - **採用判定証跡の stage は contract_ref / log_ref / exit_code が必須**: 思想 P7（再現可能な証跡）を schema レベルで強制。揮発側 (`gate.runtime.schema.json`) では緩い。
 - **`format: date-time` は qgb 独自 format checker で強制**: jsonschema の built-in には date-time 検査が含まれないため、`qgb.core.schema` で stdlib 経由の RFC3339 チェッカーを追加登録（NF-010 依存最小化）。

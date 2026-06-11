@@ -983,7 +983,7 @@ def _handle_patch(args: argparse.Namespace) -> int:
             for issue in exc.detail.get("issues", []) or []:
                 if isinstance(issue, dict):
                     print(
-                        f"  schema: {issue.get('path')} — {issue.get('message')}",
+                        f"  schema: {issue.get('path')} - {issue.get('message')}",
                         file=sys.stderr,
                     )
         # validate_policy_blocker is the only "soft" DENY; other reasons are
@@ -1187,6 +1187,186 @@ def _handle_add_knowledge(args: argparse.Namespace) -> int:
             file=sys.stdout,
         )
     return EXIT_OK
+
+
+# ---- check / dev (Phase 2 Step 2.4) ---------------------------------------
+
+
+def _orphan_advisories_payload(orphan_findings) -> list[dict[str, object]]:
+    return [
+        {
+            "knowledge_id": f.knowledge_id,
+            "kind": f.knowledge_kind,
+            "applies_to": f.applies_to,
+            "stage_id": f.stage_id,
+            "severity": f.severity,
+            "message": f.message,
+        }
+        for f in orphan_findings
+    ]
+
+
+def _check_result_to_json(outcome) -> dict[str, object]:
+    gate = outcome.gate
+    return {
+        "ok": gate["status"] == "ALLOW",
+        "command": "check",
+        "rehearsal": True,
+        "req_id": gate["req_id"],
+        "status": gate["status"],
+        "failed_stage": gate["failed_stage"],
+        "phase": gate["phase"],
+        "check_dir": gate["paths"]["run_dir"],
+        "orphan_advisories": _orphan_advisories_payload(
+            outcome.orphan_findings
+        ),
+        "gate": gate,
+    }
+
+
+def _print_check_text(outcome, stream) -> None:
+    gate = outcome.gate
+    status = gate["status"]
+    verdict = "would ALLOW" if status == "ALLOW" else "would DENY"
+    print(
+        f"CHECK {status}: an official run of {gate['req_id']} {verdict} "
+        f"(phase={gate['phase']})",
+        file=stream,
+    )
+    print(
+        "  note: rehearsal only - not an official gate; curated evidence "
+        "was not updated",
+        file=stream,
+    )
+    print(f"  meaning: {gate['decision']['meaning']}", file=stream)
+    print(f"  check_dir: {gate['paths']['run_dir']}", file=stream)
+    if status == "DENY":
+        print(f"  failed_stage: {gate['failed_stage']}", file=stream)
+    print("  stages:", file=stream)
+    for stage in gate["stages"]:
+        print(
+            f"    - {stage['id']} ({stage['verification_type']}): {stage['result']}",
+            file=stream,
+        )
+    if outcome.orphan_findings:
+        print(
+            f"  knowledge orphan advisories ({len(outcome.orphan_findings)}) "
+            f"- informational; do not affect this check's exit code "
+            f"(enforced by 'qgb validate-policy' / REQ-less 'qgb check'):",
+            file=stream,
+        )
+        for f in outcome.orphan_findings:
+            print(
+                f"    - [{f.severity}] {f.knowledge_id}: {f.message}",
+                file=stream,
+            )
+
+
+def _handle_check(args: argparse.Namespace) -> int:
+    """`qgb check [REQ-ID]` — daily verification channel (Step 2.4).
+
+    Per-REQ path = official run rehearsal: shares run_preflight /
+    run_stages / decide with `qgb run`, writes volatile check artifacts
+    only (never curated evidence, never knowledge.jsonl), exit code
+    mirrors `qgb run` (0=would ALLOW, 1=would DENY, 2=NOT_READY).
+    Knowledge orphans are shown as advisories and never block this path.
+
+    REQ-less path = project-wide design diagnostics: delegates to
+    validate_policy_preflight(req_id=None) (which does enforce orphan
+    blockers), executes no verification, writes nothing.
+
+    No F-008 confirmation prompt in either path: F-008 protects the
+    curated evidence mutation, and check never mutates curated state.
+    Verification commands declared in contracts DO run (the rehearsal's
+    value) — check is "does not update curated evidence", not
+    "read-only".
+    """
+    # Imported at call time, matching `qgb patch` (keeps --help fast).
+    from qgb.core.check import run_check
+
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(f"qgb check: path does not exist: {root}", file=sys.stderr)
+        return EXIT_USAGE
+    if not root.is_dir():
+        print(
+            f"qgb check: --path must point at a project directory, "
+            f"not a file: {root}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    req_id: str | None = args.req_id
+
+    if req_id is None:
+        # Project-wide design diagnostics (no verification, no artifacts).
+        # 段 1 edge-cases 指摘: a forgotten REQ-ID with --phase silently
+        # falls into this path where phase is meaningless; warn so the
+        # user does not misread exit 0 as "would ALLOW".
+        if args.phase != "verify":
+            print(
+                "qgb check: --phase is ignored without REQ-ID "
+                "(project-wide diagnostics execute no stages).",
+                file=sys.stderr,
+            )
+        report = validate_policy_preflight(root, None)
+        if args.json:
+            payload = _validate_policy_to_json(report, None)
+            payload["command"] = "check"
+            payload["scope"] = "project"
+            json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+            sys.stdout.write("\n")
+        else:
+            print(
+                "qgb check (project-wide design diagnostics; no "
+                "verification executed, no artifacts written):",
+                file=sys.stderr if report.has_blockers() or report.warnings()
+                else sys.stdout,
+            )
+            if report.has_blockers() or report.warnings():
+                _print_validate_policy_text(report, None, sys.stderr)
+            else:
+                _print_validate_policy_text(report, None, sys.stdout)
+        return EXIT_NOT_READY if report.has_blockers() else EXIT_OK
+
+    outcome = run_check(root, req_id, phase=args.phase)
+
+    if outcome.gate is None:
+        # Preflight rejected the REQ; mirror `qgb run`'s NOT_READY shape.
+        if args.json:
+            payload = _preflight_to_json(outcome.preflight, req_id)
+            payload["command"] = "check"
+            json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+            sys.stdout.write("\n")
+        else:
+            sys.stderr.write(_format_preflight_text(outcome.preflight))
+        return EXIT_NOT_READY
+
+    if args.json:
+        json.dump(
+            _check_result_to_json(outcome),
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        _print_check_text(
+            outcome,
+            sys.stdout if outcome.gate["status"] == "ALLOW" else sys.stderr,
+        )
+
+    return EXIT_OK if outcome.gate["status"] == "ALLOW" else EXIT_DENY
+
+
+def _handle_dev(args: argparse.Namespace) -> int:
+    """`qgb dev` — thin alias of `qgb check` (Step 2.4).
+
+    Phase 2 keeps dev as a reserved entry point: identical behaviour to
+    check (single execution). Watch mode / changed-files narrowing are
+    Phase 3 (P3 tension: requires a REQ <-> source dependency mapping).
+    """
+    return _handle_check(args)
 
 
 # ---- parser --------------------------------------------------------------
@@ -1638,6 +1818,80 @@ def build_parser() -> QgbArgumentParser:
         help="Emit a machine-readable JSON report to stdout instead of text",
     )
     ak_p.set_defaults(handler=_handle_add_knowledge)
+
+    # ---- qgb check / qgb dev (Phase 2 Step 2.4) -------------------------
+    check_description = (
+        "Rehearse an official run without updating curated evidence. "
+        "With REQ-ID: shares the exact preflight / stage execution / "
+        "judgement with 'qgb run', but writes gate.json + summary.md + "
+        "stage logs ONLY to the volatile check dir "
+        "(.quality-system/artifacts/<REQ>/checks/<timestamp>-<run_id>/); "
+        "curated evidence/<REQ>/latest/ and knowledge.jsonl are never "
+        "touched. Verification commands declared in contracts DO run - "
+        "check does not update curated evidence, but it is not read-only. "
+        "Knowledge orphan findings are shown as advisories and do not "
+        "affect the exit code (they are enforced by 'qgb validate-policy' "
+        "and by the REQ-less form). Without REQ-ID: project-wide design "
+        "diagnostics only (validate-policy; no verification, no "
+        "artifacts). No confirmation prompt (F-008 protects curated "
+        "evidence, which check never mutates). Old check dirs are pruned "
+        "per QGB_KEEP_RUNS (default 10). "
+        "Returns 0 when an official run would ALLOW (or project-wide "
+        "diagnostics found no blocker), 1 when it would DENY, 2 on "
+        "NOT_READY / blockers, 64 on usage errors."
+    )
+    check_p = subparsers.add_parser(
+        "check",
+        help="rehearse a run without updating curated evidence (daily channel)",
+        description=check_description,
+    )
+    dev_p = subparsers.add_parser(
+        "dev",
+        help="daily development loop entry (currently equivalent to 'qgb check')",
+        description=(
+            "Currently equivalent to 'qgb check' (single execution). "
+            "Reserved as the daily development loop entry point: watch "
+            "mode and changed-files narrowing are planned for Phase 3. "
+            + check_description
+        ),
+    )
+    for p, cmd in ((check_p, "check"), (dev_p, "dev")):
+        p.add_argument(
+            "req_id",
+            metavar="REQ-ID",
+            nargs="?",
+            default=None,
+            help=(
+                "Optional REQ id (e.g. REQ-APP-001). With it, rehearse the "
+                "REQ's adopted stages. Without it, run project-wide design "
+                "diagnostics only."
+            ),
+        )
+        p.add_argument(
+            "--path",
+            default=".",
+            help=(
+                "Project root containing .quality-system/ "
+                "(default: current directory)"
+            ),
+        )
+        p.add_argument(
+            "--phase",
+            default="verify",
+            choices=["red", "green", "refactor", "verify"],
+            help=(
+                "TDD phase tag recorded in the rehearsal gate.json; same "
+                "decision.meaning wording as 'qgb run' plus a check-"
+                "rehearsal note. Exit code is aligned with status "
+                "(would-ALLOW=0, would-DENY=1) regardless of phase."
+            ),
+        )
+        p.add_argument(
+            "--json",
+            action="store_true",
+            help="Emit a machine-readable JSON report to stdout instead of text",
+        )
+        p.set_defaults(handler=_handle_check if cmd == "check" else _handle_dev)
 
     return parser
 

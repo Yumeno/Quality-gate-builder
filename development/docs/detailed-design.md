@@ -1113,9 +1113,9 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - waiver の削除 / revoke / supersede (--force の正式な reason 改訂もここ)
 - knowledge entry の削除
 
-#### Step 2.4 — daily verification channel (着手前確定 2026-06-11、`journal/phase2-step2-4-prejournal.md`)
+#### Step 2.4 — daily verification channel (**完結 2026-06-12**)
 
-**スコープ (Codex 計画レビュー 2026-06-11 反映):**
+**スコープ (全項目完了。Codex 計画レビュー 2026-06-11 反映、着手前判断は `journal/phase2-step2-4-prejournal.md`):**
 
 - `qgb check REQ-ID` — **official run rehearsal**: `run_preflight` (run と同一関数) → `run_stages` → `decide` を共有し、`write_evidence` は呼ばず check 専用 writer で `.quality-system/artifacts/<REQ>/checks/<ts>-<runid>/` にのみ揮発出力 (境界 3 改訂版)。knowledge orphan scan は advisory 表示 (exit code を支配しない — unrelated orphan blocker が daily check を止めない、Step 2.3 申し送りの解)
 - `qgb check` (REQ 省略) — project-wide `validate_policy_preflight(req_id=None)` 診断のみ (verification なし、揮発出力なし、exit は blocker 有無で 0/2)
@@ -1125,19 +1125,27 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - check は command stage も実行する (リハーサルの価値)。**"read-only" とは呼ばない** (NF-010)。F-008 確認プロンプトは check では出さない (daily channel の摩擦回避)、help に「verification commands may run」明記
 - check tmp の prune: `QGB_KEEP_RUNS` を流用 (専用 env は Phase 3)
 
-**完了条件:**
+**完了条件 (全達成):**
 
-- `qgb check` が curated `evidence/latest/` / `knowledge.jsonl` / `artifacts/<REQ>/runs/` を一切 touch しない (テストで machine-verify)
-- tmp artifacts は init が既に .gitignore 予約済みの `.quality-system/artifacts/` 配下 (追加の gitignore 手当て不要)
-- `qgb run` と `qgb check` の preflight 経路が同じ関数を共有 (DRY、P9)
+- `qgb check` が curated `evidence/latest/` / `knowledge.jsonl` / `artifacts/<REQ>/runs/` を一切 touch しない — 達成 (snapshot を bytes + dir 記録に強化した machine-verify、waived REQ [run と check が分岐する唯一の世界状態] 含む)
+- tmp artifacts は init が既に .gitignore 予約済みの `.quality-system/artifacts/` 配下 — 達成 (追加の gitignore 手当て不要)
+- `qgb run` と `qgb check` の preflight 経路が同じ関数を共有 (DRY、P9) — 達成 (run_preflight / run_stages / decide を共有、公式 run 出力は byte 不変)
 
-**規模感:** 1.0
+詳細な作業記録 (計画 Codex レビュー → 案 A 着手前判断 → 本体 → 段 1 [Explore type 事故 → default 再投入 + テンプレ/許可恒久対応] → 補修 A1-A7 → backward-compat 再投入 → 補修 B1-B3 [U+FFFD loud 化等] → Codex 横断 → 実コード同梱 2 周目「指摘なし収束」) は `journal/phase2-step2-4.md`。テスト 666 → 698 件、ruff clean。
+
+**規模感:** 1.0 で着地 (計画通り)
+
+**Step 2.5 / 2.7 への申し送り:**
+
+- Step 2.5: check は override seam を使わず disk world を検査する設計。「adopt 前検証 = override seam / adopt 後検証 = qgb check」の分担で足りるかを propose/adopt 設計の最初に確認 (Codex 横断注記: 仮想 overlay で check したくなったら別 seam)
+- Step 2.7: `mode` を予約済み discriminator として扱う、curated/runtime 両 schema の意味論二重保守の解消可否、snapshot helper 統合 (test_patch_apply の str 版と conftest bytes 版)
 
 **Phase 3 送り:**
 
 - `qgb dev` の changed-files 絞り込み (P3 緊張、REQ ↔ source の依存マッピングが必要)
 - watch mode (filesystem 監視)
 - 全 REQ 一括 check、check 専用 keep env (`QGB_KEEP_CHECKS`)、check 専用 schema
+- 書込中 check dir の prune 競合 / req_id 形式検証 / stage_id の filesystem-unsafe 文字 (いずれも run と同根の既存クラス、journal 記録のみ)
 
 #### Step 2.5 — Pattern B external-LLM interface
 
@@ -1266,3 +1274,4 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 | 0.19 | 2026-06-05 | **Phase 2 Step 2.2 完結**: patch substrate (Codex 計画レビュー 18 指摘 + 5 着手前修正要件 → prejournal で案 X 採用判断 → 本体実装 → 段 1 観点別 5 subagent → 段 3 Codex 横断 → A1-A6 補修 → 段 5 Codex 2 周目「指摘なし収束」)。`qgb/core/json_pointer.py` (encode/decode/parse_array_index、ASCII digit 限定 [A1])、`qgb/core/patch.py` (4 op、PatchError 8 reason)、`qgb/schemas/patch.schema.json` (op 別 required/forbidden、remove で value 完全禁止 [A3])、`qgb/core/preflight.py` の override seam 追加 (案 X、default 経路 Phase 1 完全互換)、`qgb/core/patch_apply.py` (target classify [A2 segment 厳密チェック]、atomic swap [A4 suffix 明示]、PatchApplyError 9 reason)、`qgb/cli.py` の `qgb patch` (`--dry-run` 完全実行、`--force` なし)、`tests/conftest.py` 集約 [A5]。Codex 横断レビュー追加申し送り 2 件 (contract_overrides key 統一 / 複数 doc 同一 world 規約) を Step 2.5 規約として journal に明文化。Phase 1 挙動は default 経路で完全保存、既存 example 3 例 + fixture すべて無変更通過。詳細は `journal/phase2-step2-2.md`。テスト 487 → 614 件 (+127)、ruff clean。**Step 2.3 着手準備完了** |
 | 0.20 | 2026-06-10 | **Phase 2 Step 2.3 完結**: domain edit commands (Codex 計画レビュー 10 観点 → 着手前 3 仕様確定 [--force は req-meta のみ更新 + knowledge 歴史保持 / atomicity = file 単位保証 + idempotent recovery / add-knowledge は補完なし・--force なし・all-or-nothing] → 本体 → 段 1 観点別 5 subagent [PreToolUse hook によるテンプレ自動注入の初実地、reject ゼロ] → 補修 A1-A3 [dry-run would-be 値 / OSError→EditError(io_error) / テスト 6 件] → Codex 横断 → 補修 B1-B3 [force+knowledge 欠落の warning 真実性 / 生成 entry の schema validate / append 保証境界の文言+実装] → 2 周目「指摘なし収束」)。`qgb/core/knowledge.py` (store 層: append_knowledge_entries / build_waiver_knowledge_entry / waiver_knowledge_id 正本移管 / check_knowledge_orphans) + `qgb/core/edit_commands.py` (orchestration 層: add_waiver / add_knowledge / EditError reason enum) の 2 module 構成。`apply_patch_doc_to_target` を patch substrate の内部 API として切り出し。`knowledge_orphan` kind を validate_policy_preflight に統合 (run_preflight には入れない、P9)。実装中に waiver id 形式の不一致 (`KNOWLEDGE-WAIVER-` vs 正本 `WAIVER-`) を自己検出し knowledge.py を正本に一元化。詳細は `journal/phase2-step2-3.md`。テスト 614 → 666 件 (+52)、ruff clean。**Step 2.4 着手準備完了** |
 | 0.21 | 2026-06-11 | **Phase 2 Step 2.4 着手前判断確定** (`journal/phase2-step2-4-prejournal.md` で詳細記録): Codex 計画レビューで方向性承認 + 中程度以上 5 指摘 (per-REQ check は unrelated orphan blocker で止めない / tmp パス変更は境界 3 の明示承認必須 / mode:"check" の機械可読誤認対策 / "read-only" と呼ばない / check tmp の prune 必須) を受領。最大の判断点 = 揮発出力先について、init の .gitignore 予約が `.quality-system/artifacts/` のみで `.qgb/` 未予約という事実誤認を発見し、案 A (`artifacts/<REQ>/checks/<ts>-<runid>/`、既予約木に同居) を理念照合 4 点 (P7 同種同所 / tool-private でないものを `.qgb/` に置くのは分類の誤り / NF-010 表面積最小化 / 境界 3 の正本は curated 不変でありパスは例示) で user 確定。§13.1 境界 3 と §13.2 Step 2.4 スコープを改訂。コード変更なし。**Step 2.4 実装着手準備完了** |
+| 0.22 | 2026-06-12 | **Phase 2 Step 2.4 完結**: daily verification channel (`qgb check` / `qgb dev`)。`qgb/core/check.py` 新設 (run_check = run_preflight/run_stages/decide を run と共有する official run rehearsal、check 専用 writer は `artifacts/<REQ>/checks/<ts>-<runid>/` のみ出力、curated swap / knowledge append / runs prune を意図的に不実行)。gate schema 共用 + `mode: "check"` (公式 gate は mode 不在で byte 不変、mode=check で curated_latest_dir 禁止の allOf 条件)。orphan は per-REQ で advisory / REQ-less で blocker (P9)。補修 A1-A7 (U+2014 ASCII 化 [cp932 リダイレクト障害]、byte-torn tail 耐性、**gate.runtime.schema.json の Step 7 waived drift 解消**、snapshot fixture の bytes+dir 化、waived REQ テスト群) + B1-B3 (U+FFFD を終端行で loud に / README / dir marker sentinel)。段 1 で Explore subagent 事故 (PowerShell・cd 連結・パス手打ちミスで申請多発) → default agent + テンプレ強化 + 「要実機確認タグ」出口 + 非破壊傘 2 件追加で恒久対応、再投入は申請ゼロ。Codex 横断 1 周目「cross-seam finding なし」(sandbox エラーで提示ベース) → 実コード同梱 2 周目「**指摘なし収束**」。詳細は `journal/phase2-step2-4.md`。テスト 666 → 698 件 (+32)、ruff clean。**Step 2.5 着手準備完了** |
