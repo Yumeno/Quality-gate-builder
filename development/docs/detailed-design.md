@@ -1147,27 +1147,33 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - 全 REQ 一括 check、check 専用 keep env (`QGB_KEEP_CHECKS`)、check 専用 schema
 - 書込中 check dir の prune 競合 / req_id 形式検証 / stage_id の filesystem-unsafe 文字 (いずれも run と同根の既存クラス、journal 記録のみ)
 
-#### Step 2.5 — Pattern B external-LLM interface
+#### Step 2.5 — Pattern B external-LLM interface (着手前確定 2026-06-12、`journal/phase2-step2-5-prejournal.md`)
 
-**スコープ:**
+**スコープ (Codex 計画レビュー 2 周 + 実運用シミュレーション反映):**
 
-- `qgb design-stages propose-context` — 対象プロジェクトの detect 結果 + 既存 policy + REQ 一覧を構造化 JSON で出力 (外部 LLM への入力素材)
-- `qgb design-stages adopt <proposal.json>` — 外部 LLM が生成した提案 JSON を受け取り、validate + atomic apply
-- proposal JSON schema を `qgb/schemas/proposal.schema.json` として定義 (Step 2.1 で確立した format / `$ref` allowlist を継承)
-- `qgb patch policy <proposal.patch.json>` — JSON Patch 形式の提案を受け取る (Step 2.2 の patch substrate を直接消費)
+- `qgb design-stages propose-context [--out <file>]` — detect 結果 + 現 policy (verbatim) + REQ 一覧 + 制約サマリの構造化 JSON (外部 LLM への入力素材)。P8 は機械可読メタデータで表現 (`document_kind` / `intended_use` / `contains_executable_instructions: false`)。`--out` は UTF-8 明示のファイル出力 (PowerShell 5.1 の stdout cp932 化けを迂回する file-based handoff、NF-004)。contracts 本文 / knowledge / project-context.md は含めない
+- `qgb design-stages adopt <proposal.json>` — proposal schema 検証 → 新 policy 組み立て → **project-wide + 既存全 REQ の same-world per-REQ 検証** (`policy_override` を全 REQ に適用、1 blocker でも reject) → sibling-tmp atomic swap。`AdoptError` 固定 reason enum (検証順 = 安定 API)。成功 `--json` に `proposal_sha256` / `policy_before_sha256` / `policy_after_sha256` / `applied_at` / `source_metadata` (証跡は git + hash、knowledge 記録なし)。`--dry-run` あり / `--force` なし / 確認プロンプトなし (patch と対称)
+- `qgb/schemas/proposal.schema.json` — `proposal_type: "policy_stages"` + `stages[]` 宣言的全量置換 + `source_metadata`。req-meta / contract を混ぜる余地を schema レベルで閉じる (P9)。Step 2.1 の format / `$ref` allowlist を継承
+- **`qgb patch` POLICY 経路に同じ全 REQ same-world 検証を適用** — Step 2.2 の盲点 (project-wide のみで「adopt/patch 成功直後に既存 REQ が unknown_stage_id で壊れる」) を同時に塞ぐ安全側の挙動変更。`qgb patch policy` alias は追加しない (path 形 `qgb patch .quality-system/policy.json` が canonical、NF-010)
+- **破壊的 rename の正規手順 = 3 段移行** (additive 追加 adopt → REQ meta を patch で移行 → 削除 adopt) を docs に明記。one-shot rename は Phase 3 multi-doc transaction 送り
+- 既存 `qgb design-stages [--commit] [--json]` (rule-based) は完全温存、明示 subcommand のときだけ分岐
 
 **完了条件:**
 
 - qgb 本体に LLM SDK 依存が増えない (`pip list` で確認可能)
-- proposal を input にした end-to-end テストが通る (sample proposal.json を fixture として配置)
-- validate-policy を通らない proposal は reject、原本は touch されない
+- proposal を input にした end-to-end テストが通る (sample proposal.json は `tests/fixtures/` に `source_metadata.generator: "fixture"` で配置)
+- 検証 (schema / 全 REQ same-world preflight) を通らない proposal は reject、原本は touch されない
+- 稼働中 REQ を壊す policy patch / proposal が reject される (シミュレーション Flow 2 の再現テスト)
 
-**規模感:** 1.5
+**規模感:** 1.5 (超過リスク回避 3 点: per-REQ 詳細を凝りすぎない / --out を全コマンドへ広げない / preflight cache を本格設計しない)
 
-**Phase 5 送り:**
+**将来規約 (Step 2.5 では propose-context のみ実装):** machine-readable handoff JSON を stdout に出すコマンドは、将来 `--out <file>` (UTF-8 明示) を提供する方針
 
-- skill 側で context → proposal を生成するロジック (qgb 外)
-- proposal の human-in-the-loop diff UI (qgb 外、Claude Code / Codex CLI 等の責務)
+**Phase 3 / 5 送り:**
+
+- skill 側で context → proposal を生成するロジック (qgb 外、Phase 5)
+- proposal の human-in-the-loop diff UI (qgb 外、Phase 5)
+- multi-doc transaction (one-shot rename)、validate_schema_sources の cache 最適化、--out の全コマンド展開 (Phase 3)
 
 #### Step 2.6 — example packs (FastAPI / Go / Next.js)
 
@@ -1275,3 +1281,4 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 | 0.20 | 2026-06-10 | **Phase 2 Step 2.3 完結**: domain edit commands (Codex 計画レビュー 10 観点 → 着手前 3 仕様確定 [--force は req-meta のみ更新 + knowledge 歴史保持 / atomicity = file 単位保証 + idempotent recovery / add-knowledge は補完なし・--force なし・all-or-nothing] → 本体 → 段 1 観点別 5 subagent [PreToolUse hook によるテンプレ自動注入の初実地、reject ゼロ] → 補修 A1-A3 [dry-run would-be 値 / OSError→EditError(io_error) / テスト 6 件] → Codex 横断 → 補修 B1-B3 [force+knowledge 欠落の warning 真実性 / 生成 entry の schema validate / append 保証境界の文言+実装] → 2 周目「指摘なし収束」)。`qgb/core/knowledge.py` (store 層: append_knowledge_entries / build_waiver_knowledge_entry / waiver_knowledge_id 正本移管 / check_knowledge_orphans) + `qgb/core/edit_commands.py` (orchestration 層: add_waiver / add_knowledge / EditError reason enum) の 2 module 構成。`apply_patch_doc_to_target` を patch substrate の内部 API として切り出し。`knowledge_orphan` kind を validate_policy_preflight に統合 (run_preflight には入れない、P9)。実装中に waiver id 形式の不一致 (`KNOWLEDGE-WAIVER-` vs 正本 `WAIVER-`) を自己検出し knowledge.py を正本に一元化。詳細は `journal/phase2-step2-3.md`。テスト 614 → 666 件 (+52)、ruff clean。**Step 2.4 着手準備完了** |
 | 0.21 | 2026-06-11 | **Phase 2 Step 2.4 着手前判断確定** (`journal/phase2-step2-4-prejournal.md` で詳細記録): Codex 計画レビューで方向性承認 + 中程度以上 5 指摘 (per-REQ check は unrelated orphan blocker で止めない / tmp パス変更は境界 3 の明示承認必須 / mode:"check" の機械可読誤認対策 / "read-only" と呼ばない / check tmp の prune 必須) を受領。最大の判断点 = 揮発出力先について、init の .gitignore 予約が `.quality-system/artifacts/` のみで `.qgb/` 未予約という事実誤認を発見し、案 A (`artifacts/<REQ>/checks/<ts>-<runid>/`、既予約木に同居) を理念照合 4 点 (P7 同種同所 / tool-private でないものを `.qgb/` に置くのは分類の誤り / NF-010 表面積最小化 / 境界 3 の正本は curated 不変でありパスは例示) で user 確定。§13.1 境界 3 と §13.2 Step 2.4 スコープを改訂。コード変更なし。**Step 2.4 実装着手準備完了** |
 | 0.22 | 2026-06-12 | **Phase 2 Step 2.4 完結**: daily verification channel (`qgb check` / `qgb dev`)。`qgb/core/check.py` 新設 (run_check = run_preflight/run_stages/decide を run と共有する official run rehearsal、check 専用 writer は `artifacts/<REQ>/checks/<ts>-<runid>/` のみ出力、curated swap / knowledge append / runs prune を意図的に不実行)。gate schema 共用 + `mode: "check"` (公式 gate は mode 不在で byte 不変、mode=check で curated_latest_dir 禁止の allOf 条件)。orphan は per-REQ で advisory / REQ-less で blocker (P9)。補修 A1-A7 (U+2014 ASCII 化 [cp932 リダイレクト障害]、byte-torn tail 耐性、**gate.runtime.schema.json の Step 7 waived drift 解消**、snapshot fixture の bytes+dir 化、waived REQ テスト群) + B1-B3 (U+FFFD を終端行で loud に / README / dir marker sentinel)。段 1 で Explore subagent 事故 (PowerShell・cd 連結・パス手打ちミスで申請多発) → default agent + テンプレ強化 + 「要実機確認タグ」出口 + 非破壊傘 2 件追加で恒久対応、再投入は申請ゼロ。Codex 横断 1 周目「cross-seam finding なし」(sandbox エラーで提示ベース) → 実コード同梱 2 周目「**指摘なし収束**」。詳細は `journal/phase2-step2-4.md`。テスト 666 → 698 件 (+32)、ruff clean。**Step 2.5 着手準備完了** |
+| 0.23 | 2026-06-12 | **Phase 2 Step 2.5 着手前判断確定** (`journal/phase2-step2-5-prejournal.md`): Codex 計画レビュー 1 周目で構造確定 (proposal_type: "policy_stages" 宣言形 / AdoptError 固定 enum 9 種 [検証順 = 安定 API] / 証跡 = knowledge 記録なし + result JSON に sha256 hash 3 種 / P8 は機械可読メタデータ / design-stages 後方互換 / `qgb patch policy` alias なし / fixture は tests/)。user 依頼の**実運用フローシミュレーションで矛盾 1 件発見**: adopt/patch (POLICY) の検証が project-wide のみのため「成功直後に既存 REQ が unknown_stage_id で壊れ waiver も orphan 化する」— Step 2.2 patch の既存盲点も grep で確認。追加確定 3 件 (adopt = project-wide + 全 REQ same-world per-REQ 検証 / 同検証を patch POLICY 経路へ適用 [安全側挙動変更] / propose-context --out [cp932 迂回の file handoff、NF-004])。破壊的 rename の正規手順 = 3 段移行 (additive adopt → REQ meta patch 移行 → 削除 adopt)、one-shot rename は Phase 3 multi-doc transaction 送り。Codex 2 周目で影響確認 (per-REQ 失敗詳細の機械可読化 / 壊れた既存 meta は reject / 計算量は許容・cache は Phase 3 / 規模 1.5 内)。§13.2 Step 2.5 スコープを確定形に改訂。コード変更なし。**Step 2.5 実装着手準備完了** |
