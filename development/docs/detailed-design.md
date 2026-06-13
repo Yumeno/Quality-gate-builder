@@ -1147,7 +1147,7 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - 全 REQ 一括 check、check 専用 keep env (`QGB_KEEP_CHECKS`)、check 専用 schema
 - 書込中 check dir の prune 競合 / req_id 形式検証 / stage_id の filesystem-unsafe 文字 (いずれも run と同根の既存クラス、journal 記録のみ)
 
-#### Step 2.5 — Pattern B external-LLM interface (着手前確定 2026-06-12、`journal/phase2-step2-5-prejournal.md`)
+#### Step 2.5 — Pattern B external-LLM interface (**完結 2026-06-13**)
 
 **スコープ (Codex 計画レビュー 2 周 + 実運用シミュレーション反映):**
 
@@ -1158,16 +1158,25 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - **破壊的 rename の正規手順 = 3 段移行** (additive 追加 adopt → REQ meta を patch で移行 → 削除 adopt) を docs に明記。one-shot rename は Phase 3 multi-doc transaction 送り
 - 既存 `qgb design-stages [--commit] [--json]` (rule-based) は完全温存、明示 subcommand のときだけ分岐
 
-**完了条件:**
+**完了条件 (全達成):**
 
-- qgb 本体に LLM SDK 依存が増えない (`pip list` で確認可能)
-- proposal を input にした end-to-end テストが通る (sample proposal.json は `tests/fixtures/` に `source_metadata.generator: "fixture"` で配置)
-- 検証 (schema / 全 REQ same-world preflight) を通らない proposal は reject、原本は touch されない
-- 稼働中 REQ を壊す policy patch / proposal が reject される (シミュレーション Flow 2 の再現テスト)
+- qgb 本体に LLM SDK 依存が増えない (`pip list` で確認可能) — 達成
+- proposal を input にした end-to-end テストが通る (sample proposal.json は `tests/fixtures/` に `source_metadata.generator: "fixture"` で配置) — 達成
+- 検証 (schema / 全 REQ same-world preflight) を通らない proposal は reject、原本は touch されない — 達成
+- 稼働中 REQ を壊す policy patch / proposal が reject される (シミュレーション Flow 2 の再現テスト) — 達成
 
-**規模感:** 1.5 (超過リスク回避 3 点: per-REQ 詳細を凝りすぎない / --out を全コマンドへ広げない / preflight cache を本格設計しない)
+詳細な作業記録 (Codex 計画レビュー 2 周 + 実運用シミュレーション Flow 2 矛盾発見 → 着手前確定 13 件 → 本体 → 段 1 観点別 5 subagent [backward-compat モデルエラー → 再走] → A 系列 5 件補修 [9/9 reason テスト / dedupe テスト / BOM utf-8-sig / cp932 fallback / RecursionError guard] → Codex 横断「指摘なし収束」)。テスト 698 → 726 件、ruff clean。
+
+**規模感:** 1.5 で着地 (計画通り)
 
 **将来規約 (Step 2.5 では propose-context のみ実装):** machine-readable handoff JSON を stdout に出すコマンドは、将来 `--out <file>` (UTF-8 明示) を提供する方針
+
+**Step 2.6 / 2.7 への申し送り:**
+
+- BOM (utf-8-sig) 対応: loader.py / validate.py / patch_apply.py / proposal.py の主要 read path は対応済み。残りの read path (runner.py / scaffold.py / design_stages.py / edit_commands.py / knowledge.py) は Step 2.7 strictness review で網羅判断
+- --path 重複: ds_p と pc_p/adopt_p の両方に --path がある (argparse namespace 上書き)。実用上の問題は「qgb design-stages --path X propose-context」で子の default が勝つこと。ジャーナル記録のみ (子パーサー側で --path を書けば正常動作)
+- collect_same_world_blockers の dedupe は (kind, where, message) の 3-tuple。scope が異なる同一 finding の初出が scope を決める — project-wide report が常に先なので「<project>」scope で統一される設計意図
+- AdoptError 9 reason は文字列固定、追加は versioned API change として扱う (Codex 横断レビュー確認)
 
 **Phase 3 / 5 送り:**
 
