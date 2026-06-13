@@ -39,13 +39,18 @@ Phase 2 (「編集を安全にする」) で導入された変更のうち、既
 
 ## BOM 耐性 (Step 2.5 補修)
 
-PowerShell 5.1 の `Out-File` が書き込む UTF-8 BOM 付きファイルを、以下の読み込みパスで tolerate するよう変更:
+PowerShell 5.1 の `Out-File` が書き込む UTF-8 BOM 付きファイルを、全ユーザーファイル read path で tolerate するよう変更 (`encoding="utf-8"` → `encoding="utf-8-sig"`):
 - `loader.py` (`_read_json`)
 - `validate.py` (`_load_json`)
 - `patch_apply.py` (`_load_json_file`)
-- `proposal.py` (proposal 読み込み / current policy 読み込み)
+- `proposal.py` (proposal / current policy 読み込み)
+- `runner.py` (substring_match target / json_schema target+schema)
+- `scaffold.py` (policy 読み込み)
+- `design_stages.py` (template / policy / staged policy 読み込み)
+- `edit_commands.py` (req-meta / knowledge input 読み込み)
+- `knowledge.py` (meta 読み込み)
 
-残り read path (runner.py / scaffold.py / design_stages.py / edit_commands.py / knowledge.py) は Phase 3 で網羅判断。
+qgb 内部バンドルファイル (init.py template / schema.py) は対象外 (ユーザー操作で BOM が入る経路がない)。
 
 ## additionalProperties 方針
 
