@@ -25,9 +25,8 @@
 - BOM 残り read path → **即修正済み** (NF-004 の徹底、中途半端な対応は違反)
 
 ### WONTFIX (理念に照らして不要と判断)
-- JSON Patch `move` / `copy` op → add+remove で代替可能 (NF-010: 不要な機能を追加しない)
-- snapshot helper 統合 → テストの独立性が統合より価値がある
-- CI 依存 audit / SBOM 生成 → pyproject.toml + git で P7 充足 (依存 1 個)
+- JSON Patch `move` / `copy` op → add+remove で代替可能 (NF-010: 不要な機能を追加しない。rename UX が必要なら domain command で実装、patch substrate に op を増やさない)
+- snapshot helper 統合 → テストの独立性が統合より価値がある (str 比較と bytes 比較は検出する失敗モードが違うため P9 違反ではなく責務分離)
 
 ### Phase 3 繰越 (13 件)
 
@@ -45,7 +44,8 @@ Phase 3 で必要だが独立:
 9. watch mode (供給チェーン検討が必要)
 10. 全 REQ 一括 check
 
-Phase 1 繰越 (P3 再精査で繰越維持):
+Phase 1 繰越 (P3/P7 再精査で繰越維持):
 11. `command` runner の真の memory cap (「稀だから」は不変仮定)
-12. fsync / power-loss durability (P7: 証跡消失を「稀」で片付けない)
-13. bare `qgb` entry point
+12. fsync / power-loss durability (P7: 証跡消失を「稀」で片付けない。対象は adopt/waiver/knowledge/evidence に限定)
+13. bare `qgb` entry point (低優先。配布 UX 要求が明確になってから)
+14. 依存解決結果の固定 (hash/lock) (Codex 指摘で WONTFIX 撤回: jsonschema の推移依存が複数あり pip freeze だけでは P7 不足。SBOM までは不要、lock/hash/CI resolved deps が最低ライン)
