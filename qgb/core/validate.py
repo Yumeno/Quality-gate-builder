@@ -176,7 +176,7 @@ def _iter_jsonl_files(root: Path) -> Iterator[tuple[Path, str]]:
 
 
 def _load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         return json.load(fh)
 
 

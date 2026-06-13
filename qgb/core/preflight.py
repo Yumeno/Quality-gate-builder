@@ -963,6 +963,120 @@ def validate_policy_preflight(
     return report
 
 
+def list_req_ids(project_root: Path) -> list[str]:
+    """Enumerate REQ ids from ``.quality-system/req/*.meta.json`` (sorted).
+
+    Phase 2 Step 2.5: the same-world validation below needs the full REQ
+    population. Filenames are the id source of truth (canonical layout
+    ``<REQ>.meta.json``); whether each meta is loadable is judged later
+    by the per-REQ preflight, not here.
+    """
+    req_dir = quality_system_root(project_root) / "req"
+    if not req_dir.is_dir():
+        return []
+    return sorted(
+        p.name[: -len(".meta.json")]
+        for p in req_dir.glob("*.meta.json")
+        if p.is_file()
+    )
+
+
+def validate_policy_preflight_same_world(
+    project_root: Path,
+    *,
+    policy_override: dict[str, Any],
+) -> list[tuple[str | None, PreflightReport]]:
+    """Project-wide + per-REQ preflight against ONE in-memory policy world.
+
+    Phase 2 Step 2.5 (prejournal §3-1): closes the blind spot where a
+    policy edit passes the project-wide graph check while silently
+    breaking existing REQ resolution — e.g. renaming a stage id leaves
+    every REQ meta citing the old id ``unknown_stage_id`` and turns its
+    waivers into knowledge orphans, but :func:`validate_policy_preflight`
+    with ``req_id=None`` never resolves REQ metas, so the edit would
+    report success against a world it just broke.
+
+    The whole list shares the SAME ``policy_override`` (Step 2.2 の
+    「複数 doc 同一 world」規約): entry 0 is the project-wide report
+    (``req_id=None``), followed by one report per existing REQ in
+    :func:`list_req_ids` order. A meta that fails to load surfaces in
+    its own per-REQ report (missing_required_file / invalid_json), so
+    callers can tell existing-REQ damage apart from policy-graph damage
+    by the scope key alone.
+
+    Cost is REQ count x preflight (validate_schema_sources re-runs per
+    call). Accepted for Phase 2 — adopt/patch of policy is not a hot
+    path; caching is Phase 3 (prejournal §3-1).
+    """
+    results: list[tuple[str | None, PreflightReport]] = [
+        (None, validate_policy_preflight(
+            project_root, None, policy_override=policy_override
+        ))
+    ]
+    for req_id in list_req_ids(project_root):
+        results.append(
+            (req_id, validate_policy_preflight(
+                project_root, req_id, policy_override=policy_override
+            ))
+        )
+    return results
+
+
+def collect_same_world_blockers(
+    reports: list[tuple[str | None, PreflightReport]],
+) -> list[dict[str, str]]:
+    """Flatten + dedupe blockers across same-world reports.
+
+    Findings that are independent of the REQ scope (knowledge orphans,
+    policy graph issues) appear in every report of the list; dedupe by
+    ``(kind, where, message)`` keeps the first occurrence, whose scope
+    is ``"<project>"`` because the project-wide report comes first.
+    REQ-specific findings keep their ``req_id`` scope so callers (and
+    Phase 5 skills) can see exactly which REQ a breaking policy change
+    damages (Codex Step 2.5 計画 r2: 移行順序の判断に使える粒度).
+    """
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, str]] = []
+    for scope, report in reports:
+        for issue in report.blocking_issues():
+            key = (issue.kind, issue.where, issue.message)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "scope": scope or "<project>",
+                    "kind": issue.kind,
+                    "where": issue.where,
+                    "message": issue.message,
+                }
+            )
+    return out
+
+
+def collect_same_world_warnings(
+    reports: list[tuple[str | None, PreflightReport]],
+) -> list[dict[str, str]]:
+    """Flatten + dedupe warnings across same-world reports (same rules)."""
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, str]] = []
+    for scope, report in reports:
+        for issue in report.warnings():
+            key = (issue.kind, issue.where, issue.message)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "scope": scope or "<project>",
+                    "kind": issue.kind,
+                    "where": issue.where,
+                    "message": issue.message,
+                }
+            )
+    return out
+
+
 def _loader_kind_for_policy(loader_kind: str) -> PreflightIssueKind:
     """Map LoaderError.kind onto preflight kinds for policy/config reads."""
     if loader_kind == "invalid_json":

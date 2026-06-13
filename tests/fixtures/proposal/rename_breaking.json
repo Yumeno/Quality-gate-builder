@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "proposal_type": "policy_stages",
+  "source_metadata": {
+    "generator": "fixture",
+    "note": "One-shot rename S1 -> build. The policy graph itself stays healthy (S2.depends_on follows the rename), but every REQ meta still references S1 - the same-world validation must reject this with scope=REQ-APP-001."
+  },
+  "stages": [
+    {
+      "id": "build",
+      "name": "sample ファイル存在",
+      "responsibility": "target/sample.txt が存在する",
+      "depends_on": [],
+      "verification_type": "file_exists",
+      "required_contract_fields": ["target"]
+    },
+    {
+      "id": "S2",
+      "name": "キーワード包含",
+      "responsibility": "target/sample.txt に \"hello\" が含まれる",
+      "depends_on": ["build"],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    },
+    {
+      "id": "S3",
+      "name": "設定ファイル存在",
+      "responsibility": "target/sample.txt が存在する",
+      "depends_on": [],
+      "verification_type": "file_exists",
+      "required_contract_fields": ["target"]
+    }
+  ]
+}

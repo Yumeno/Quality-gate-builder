@@ -51,7 +51,7 @@ def _read_json(path: Path) -> Any:
             message=f"required spec file is missing: {path}",
         )
     try:
-        with path.open("r", encoding="utf-8") as fh:
+        with path.open("r", encoding="utf-8-sig") as fh:
             return json.load(fh)
     except json.JSONDecodeError as exc:
         raise LoaderError(

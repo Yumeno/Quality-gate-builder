@@ -1369,6 +1369,180 @@ def _handle_dev(args: argparse.Namespace) -> int:
     return _handle_check(args)
 
 
+# ---- design-stages propose-context / adopt (Phase 2 Step 2.5) -------------
+
+
+def _check_project_root(command: str, path_arg: str) -> Path | None:
+    root = Path(path_arg).resolve()
+    if not root.exists():
+        print(f"qgb {command}: path does not exist: {root}", file=sys.stderr)
+        return None
+    if not root.is_dir():
+        print(
+            f"qgb {command}: --path must point at a project directory, "
+            f"not a file: {root}",
+            file=sys.stderr,
+        )
+        return None
+    return root
+
+
+def _handle_ds_propose_context(args: argparse.Namespace) -> int:
+    """`qgb design-stages propose-context [--out <file>]` (Step 2.5).
+
+    Exports the design-relevant project state as one JSON document for
+    an external LLM tool (Pattern B: qgb itself never calls an LLM).
+    Output is always JSON. With --out, the document is written to the
+    file UTF-8-explicitly — the recommended handoff on Windows, where
+    PowerShell 5.1 pipes re-encode stdout via the console code page and
+    can mangle non-ASCII content (NF-004).
+    """
+    from qgb.core.loader import LoaderError
+    from qgb.core.proposal import build_proposal_context
+
+    root = _check_project_root("design-stages propose-context", args.path)
+    if root is None:
+        return EXIT_USAGE
+
+    try:
+        context = build_proposal_context(root)
+    except LoaderError as exc:
+        print(
+            f"qgb design-stages propose-context: cannot export context: "
+            f"{exc.message}",
+            file=sys.stderr,
+        )
+        return EXIT_NOT_READY
+
+    text = json.dumps(context, ensure_ascii=False, indent=2) + "\n"
+    if args.out:
+        out_path = Path(args.out)
+        try:
+            out_path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            print(
+                f"qgb design-stages propose-context: cannot write "
+                f"{out_path}: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_NOT_READY
+        print(
+            f"qgb design-stages propose-context: wrote context to {out_path}",
+            file=sys.stdout,
+        )
+        return EXIT_OK
+
+    try:
+        sys.stdout.write(text)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write(text.encode("utf-8"))
+    return EXIT_OK
+
+
+def _adopt_result_to_json(result, *, dry_run: bool) -> dict[str, object]:
+    return {
+        "ok": True,
+        "command": "design-stages adopt",
+        "dry_run": dry_run,
+        "target": str(result.target),
+        "would_write": result.would_write,
+        "written": result.written,
+        "proposal_sha256": result.proposal_sha256,
+        "policy_before_sha256": result.policy_before_sha256,
+        "policy_after_sha256": result.policy_after_sha256,
+        "applied_at": result.applied_at,
+        "source_metadata": result.source_metadata,
+        "warnings": result.warnings,
+    }
+
+
+def _adopt_error_to_json(err, *, dry_run: bool) -> dict[str, object]:
+    return {
+        "ok": False,
+        "command": "design-stages adopt",
+        "dry_run": dry_run,
+        "reason": err.reason,
+        "message": err.message,
+        "detail": err.detail,
+    }
+
+
+def _handle_ds_adopt(args: argparse.Namespace) -> int:
+    """`qgb design-stages adopt <proposal.json>` (Step 2.5).
+
+    Imports an externally produced proposal (proposal.schema.json,
+    proposal_type=policy_stages), validates it against the same world
+    (project-wide + every existing REQ) and atomically replaces
+    policy.json#stages. Exit codes follow the edit-command convention:
+    0 success (incl. dry-run), 1 when the same-world preflight found
+    blockers (the proposal breaks the design), 2 on any other reject.
+    """
+    from qgb.core.proposal import AdoptError, adopt_proposal
+
+    root = _check_project_root("design-stages adopt", args.path)
+    if root is None:
+        return EXIT_USAGE
+
+    dry_run: bool = args.dry_run
+    try:
+        result = adopt_proposal(
+            root, Path(args.proposal), dry_run=dry_run
+        )
+    except AdoptError as err:
+        if args.json:
+            json.dump(
+                _adopt_error_to_json(err, dry_run=dry_run),
+                sys.stdout,
+                ensure_ascii=False,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(
+                f"qgb design-stages adopt: rejected ({err.reason}): "
+                f"{err.message}",
+                file=sys.stderr,
+            )
+            for b in err.detail.get("blockers", []):
+                print(
+                    f"  - [{b['scope']}] [{b['kind']}] {b['where']}",
+                    file=sys.stderr,
+                )
+                print(f"      {b['message']}", file=sys.stderr)
+        if err.reason == "policy_preflight_failed":
+            return EXIT_DENY
+        return EXIT_NOT_READY
+
+    if args.json:
+        json.dump(
+            _adopt_result_to_json(result, dry_run=dry_run),
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        verb = "would adopt" if dry_run else "adopted"
+        print(
+            f"qgb design-stages adopt: {verb} proposal into {result.target}",
+            file=sys.stdout,
+        )
+        print(f"  proposal_sha256:      {result.proposal_sha256}", file=sys.stdout)
+        print(
+            f"  policy_before_sha256: {result.policy_before_sha256}",
+            file=sys.stdout,
+        )
+        print(
+            f"  policy_after_sha256:  {result.policy_after_sha256}",
+            file=sys.stdout,
+        )
+        if result.applied_at:
+            print(f"  applied_at: {result.applied_at}", file=sys.stdout)
+        for w in result.warnings:
+            print(f"  warning: {w}", file=sys.stdout)
+    return EXIT_OK
+
+
 # ---- parser --------------------------------------------------------------
 
 
@@ -1438,6 +1612,93 @@ def build_parser() -> QgbArgumentParser:
         help="Emit a machine-readable JSON report to stdout instead of text",
     )
     ds_p.set_defaults(handler=_handle_design_stages)
+
+    # Phase 2 Step 2.5 (Pattern B): explicit subcommands. The legacy
+    # flag-form (`qgb design-stages [--commit] [--json]`) keeps working
+    # unchanged because the subparsers group is optional — the parent
+    # handler runs whenever no subcommand token is present.
+    ds_sub = ds_p.add_subparsers(
+        dest="ds_command",
+        metavar="<subcommand>",
+        parser_class=QgbArgumentParser,
+    )
+    pc_p = ds_sub.add_parser(
+        "propose-context",
+        help="export project state as JSON input material for an external LLM tool",
+        description=(
+            "Export the design-relevant project state (detect result, "
+            "current policy.json, REQ inventory, design constraints) as "
+            "one JSON document. This is INPUT MATERIAL for an external "
+            "LLM tool; qgb itself never calls an LLM (Pattern B). "
+            "Output is always JSON. Prefer --out on Windows: PowerShell "
+            "5.1 pipes re-encode stdout via the console code page and "
+            "can mangle non-ASCII content; --out writes the file as "
+            "UTF-8 explicitly. Returns 0 on success, 2 when the project "
+            "has no readable policy.json (run qgb init first), 64 on "
+            "usage errors."
+        ),
+    )
+    pc_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root (default: current directory)",
+    )
+    pc_p.add_argument(
+        "--out",
+        default=None,
+        metavar="FILE",
+        help=(
+            "Write the context JSON to FILE (UTF-8) instead of stdout. "
+            "Recommended handoff on Windows (NF-004)."
+        ),
+    )
+    pc_p.set_defaults(handler=_handle_ds_propose_context)
+
+    adopt_p = ds_sub.add_parser(
+        "adopt",
+        help="validate an external proposal and atomically apply it to policy.json",
+        description=(
+            "Import a proposal document (proposal.schema.json, "
+            "proposal_type=policy_stages: stages[] declaratively replaces "
+            "policy.json#stages in full). The proposal is validated "
+            "against the SAME world the project lives in - project-wide "
+            "design checks plus every existing REQ's resolution - and "
+            "policy.json is atomically swapped only when nothing breaks; "
+            "every reject path leaves the original untouched. Removing "
+            "or renaming a stage that an existing REQ still references "
+            "is rejected: migrate in three steps (additive adopt, "
+            "per-REQ meta patch, removal adopt). Success JSON carries "
+            "proposal/policy-before/policy-after sha256 hashes as the "
+            "audit trail; nothing is appended to knowledge.jsonl. "
+            "Returns 0 on success (incl. --dry-run), 1 when the "
+            "same-world validation found blockers, 2 on any other "
+            "reject, 64 on usage errors."
+        ),
+    )
+    adopt_p.add_argument(
+        "proposal",
+        metavar="PROPOSAL-JSON",
+        help="Path to the proposal JSON file produced by the external tool",
+    )
+    adopt_p.add_argument(
+        "--path",
+        default=".",
+        help="Project root (default: current directory)",
+    )
+    adopt_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Run every validation and report the would-be result "
+            "(including hashes) without writing policy.json."
+        ),
+    )
+    adopt_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON report to stdout instead of text",
+    )
+    adopt_p.set_defaults(handler=_handle_ds_adopt)
 
     # scaffold: real handler (Step 6d).
     sc_p = subparsers.add_parser(

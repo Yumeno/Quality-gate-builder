@@ -13,6 +13,7 @@
 | `gate.schema.json` | `evidence/<REQ>/latest/gate.json` の構造（**採用判定証跡、厳格**） | **false** |
 | `gate.runtime.schema.json` | `artifacts/<REQ>/runs/<ts>/gate.json` と `artifacts/<REQ>/checks/<ts>-<runid>/gate.json` の構造（揮発、拡張可） | true |
 | `knowledge.schema.json` | `knowledge.jsonl` の各行の構造 | true |
+| `proposal.schema.json` | `qgb design-stages adopt` が受け取る外部 proposal (Pattern B)。`proposal_type: "policy_stages"` = policy.json#stages の宣言的全量置換 | **false** (外部入力境界、NF-007) |
 
 ## 厳格性の使い分け
 

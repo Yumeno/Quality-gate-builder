@@ -24,6 +24,9 @@ SCHEMA_FILES = {
     "knowledge": "knowledge.schema.json",
     # Phase 2 Step 2.2: JSON Patch subset documents accepted by `qgb patch`.
     "patch": "patch.schema.json",
+    # Phase 2 Step 2.5: external proposal documents accepted by
+    # `qgb design-stages adopt` (Pattern B).
+    "proposal": "proposal.schema.json",
 }
 
 

@@ -11,10 +11,14 @@ Phase 2 Step 2.2 (prejournal §6.1 / §6.5) で新設。Step 2.2 の中核。
 4. 適用後の doc を :func:`qgb.core.schema.validate` で **対象 schema** に
    照らす (policy.json なら ``policy``、contract.json なら ``contract``、
    req-meta.json なら ``req-meta``)
-5. 適用後の doc を override seam 経由で
-   :func:`qgb.core.preflight.validate_policy_preflight` にかけて **project
-   全体** の整合性確認 (Step 2.1 で確立した ``_collect_dollar_refs`` /
-   ``_is_internal_pointer_ref`` 経路もここで走る)
+5. 適用後の doc を override seam 経由で preflight にかけて整合性確認
+   (Step 2.1 で確立した ``_collect_dollar_refs`` /
+   ``_is_internal_pointer_ref`` 経路もここで走る)。検査範囲は target 種別で
+   異なる: REQ_META / CONTRACT は当該 REQ の per-REQ 検査、**POLICY は
+   Step 2.5 で project-wide + 既存全 REQ の same-world 検査に強化**
+   (Step 2.2 当初の project-wide のみだと、stage rename patch が「policy
+   単体は健全」のまま既存 REQ を unknown_stage_id で壊す盲点があった —
+   prejournal phase2-step2-5 §2)
 6. すべて pass したら sibling tmp に書く → ``os.replace`` で atomic swap
 7. どこかで失敗したら原本は touch しない
 
@@ -47,7 +51,13 @@ from typing import Any
 
 from qgb.core.loader import LoaderError, resolve_project_relative
 from qgb.core.patch import PatchError, apply_patch
-from qgb.core.preflight import PreflightReport, validate_policy_preflight
+from qgb.core.preflight import (
+    PreflightReport,
+    collect_same_world_blockers,
+    collect_same_world_warnings,
+    validate_policy_preflight,
+    validate_policy_preflight_same_world,
+)
 from qgb.core.schema import validate as schema_validate
 
 __all__ = [
@@ -205,7 +215,7 @@ def classify_target(project_root: Path, target_rel: str) -> tuple[Path, TargetKi
 def _load_json_file(path: Path, *, reason_on_error: str) -> Any:
     """Read+parse a JSON file. Returns parsed value or raises PatchApplyError."""
     try:
-        with path.open("r", encoding="utf-8") as fh:
+        with path.open("r", encoding="utf-8-sig") as fh:
             return json.load(fh)
     except FileNotFoundError as exc:
         raise PatchApplyError(
@@ -272,31 +282,38 @@ def _run_validate_policy_with_override(
     kind: TargetKind,
     target_rel: str,
     patched: Any,
-) -> PreflightReport:
-    """Run validate_policy_preflight with the patched doc as an in-memory override.
+) -> list[tuple[str | None, PreflightReport]]:
+    """Run the preflight with the patched doc as an in-memory override.
 
     The seam introduced in :func:`qgb.core.preflight.validate_policy_preflight`
     (Phase 2 Step 2.2 案 X) lets us check the patched view without touching
-    disk.
+    disk. Returns ``(scope, report)`` pairs — scope is the REQ id the
+    report was resolved for, or ``None`` for the project-wide pass.
+
+    Step 2.5: the POLICY branch now runs
+    :func:`validate_policy_preflight_same_world` (project-wide + every
+    existing REQ against the same patched policy). REQ_META / CONTRACT
+    keep their single per-REQ report — a meta/contract edit can only
+    affect its own REQ's resolution.
     """
     if kind is TargetKind.POLICY:
-        return validate_policy_preflight(
+        return validate_policy_preflight_same_world(
             project_root, policy_override=patched
         )
     if kind is TargetKind.REQ_META:
         # Derive REQ id from path: .quality-system/req/<REQ>.meta.json
         req_id = _req_id_from_meta_path(target_rel)
-        return validate_policy_preflight(
+        return [(req_id, validate_policy_preflight(
             project_root, req_id=req_id, req_meta_override=patched
-        )
+        ))]
     if kind is TargetKind.CONTRACT:
         # Derive contract_ref (already canonical) and REQ id from path.
         req_id = _req_id_from_contract_path(target_rel)
-        return validate_policy_preflight(
+        return [(req_id, validate_policy_preflight(
             project_root,
             req_id=req_id,
             contract_overrides={target_rel.replace("\\", "/"): patched},
-        )
+        ))]
     raise PatchApplyError(
         reason="target_path_invalid",
         message=f"unknown target kind: {kind}",
@@ -463,34 +480,35 @@ def apply_patch_doc_to_target(
     # 5a. Validate against target schema.
     _validate_target_against_schema(patched, kind, target)
 
-    # 5b. Validate against project-wide preflight via override seam.
-    preflight_report = _run_validate_policy_with_override(
+    # 5b. Validate the patched view via the override seam. POLICY targets
+    # get the Step 2.5 same-world treatment (project-wide + every
+    # existing REQ); REQ_META / CONTRACT stay single per-REQ reports.
+    reports = _run_validate_policy_with_override(
         project_root, kind, target_rel, patched
     )
-    if preflight_report.has_blockers():
+    blockers = collect_same_world_blockers(reports)
+    if blockers:
         # Surface blockers in a structured way; warnings are recorded but
-        # not blocking (Step 6a severity 規約).
-        blocker_kinds = [
-            i.kind for i in preflight_report.blocking_issues()
-        ]
+        # not blocking (Step 6a severity 規約). ``scope`` tells callers
+        # (and Phase 5 skills) WHICH REQ a policy change breaks.
+        blocker_kinds = [b["kind"] for b in blockers]
         raise PatchApplyError(
             reason="validate_policy_blocker",
             message=(
                 f"patched view has {len(blocker_kinds)} blocker(s): "
                 f"{blocker_kinds}"
             ),
-            detail={
-                "blockers": [
-                    {"kind": i.kind, "where": i.where, "message": i.message}
-                    for i in preflight_report.blocking_issues()
-                ],
-            },
+            detail={"blockers": blockers},
         )
 
     warnings = [
-        f"{i.kind} at {i.where}: {i.message}"
-        for i in preflight_report.warnings()
+        f"{w['kind']} at {w['where']}: {w['message']}"
+        for w in collect_same_world_warnings(reports)
     ]
+    # Backward-compat: PatchApplyResult.preflight_report stays a single
+    # report — the project-wide one for POLICY (reports[0]), the per-REQ
+    # one otherwise.
+    preflight_report = reports[0][1]
 
     if dry_run:
         return PatchApplyResult(

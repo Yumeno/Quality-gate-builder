@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/proposal.schema.json",
+  "title": "qgb external proposal (Pattern B, Phase 2 Step 2.5)",
+  "description": "A proposal document produced OUTSIDE qgb (typically by an external LLM tool reading the output of 'qgb design-stages propose-context') and consumed by 'qgb design-stages adopt'. The only proposal_type Phase 2 understands is 'policy_stages': stages[] declaratively REPLACES policy.json#stages in full. The schema deliberately has no room for req-meta or contract content (P9): those are edited via 'qgb patch' / domain edit commands. Root additionalProperties is false because this is an external-input boundary — unknown keys are more likely typos or smuggled content than extensions (NF-007).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "proposal_type", "stages"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Proposal document schema version. The schema only constrains the shape; qgb code enforces the supported set and rejects others with AdoptError(reason=unsupported_schema_version), so future versions fail with a precise reason instead of a generic schema error."
+    },
+    "proposal_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What this proposal replaces. Phase 2 supports exactly 'policy_stages'. Like schema_version, the supported set is enforced in code (AdoptError reason=unsupported_proposal_type) to keep the reason machine-distinguishable."
+    },
+    "policy_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional new policy_id. When absent, the current policy.json's policy_id is preserved."
+    },
+    "source_metadata": {
+      "type": "object",
+      "description": "Free-form provenance carried verbatim into the adopt result JSON (P7: auditors can trace what generated the proposal). qgb never interprets these values as instructions (P8/NF-007).",
+      "properties": {
+        "generator": {
+          "type": "string",
+          "description": "Tool/model that produced the proposal (e.g. 'fixture', 'claude-code', 'codex-cli')."
+        }
+      },
+      "additionalProperties": true
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Full replacement for policy.json#stages. Item shape mirrors policy.schema.json#stages items; uniqueness of ids and DAG-ness of depends_on are enforced by the adopt-time preflight, not here.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "responsibility", "depends_on", "verification_type"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "responsibility": { "type": "string", "minLength": 1 },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "verification_type": {
+            "type": "string",
+            "enum": [
+              "command",
+              "file_exists",
+              "substring_match",
+              "json_schema",
+              "manual_check"
+            ]
+          },
+          "required_contract_fields": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
