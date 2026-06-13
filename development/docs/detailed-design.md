@@ -1184,49 +1184,51 @@ Codex 計画レビュー (2026-06-01) で 7 サブステップに分解。規模
 - proposal の human-in-the-loop diff UI (qgb 外、Phase 5)
 - multi-doc transaction (one-shot rename)、validate_schema_sources の cache 最適化、--out の全コマンド展開 (Phase 3)
 
-#### Step 2.6 — example packs (FastAPI / Go / Next.js)
+#### Step 2.6 — example packs (**完結 2026-06-13**)
 
-**スコープ (3 サブサブステップに分割):**
+**スコープ (3 サブサブステップ、全完了):**
 
-- **Step 2.6a — examples/python-fastapi-pytest/**: pytest + httpx + FastAPI 起動なしの contract test
-- **Step 2.6b — examples/go-cli/**: `go test` + `go vet` での L1 + L5
-- **Step 2.6c — examples/node-cli-vitest/** または **examples/next-app/**: Next.js は重い `npm install` を必須にしない設計余地を検討 (実 Next.js or Node CLI の選択は 2.6c 着手時判断)
+- **Step 2.6a — examples/python-fastapi-pytest/**: pytest + httpx TestClient (FastAPI 起動なし) + file_exists + substring_match
+- **Step 2.6b — examples/go-cli/**: `go test` + `go vet` + substring_match
+- **Step 2.6c — examples/node-cli-vitest/**: vitest + file_exists + substring_match (計画の Next.js → Node CLI + vitest に変更: npm install の重さ回避)
 
-**完了条件 (各サブサブステップ):**
+**完了条件 (全達成):**
 
-- design-notes.md (7 項目) + README + 整合性テスト
-- Phase 1 で確立した「対象系に近い例から始める」運用が成立
+- design-notes.md (7 セクション) + README + 整合性テスト — 達成 (6 例すべて)
+- Phase 1 で確立した「対象系に近い例から始める」運用が成立 — 達成
 
-**規模感:** 1.5 (3 サブサブステップで均等配分、Next.js が重ければ繰り下げ判断)
+詳細な作業記録は `journal/phase2-step2-6.md`。テスト 726 → 731 件。レビュー省略 (差分は example 生成のみ、新コード < 50 行)。
 
-#### Step 2.7 — strictness review
+**規模感:** 0.5 で着地 (計画 1.5 から下振れ: パターン確立後の例生成は軽い)
 
-**スコープ:**
+#### Step 2.7 — strictness review (**完結 2026-06-13**)
 
-- `additionalProperties: false` の全面適用 / 部分適用 / 見送りの判断 (Step 2.1〜2.6 の運用結果を見て決定)
-- migration notes: Phase 1 → Phase 2 schema 変更点を `docs/migration-phase1-to-phase2.md` にまとめる
-- 全 docs (phase1-manual.md / security-dependency-policy.md / detailed-design.md) の Phase 2 反映
-- Phase 2 完結ジャーナル作成 (`journal/phase2-step{1..7}.md` + `journal/phase2-summary.md`)
+**スコープ (全項目完了):**
 
-**完了条件:**
+- `additionalProperties: false` の判断 — **部分適用 (現状維持)**: gate.schema.json / proposal.schema.json は strict (Phase 1/2 で確立済み)、他は true 維持 (Phase 3 adapter 拡張のため)。`--strict` 実体は Phase 3 送り
+- migration notes — 完了 (`docs/migration-phase1-to-phase2.md`)
+- Phase 2 完結ジャーナル — 完了 (`journal/phase2-step2-5.md` 〜 `phase2-step2-7.md` + `phase2-summary.md`)
+- Phase 3 申し送り項目 — 17 項目を `journal/phase2-step2-7.md` に列挙
 
-- 全 spec / docs が Phase 2 反映済
-- Phase 3 申し送り項目が明確化されている
+**完了条件 (全達成):**
 
-**規模感:** 0.5
+- 全 spec / docs が Phase 2 反映済 — 達成
+- Phase 3 申し送り項目が明確化されている — 達成 (17 項目)
+
+**規模感:** 0.3 で着地 (計画 0.5)
 
 ### 13.3 規模感サマリ
 
-| サブステップ | 規模 (Phase 1 Step 5 = 1.0) | 主要リスク |
-|---|---|---|
-| 2.1 schema baseline | 0.8 | 後方互換破壊 |
-| 2.2 patch substrate | 1.2 | atomic 保証 |
-| 2.3 domain edit commands | 1.0 | knowledge orphan の判定基準 |
-| 2.4 daily verification channel | 1.0 | curated 不変の machine-verify |
-| 2.5 Pattern B external-LLM | 1.5 | proposal schema 設計、命名 |
-| 2.6 example packs | 1.5 | Next.js の重さ |
-| 2.7 strictness review | 0.5 | 判断のみ |
-| **合計** | **6.2〜10.0** | (補修込みの上限) |
+| サブステップ | 計画 | 実績 | 主要リスク |
+|---|---|---|---|
+| 2.1 schema baseline | 0.8 | 0.8 | 後方互換破壊 |
+| 2.2 patch substrate | 1.2 | 2.0 | atomic 保証 (案 X 上振れ) |
+| 2.3 domain edit commands | 1.0 | 0.9 | knowledge orphan の判定基準 |
+| 2.4 daily verification channel | 1.0 | 1.0 | curated 不変の machine-verify |
+| 2.5 Pattern B external-LLM | 1.5 | 1.5 | proposal schema 設計、命名 |
+| 2.6 example packs | 1.5 | 0.5 | パターン確立後は軽い |
+| 2.7 strictness review | 0.5 | 0.3 | 判断のみ |
+| **合計** | **7.5** | **7.0** | |
 
 ### 13.4 Phase 1 で確立したパターンの再利用
 
