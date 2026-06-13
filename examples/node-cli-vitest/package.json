@@ -1,0 +1,12 @@
+{
+  "name": "demo-cli",
+  "version": "1.0.0",
+  "description": "Minimal Node.js CLI for qgb example pack",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0"
+  }
+}

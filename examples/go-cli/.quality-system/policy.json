@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "go test が成功する",
+      "responsibility": "go test ./... が exit 0 で完了する",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command"]
+    },
+    {
+      "id": "S2",
+      "name": "go vet が成功する",
+      "responsibility": "go vet ./... が exit 0 で完了する",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command"]
+    },
+    {
+      "id": "S3",
+      "name": "README に Usage が書かれている",
+      "responsibility": "README.md が Usage セクションを含む",
+      "depends_on": [],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    }
+  ]
+}

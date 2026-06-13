@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "vitest が成功する",
+      "responsibility": "npx vitest run が exit 0 で完了する",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command"]
+    },
+    {
+      "id": "S2",
+      "name": "エントリポイントが存在する",
+      "responsibility": "src/index.js が存在する",
+      "depends_on": [],
+      "verification_type": "file_exists",
+      "required_contract_fields": ["target"]
+    },
+    {
+      "id": "S3",
+      "name": "README に Usage が書かれている",
+      "responsibility": "README.md が Usage セクションを含む",
+      "depends_on": [],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    }
+  ]
+}

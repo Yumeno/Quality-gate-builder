@@ -343,6 +343,48 @@ _STEP8_EXAMPLES = [
             "CONTRACT-REQ-DOC-001-S3",
         ],
     },
+    {
+        "name": "python-fastapi-pytest",
+        "dir": EXAMPLES / "python-fastapi-pytest",
+        "req_id": "REQ-APP-001",
+        "expected_files": 6,
+        "expected_schema_names": [
+            "config", "contract", "contract", "contract", "policy", "req-meta",
+        ],
+        "expected_basis_contracts": [
+            "CONTRACT-REQ-APP-001-S1",
+            "CONTRACT-REQ-APP-001-S2",
+            "CONTRACT-REQ-APP-001-S3",
+        ],
+    },
+    {
+        "name": "go-cli",
+        "dir": EXAMPLES / "go-cli",
+        "req_id": "REQ-APP-001",
+        "expected_files": 6,
+        "expected_schema_names": [
+            "config", "contract", "contract", "contract", "policy", "req-meta",
+        ],
+        "expected_basis_contracts": [
+            "CONTRACT-REQ-APP-001-S1",
+            "CONTRACT-REQ-APP-001-S2",
+            "CONTRACT-REQ-APP-001-S3",
+        ],
+    },
+    {
+        "name": "node-cli-vitest",
+        "dir": EXAMPLES / "node-cli-vitest",
+        "req_id": "REQ-APP-001",
+        "expected_files": 6,
+        "expected_schema_names": [
+            "config", "contract", "contract", "contract", "policy", "req-meta",
+        ],
+        "expected_basis_contracts": [
+            "CONTRACT-REQ-APP-001-S1",
+            "CONTRACT-REQ-APP-001-S2",
+            "CONTRACT-REQ-APP-001-S3",
+        ],
+    },
 ]
 
 
@@ -476,6 +518,49 @@ def test_markdown_docs_substring_target_actually_contains_keyword() -> None:
     target_text = (ex_dir / s2["target"]).read_text(encoding="utf-8")
     for keyword in s2["must_contain"]:
         assert keyword in target_text, (s2["target"], keyword)
+
+
+def test_fastapi_file_exists_target_actually_exists() -> None:
+    """python-fastapi-pytest S2 (file_exists) target resolves."""
+    ex_dir = EXAMPLES / "python-fastapi-pytest"
+    contracts = _example_contracts(ex_dir, "REQ-APP-001")
+    s2 = contracts["S2"]
+    assert (ex_dir / s2["target"]).is_file()
+
+
+def test_fastapi_substring_target_actually_contains_keyword() -> None:
+    """python-fastapi-pytest S3 (substring_match) target has the keyword."""
+    ex_dir = EXAMPLES / "python-fastapi-pytest"
+    contracts = _example_contracts(ex_dir, "REQ-APP-001")
+    s3 = contracts["S3"]
+    target_text = (ex_dir / s3["target"]).read_text(encoding="utf-8")
+    for keyword in s3["must_contain"]:
+        assert keyword in target_text, (s3["target"], keyword)
+
+
+def test_go_cli_substring_target_actually_contains_keyword() -> None:
+    ex_dir = EXAMPLES / "go-cli"
+    contracts = _example_contracts(ex_dir, "REQ-APP-001")
+    s3 = contracts["S3"]
+    target_text = (ex_dir / s3["target"]).read_text(encoding="utf-8")
+    for keyword in s3["must_contain"]:
+        assert keyword in target_text, (s3["target"], keyword)
+
+
+def test_node_cli_file_exists_target_actually_exists() -> None:
+    ex_dir = EXAMPLES / "node-cli-vitest"
+    contracts = _example_contracts(ex_dir, "REQ-APP-001")
+    s2 = contracts["S2"]
+    assert (ex_dir / s2["target"]).is_file()
+
+
+def test_node_cli_substring_target_actually_contains_keyword() -> None:
+    ex_dir = EXAMPLES / "node-cli-vitest"
+    contracts = _example_contracts(ex_dir, "REQ-APP-001")
+    s3 = contracts["S3"]
+    target_text = (ex_dir / s3["target"]).read_text(encoding="utf-8")
+    for keyword in s3["must_contain"]:
+        assert keyword in target_text, (s3["target"], keyword)
 
 
 def test_markdown_docs_metadata_validates_against_its_schema() -> None:

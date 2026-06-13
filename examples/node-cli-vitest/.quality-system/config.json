@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "name": "node-cli-vitest"
+  },
+  "qgb": {
+    "core_language": "node",
+    "version": "0.1.0"
+  },
+  "commands": {}
+}
