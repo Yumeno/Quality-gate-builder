@@ -258,7 +258,7 @@ def _req_meta_stage_ids(project_root: Path, req_id: str) -> set[str] | None:
         project_root / ".quality-system" / "req" / f"{req_id}.meta.json"
     )
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return None
     stages = meta.get("stages")

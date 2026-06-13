@@ -103,7 +103,7 @@ def scaffold_req(
             ),
         )
 
-    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy = json.loads(policy_path.read_text(encoding="utf-8-sig"))
     stages = policy.get("stages") or []
     if not stages:
         return ScaffoldOutcome(

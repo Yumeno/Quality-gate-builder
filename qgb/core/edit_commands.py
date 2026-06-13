@@ -161,7 +161,7 @@ def add_waiver(
         )
 
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise EditError(
             reason="req_meta_not_json",
@@ -389,7 +389,7 @@ def add_knowledge(
     schema-validated as-is (no created_at backfill) and appended verbatim.
     """
     try:
-        raw = json.loads(file_path.read_text(encoding="utf-8"))
+        raw = json.loads(file_path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError as exc:
         raise EditError(
             reason="knowledge_not_json",

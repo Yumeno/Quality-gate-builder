@@ -279,7 +279,7 @@ def _run_substring_match(project_root: Path, stage: AdoptedStage) -> StageResult
         )
 
     try:
-        text = full.read_text(encoding="utf-8")
+        text = full.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         log_lines.append(
             f"result: failed (target is not valid UTF-8: {exc})"
@@ -838,7 +838,7 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
         )
 
     try:
-        target_data = _json.loads(target_full.read_text(encoding="utf-8"))
+        target_data = _json.loads(target_full.read_text(encoding="utf-8-sig"))
     except (_json.JSONDecodeError, UnicodeDecodeError) as exc:
         log_lines.append(
             f"result: failed (target is not valid JSON: {exc})"
@@ -854,7 +854,7 @@ def _run_json_schema(project_root: Path, stage: AdoptedStage) -> StageResult:
         )
 
     try:
-        schema_data = _json.loads(schema_full.read_text(encoding="utf-8"))
+        schema_data = _json.loads(schema_full.read_text(encoding="utf-8-sig"))
     except (_json.JSONDecodeError, UnicodeDecodeError) as exc:
         log_lines.append(
             f"result: failed (schema is not valid JSON: {exc})"

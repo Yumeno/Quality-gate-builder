@@ -128,7 +128,7 @@ def _load_template_stages(template_name: str) -> list[StageProposal]:
         raise FileNotFoundError(
             f"design-stages template not found: {template_path}"
         )
-    payload = json.loads(template_path.read_text(encoding="utf-8"))
+    payload = json.loads(template_path.read_text(encoding="utf-8-sig"))
     raw_stages = payload.get("stages", [])
     out: list[StageProposal] = []
     for idx, raw in enumerate(raw_stages):
@@ -204,7 +204,7 @@ def commit_design(
             ),
         )
 
-    current = json.loads(policy_path.read_text(encoding="utf-8"))
+    current = json.loads(policy_path.read_text(encoding="utf-8-sig"))
     if current.get("stages") and not force:
         return CommitOutcome(
             ok=False,
@@ -255,7 +255,7 @@ def commit_design(
     # All clear: replace the real policy atomically. Codex 補修 3: write
     # to a unique sibling tmp file (NamedTemporaryFile) so a pre-existing
     # policy.json.tmp left over from another process is not destroyed.
-    staged_text = staged_policy_path.read_text(encoding="utf-8")
+    staged_text = staged_policy_path.read_text(encoding="utf-8-sig")
     fd, tmp_path_str = tempfile.mkstemp(
         prefix="policy.json.",
         suffix=".tmp",
