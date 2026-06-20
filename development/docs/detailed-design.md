@@ -1266,7 +1266,146 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 
 このパートは Step 2.7 完了の **必須プロセス**として detailed-design.md に明記しておく (Step 2.7 完了 = Phase 2 完結ではない、user 相談を経て初めて Phase 2 完結とする)。
 
-## 14. 改訂履歴
+## 14. Phase 3 計画 (2026-06-21 全面再構築、Codex セカンドオピニオン 2026-06-20 / 2026-06-21 反映)
+
+Phase 2 完結後の user 指摘で次が確定した:
+
+1. **adapter (言語判定) 廃止**: 対象プロジェクトの広がり (Markdown / プロンプト集 / 設定群 / 法務テンプレ等) に adapter 抽象が追いつかない、検出結果は ALLOW/DENY 判定の根拠でない、残存すると Phase 5 スキルへの悪い few-shot 教材になる、の 3 点が決定打。Claude が前段で 2 回ラインを引き間違えた事実 (adapter 廃止 → P7 のため復活 → user 指摘で再廃止) の記録は journal phase3-step3-0-prejournal.md に残す
+2. **Phase 4 (CI 連携) 廃止**: 当初項目は別の場所に吸収または WONTFIX。qgb 自身の CI は Phase 3 Step 3.1 で最小構成 (qgb の P6 を qgb 自身に適用)
+3. **Phase 3 を「機械責務側の最終整備」に再定義**: Phase 5 (Skill Creator 化) 提供の前提条件を揃える Phase。規模 3.4〜4.3 (Phase 1 / Phase 2 と比べて軽量)
+
+### 14.1 ライン引きの最終形
+
+| ドメイン | 担い手 | 形式 |
+|---|---|---|
+| プロジェクトの自己定義 (何を作りたいか、何を保証したいか) | **人間** | `.quality-system/knowledge/project-context.md` |
+| md → json 構造化 | **補佐 Agent (利用者環境の LLM)** | `.quality-system/project-context.json` |
+| json の schema 検証 | **qgb (機械)** | `qgb validate` |
+| json + .quality-system/ 現状を構造化して export | **qgb (機械)** | `qgb design-stages propose-context` |
+| 段階設計の生成 | **本番 LLM (Phase 5 スキル)** | `proposal.json` |
+| proposal の schema + 整合性検証 + 適用 | **qgb (機械)** | `qgb design-stages adopt` |
+| contract の検査実行 | **qgb (機械)** | `qgb run` |
+| ALLOW/DENY 判定 | **qgb (機械)** | `gate.json` |
+
+ライン引きの本義: 「設計と監査の境界」「人間の意思を機械可読に固定する境界」「qgb は何を信用して何を検証するか」を明確にする。
+
+### 14.2 サブステップ計画
+
+#### Step 3.0 — detect 廃止 + project-context 導入 (規模 2.0〜2.5)
+
+**スコープ:**
+
+- `qgb detect` CLI コマンド削除 / `qgb/core/detect.py` 削除 / `qgb/adapters/` 削除 (base / generic / python)
+- `qgb/core/proposal.py` から detect 参照削除、`project_context` 読み込み追加 (propose-context 出力構造の更新)
+- `qgb/core/design_stages.py` から detect 参照削除 (legacy rule-based 経路の整理)
+- `qgb/cli.py` から detect コマンド削除
+- `qgb/schemas/project-context.schema.json` 新設
+- `qgb/core/init.py` で `project-context.json` 雛形生成 (`human_reviewed: false` 初期値)
+- `qgb/core/loader.py` に `load_project_context` 追加
+- `qgb/core/validate.py` に `project-context.json` 検査追加
+- `propose-context` が `human_reviewed: false` の `project_context` を含むとき warning 出力経路
+- Phase 1 で蓄積した Python adapter 観察知見の転記 (Codex 指摘): `examples/python-cli-pytest/project-context.{md,json}` を記入例として整備、design-notes.md に「Python プロジェクト観察観点」を転記
+- 関連テスト削除 + 新規 (project_context 周辺、human_reviewed 経路、warning 経路)
+- spec / docs 改訂 (requirements_and_development.md / detailed-design.md / framework-shape.md)
+
+**`project-context.schema.json` 設計指針 (Codex 指摘反映):**
+
+- root に `human_reviewed: bool` フィールド (人間承認状態を別立てで持つ、P8 利用者の明示指示の境界)
+- `constraints.language` のような言語中心字段を避け、`technologies` / `artifact_kinds` (array) のような広い語彙にする (Codex 指摘: 言語中心モデルを再誘発しない)
+- `source_metadata.generated_by`: `"human"` / `"agent-assisted"` で生成経路を区別
+- `source_metadata.source_md_sha256`: md が更新されたのに json が古いままという状態を機械的に検出可能にする (Phase 3 以降で `qgb validate-policy` の追加 kind として `project_context_stale` を入れる選択肢あり)
+
+**Pattern B 境界の更新:**
+
+- Before: 「qgb は対象プロジェクトを**機械的に観察した結果 (detect)** と .quality-system/ の現状を構造化して LLM に渡す」
+- After: 「qgb は **.quality-system/ の現状のみ** (project-context.json を含む) を構造化して LLM に渡す。対象プロジェクトの観察は LLM 責務」
+- Pattern B の **構造 (2 interface + schema + 検証 + 適用)** は無変更、**境界がより正確に縮約**
+
+**完了条件:**
+
+- detect / adapter 関連コード / テストが残らない (grep でゼロ確認)
+- `qgb validate` が `project-context.json` の schema 検証を含む
+- `qgb design-stages propose-context` 出力に `project_context` フィールドが含まれる
+- `qgb init` が `project-context.json` 雛形を生成
+- `examples/python-cli-pytest/` が新形式 (project-context.{md,json}) で動作
+- 既存テストが全 green (削除されたものを除く)
+
+**Phase 3 Step 3.1 への申し送り:** runner.py の `_run_command` 切り出し設計 (`qgb/core/command.py` 新設) の準備
+
+#### Step 3.1 — command runner 強化 + CI 雛形 (規模 1.5〜2.0)
+
+**スコープ:**
+
+- `qgb/core/runner.py` の `_run_command` を `qgb/core/command.py` に切り出し (P9 単一責任)
+- Popen + process tree kill:
+  - Windows: `ctypes` 経由で Job Objects (CreateJobObject + AssignProcessToJobObject + TerminateJobObject)、最小境界明示、失敗時 fallback (TerminateProcess + 子孫 leak のログ警告)
+  - POSIX: `os.setsid()` で新規 process group → `killpg(SIGTERM)` → 猶予後 `killpg(SIGKILL)`
+- `.bat` / `.cmd` argument escaping:
+  - `cmd.exe` メタ文字 (& | < > ^ % " 等) の escaping ヘルパー (別扱い)
+  - C++ argv parsing 規則 (CommandLineToArgvW 互換) のヘルパー (別扱い)
+  - Popen 呼び出し時に argv[0] が `.bat` / `.cmd` だったら両方適用
+- ストリーム読み取り 16 MiB 上限 (RSS cap は WONTFIX、stdout/stderr 合算 / 個別かは prejournal で確定)
+- 実 temporary `.bat`/`.cmd` fixture で argument escaping を検証 (Codex 指摘)
+- CI 雛形 `.github/workflows/test.yml`:
+  - pytest only (Windows + Ubuntu matrix)
+  - `actions/checkout` + `actions/setup-python` のみ、commit SHA pin
+  - `permissions: contents: read`
+  - third-party action ゼロ、secrets 不使用、Dependabot/Renovate なし
+  - POSIX 経路は CI で機械的判定 (論証で済ますことは qgb の P6 違反になるため)
+
+**スコープ外 (WONTFIX):**
+
+- RSS 監視 (psutil 等の依存追加なし、output stream cap として Step 3.1 で処理)
+- OS 別 memory cgroup / Job Object メモリ制限
+
+**完了条件:**
+
+- 既存 731 件 + Step 3.1 追加分のテストが Windows + Ubuntu の両 CI で green
+- 実 `.bat`/`.cmd` fixture で argument escaping が機能
+- 16 MiB 超過ストリームで process tree kill 発火
+- POSIX 経路が CI で実証される
+
+#### Step 3.2 — 依存解決固定 (規模 0.5〜0.8)
+
+**スコープ:**
+
+- `pip-tools` (`pip-compile`) 等で lock/hash
+- CI で `pip-compile --generate-hashes` の出力を artifact として残す
+- 当初 Phase 4 の「依存 audit / SBOM」をここで吸収
+
+**理由:** Phase 5 スキル提供時に「ユーザーが pip install qgb した結果が再現可能」であることが supply-chain 信頼の前提。jsonschema の推移依存が複数あり pip freeze だけでは P7 不足 (Codex 指摘 2026-06-13 で WONTFIX 撤回した経緯)
+
+#### Step 3.3 — Phase 2 繰越の実需回収 (任意、規模 0.5〜1.0)
+
+**候補 (Phase 5 で必要が判明したものに限定、先回りで全部やらない):**
+
+- `--strict` 実体実装 (Step 2.7 で先送り判定済)
+- waiver 削除 / revoke / supersede モデル
+- JSON Patch `move` / `copy` op
+- multi-doc transaction (one-shot rename)
+- `qgb dev` の changed-files 絞り込み
+- 全 REQ 一括 check
+
+### 14.3 Phase 4 廃止に伴う各項目の処理
+
+| 当初項目 | 処理 |
+|---|---|
+| GitHub Actions / GitLab CI 例 | Phase 5 のスキル生成テンプレに含める (利用者プロジェクト向け) |
+| JUnit XML 出力 | **WONTFIX** (P11 ALLOW 比較不可能性違反リスク) |
+| PR コメント連動 | **WONTFIX** (利用者運用、qgb 責務外) |
+| 採用判定のレビュー連動 | **WONTFIX** (利用者運用、branch protection で実現) |
+| 依存 audit / SBOM | Step 3.2 で吸収 |
+| qgb 自身の CI | Step 3.1 で最小構成 |
+
+### 14.4 Phase 5 への影響 (adapter なし設計)
+
+- adapter 量産は Phase 5 でも実施しない
+- スキルが対象プロジェクトを Read で読んで分析 (LLM 責務)
+- ALLOW/DENY は qgb の contract 実行結果で決まる (Codex 指摘: 「対象判定を全て LLM に委ねる」でなく「対象理解は LLM、ALLOW/DENY は qgb の contract 実行結果」)
+- 利用者プロジェクトに CI テンプレ (GitHub Actions 等) を生成する機能はスキルに含める (当初 Phase 4 項目を吸収)
+- examples/ の追加は言語別ではなくドメイン別 (prompt-collection / terraform-modules / sql-schemas / legal-templates / mixed-devops 等)、Phase 3 で先回りせず Phase 5 で必要に応じて追加
+
+## 15. 改訂履歴
 
 | 版 | 日付 | 内容 |
 |---|---|---|
@@ -1293,3 +1432,6 @@ Phase 2 では Codex 計画レビュー (2026-06-01) で次の項目が **Phase 
 | 0.21 | 2026-06-11 | **Phase 2 Step 2.4 着手前判断確定** (`journal/phase2-step2-4-prejournal.md` で詳細記録): Codex 計画レビューで方向性承認 + 中程度以上 5 指摘 (per-REQ check は unrelated orphan blocker で止めない / tmp パス変更は境界 3 の明示承認必須 / mode:"check" の機械可読誤認対策 / "read-only" と呼ばない / check tmp の prune 必須) を受領。最大の判断点 = 揮発出力先について、init の .gitignore 予約が `.quality-system/artifacts/` のみで `.qgb/` 未予約という事実誤認を発見し、案 A (`artifacts/<REQ>/checks/<ts>-<runid>/`、既予約木に同居) を理念照合 4 点 (P7 同種同所 / tool-private でないものを `.qgb/` に置くのは分類の誤り / NF-010 表面積最小化 / 境界 3 の正本は curated 不変でありパスは例示) で user 確定。§13.1 境界 3 と §13.2 Step 2.4 スコープを改訂。コード変更なし。**Step 2.4 実装着手準備完了** |
 | 0.22 | 2026-06-12 | **Phase 2 Step 2.4 完結**: daily verification channel (`qgb check` / `qgb dev`)。`qgb/core/check.py` 新設 (run_check = run_preflight/run_stages/decide を run と共有する official run rehearsal、check 専用 writer は `artifacts/<REQ>/checks/<ts>-<runid>/` のみ出力、curated swap / knowledge append / runs prune を意図的に不実行)。gate schema 共用 + `mode: "check"` (公式 gate は mode 不在で byte 不変、mode=check で curated_latest_dir 禁止の allOf 条件)。orphan は per-REQ で advisory / REQ-less で blocker (P9)。補修 A1-A7 (U+2014 ASCII 化 [cp932 リダイレクト障害]、byte-torn tail 耐性、**gate.runtime.schema.json の Step 7 waived drift 解消**、snapshot fixture の bytes+dir 化、waived REQ テスト群) + B1-B3 (U+FFFD を終端行で loud に / README / dir marker sentinel)。段 1 で Explore subagent 事故 (PowerShell・cd 連結・パス手打ちミスで申請多発) → default agent + テンプレ強化 + 「要実機確認タグ」出口 + 非破壊傘 2 件追加で恒久対応、再投入は申請ゼロ。Codex 横断 1 周目「cross-seam finding なし」(sandbox エラーで提示ベース) → 実コード同梱 2 周目「**指摘なし収束**」。詳細は `journal/phase2-step2-4.md`。テスト 666 → 698 件 (+32)、ruff clean。**Step 2.5 着手準備完了** |
 | 0.23 | 2026-06-12 | **Phase 2 Step 2.5 着手前判断確定** (`journal/phase2-step2-5-prejournal.md`): Codex 計画レビュー 1 周目で構造確定 (proposal_type: "policy_stages" 宣言形 / AdoptError 固定 enum 9 種 [検証順 = 安定 API] / 証跡 = knowledge 記録なし + result JSON に sha256 hash 3 種 / P8 は機械可読メタデータ / design-stages 後方互換 / `qgb patch policy` alias なし / fixture は tests/)。user 依頼の**実運用フローシミュレーションで矛盾 1 件発見**: adopt/patch (POLICY) の検証が project-wide のみのため「成功直後に既存 REQ が unknown_stage_id で壊れ waiver も orphan 化する」— Step 2.2 patch の既存盲点も grep で確認。追加確定 3 件 (adopt = project-wide + 全 REQ same-world per-REQ 検証 / 同検証を patch POLICY 経路へ適用 [安全側挙動変更] / propose-context --out [cp932 迂回の file handoff、NF-004])。破壊的 rename の正規手順 = 3 段移行 (additive adopt → REQ meta patch 移行 → 削除 adopt)、one-shot rename は Phase 3 multi-doc transaction 送り。Codex 2 周目で影響確認 (per-REQ 失敗詳細の機械可読化 / 壊れた既存 meta は reject / 計算量は許容・cache は Phase 3 / 規模 1.5 内)。§13.2 Step 2.5 スコープを確定形に改訂。コード変更なし。**Step 2.5 実装着手準備完了** |
+| 0.24 | 2026-06-13 | **Phase 2 Step 2.5 完結 + Step 2.6 完結 + Step 2.7 完結 + Phase 2 全体完結**: Pattern B external-LLM interface (propose-context / adopt / same-world validation) + example packs 3 例 (python-fastapi-pytest / go-cli / node-cli-vitest) + strictness review (additionalProperties: 部分適用 = gate/proposal は strict、他は true 維持) + migration notes (`docs/migration-phase1-to-phase2.md`) + Phase 2 全体ジャーナル (`journal/phase2-summary.md`)。テスト 698 → 731 件 (+33)。Phase 3 申し送り 17 項目を `journal/phase2-step2-7.md` に列挙、user 相談に向けた繰越判定パートを §13.5 で必須プロセス化 |
+| 0.25 | 2026-06-13 | **繰越リスト理念再精査**: BOM 残り read path を即修正 (NF-004 の徹底、中途半端な対応は違反)、WONTFIX 3 件 (JSON Patch move/copy / snapshot helper 統合 / SBOM 等) で繰越 17 → 13 件に整理。Codex セカンドオピニオン後、SBOM WONTFIX を撤回 (jsonschema 推移依存複数のため pip freeze だけでは P7 不足、依存 lock/hash を Phase 3 backlog に) |
+| 0.26 | 2026-06-21 | **Phase 3 計画全面再構築 (本版)**: Phase 2 完結後の user 指摘で adapter 量産 (Go/Rust/.NET/Java/PHP/Markdown adapter) と Phase 4 (CI 連携) を廃止、Phase 3 を「機械責務側の最終整備」に再定義。Codex セカンドオピニオン 2 周 (2026-06-20 Phase 3 着手順 / 2026-06-21 横断レビュー) で承認。§14 Phase 3 計画を新設 (Step 3.0 detect 廃止 + project-context 導入 / Step 3.1 command runner 強化 + CI 雛形 / Step 3.2 依存解決固定 / Step 3.3 Phase 2 繰越実需回収)、§14.1 ライン引きの最終形、§14.3 Phase 4 廃止に伴う各項目の処理、§14.4 Phase 5 adapter なし設計の影響を明文化。Claude が前段で 2 回ラインを引き間違えた事実 (adapter 廃止 → P7 のため復活 → user 指摘で再廃止) は journal phase3-step3-0-prejournal.md に記録予定。コード変更なし、本 commit は spec 改訂のみ |

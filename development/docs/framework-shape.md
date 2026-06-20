@@ -49,10 +49,10 @@ qgb メンテナのみ。改訂は厳格に扱い、バージョン番号を上�
 ### 置くもの
 
 - `qgb/` Python パッケージ本体
-  - `core/` — runner, decision, evidence, schema, knowledge, policy, command, stage-design
-  - `adapters/` — python, node, go, rust, dotnet, java, php, generic
-  - `schemas/` — JSON Schema 群（gate, policy, contract, knowledge, req-meta, config）
-  - `templates/` — 生成テンプレート（REQ.md, contract.\*.json, summary.md, quality-gate.ps1）
+  - `core/` — runner, command (Phase 3 Step 3.1 で runner._run_command を切り出し), decision, evidence, schema, patch, patch_apply, knowledge, edit_commands, preflight, proposal, design_stages, init, scaffold, validate, loader, json_pointer, check
+  - ~~`adapters/`~~ **Phase 3 Step 3.0 (2026-06-21) で廃止**。対象プロジェクトの分析は Phase 5 スキル (LLM) の責務、qgb 本体は機械的検査に徹する
+  - `schemas/` — JSON Schema 群（gate, gate.runtime, policy, contract, knowledge, req-meta, config, patch, proposal, project-context）
+  - `templates/` — 生成テンプレート（REQ.md, contract.\*.json, summary.md, project-context.{md,json}, quality-gate.ps1）
 - `development/docs/` — 開発文書
   - 思想憲章、要件定義書、段階設計仕様、フレームワーク境界（本書）
   - プロジェクト経緯、参考実装情報、発表資料まとめ
@@ -167,12 +167,19 @@ agent_bindings:
 
 スキル（生成物が読み込まれた状態）の責務：
 
-- 対象プロジェクトを分析（言語、フレームワーク、目的）
+- **対象プロジェクトを理解** (言語、フレームワーク、対象成果物の種類、目的)。対象は必ずしもプログラミング言語のソースとは限らない (ドキュメント群、プロンプト集、設定群、法務テンプレート等)
 - 思想憲章と設計例パックを参照
+- `.quality-system/knowledge/project-context.md` (人間が書いた自己定義) を読み、必要に応じて `.quality-system/project-context.json` (機械正本) への構造化を補佐 (Phase 3 Step 3.0 で導入)
 - 段階設計案を生成
 - ユーザーと対話して確定
 - `policy.json`, REQ メタ, contract 雛形を Layer 4 に書き込み
 - `qgb validate-policy` を呼んで機械検査
+
+**重要な境界 (Phase 3 計画確定 2026-06-21):**
+
+- **対象理解は LLM が行い、ALLOW/DENY は qgb の contract 実行結果で決まる**
+- スキルが対象を読み損ねても、それは proposal 品質の問題であり、gate の判定根拠にはしない (philosophy P6)
+- スキルが「対象判定モジュール」として機械的検出を肩代わりすると、qgb が adapter を持っていた時と同じ「対象プロジェクトの広がりに枠組みが追いつかない」問題に陥る。スキルは対象を Read で読み、人間の自己定義 (`project-context.md`) を尊重しつつ柔軟に理解する役回りに徹する
 
 ### 読む側（参照元）
 
@@ -209,6 +216,7 @@ agent_bindings:
 .quality-system/
   config.json
   policy.json
+  project-context.json       # 機械正本: 対象プロジェクトの自己定義 (Phase 3 Step 3.0 で新設)
   req/
     REQ-APP-001.md
     REQ-APP-001.meta.json
@@ -219,7 +227,7 @@ agent_bindings:
   knowledge/
     knowledge.jsonl
     source-index.json
-    project-context.md
+    project-context.md       # 人間正本: 自然言語の設計意図と背景
   evidence/
     REQ-APP-001/
       latest/
@@ -348,11 +356,14 @@ Python は composer のような vendor 配置が標準でない。core の `com
 
 本書はフレームワーク変更と連動する：
 
-- 新しい adapter が追加されたら、Layer 2 の「置くもの」に列挙
 - 新しい JSON Schema が追加されたら、Layer 2 の「置くもの」に列挙
 - 利用者プロジェクト側の所有物が増えたら、Layer 4 に追記
 - スキルの新機能で生成物が増えたら、Layer 3 / Layer 4 に追記
 - 対応エージェントが増減した場合（Phase 5 以降）、Layer 3 の中間表現スキーマとコンバータを更新
+
+### 改訂履歴 (大きな構造変更のみ)
+
+- **2026-06-21 Phase 3 計画確定**: adapter (`qgb/adapters/`) を Layer 2 から削除。対象プロジェクトの分析は Phase 5 スキル (LLM) の責務に統合。`.quality-system/project-context.{md,json}` の二重ファイル設計を Layer 4 に追加 (md = 人間正本、json = 機械正本、補佐 Agent が md→json 変換を担う運用想定)。Layer 3 スキル責務に「対象理解は LLM、ALLOW/DENY は qgb の contract 実行結果で決まる」を明文化
 
 ## 11. 関連文書
 

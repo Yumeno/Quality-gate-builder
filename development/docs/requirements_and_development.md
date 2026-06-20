@@ -30,6 +30,12 @@ quality-gate-builder 要件定義書・基本設計書 v0.3
 
 > 撤回履歴: v0.3 の当初版では「入口分離（`qgb verify` 軽量 / `qgb run` 採用判定）」と新コマンド `qgb verify` を追加していたが、後の Phase 1 spec-review で撤回した。理由は思想憲章 P3（保証対象の転換＝コード不変を前提にしない）と「検査範囲を絞る軽量入口」が緊張するため。部分検証は CLI コマンドでなく REQ 分割（設計）で扱う。詳細は `stage-design.md` §3.1 および `yaoyorozu-entry-points-investigation.md` を参照。
 
+> 2026-06-21 Phase 3 全面再構築: Phase 2 完結後の user 指摘 + Codex セカンドオピニオン (2026-06-20 / 2026-06-21) で次を確定:
+> - **adapter 量産方針の撤回**: `qgb detect` / `qgb/adapters/` を廃止。対象プロジェクトの分析は Phase 5 スキル (LLM) の責務、qgb 本体は機械的検査と証跡固定に徹する。理由 = (a) 対象プロジェクトの広がり (Markdown / プロンプト集 / 設定群 / 法務テンプレ等) に adapter 抽象が追いつかない、(b) 検出結果は ALLOW/DENY 判定の根拠でない、(c) 残存すると Phase 5 スキルへの悪い few-shot 教材になる
+> - **`.quality-system/project-context.{md,json}` の二重ファイル設計**: md (人間正本、自然言語の設計意図) + json (機械正本、schema 検証可能) で対象プロジェクトの自己定義を表現。補佐 Agent (利用者環境 LLM) が md → json 変換、本番 LLM (Phase 5 スキル) が json を含む propose-context を読む二重 LLM 構造
+> - **Phase 4 (CI 連携) の廃止**: 当初項目は別の場所に吸収または WONTFIX (詳細 §13)。qgb 自身の CI は Phase 3 Step 3.1 で最小構成 (qgb の P6 を qgb 自身に適用、POSIX 経路を論証だけで済ませず機械的判定する装置として)
+> - **Phase 3 を「機械責務側の最終整備」に再定義**: Step 3.0 (detect 廃止 + project-context 導入) / Step 3.1 (command runner 強化 + CI 雛形) / Step 3.2 (依存解決固定) / Step 3.3 (Phase 2 繰越の実需回収、任意) の 4 サブステップ、規模 3.4〜4.3
+
 ### 1.4 対象読者
 
 - quality-gate-builder を設計・実装する開発者
@@ -116,7 +122,7 @@ quality-gate-builder 要件定義書・基本設計書 v0.3
 
 Phase 1 では qgb 本体を Python で実装する。理由：Windows / macOS / Linux で動作させやすい、JSON / Markdown / ファイル操作との相性がよい、CLI 実装が容易、LLM ユーザーがローカルで扱いやすい、MVP の開発速度が高い。
 
-対象プロジェクトが Python 以外であっても、qgb 本体は Python で動作し、対象プロジェクト固有の処理は adapter 経由で実行する。
+対象プロジェクトが Python 以外であっても、qgb 本体は Python で動作する。対象プロジェクトの分析・理解は Phase 5 のスキル (LLM) が担い、qgb 本体は機械的検査と証跡固定に徹する (Phase 3 計画確定 2026-06-21 で adapter 量産方針を撤回、後述 §13)。
 
 ### 3.5 qgb 本体のリポジトリ構成
 
@@ -128,31 +134,36 @@ quality-gate-builder/
     cli.py
     core/
       runner.py
+      command.py             # Phase 3 Step 3.1 で runner._run_command を切り出し
       decision.py
       evidence.py
       schema.py
       patch.py
+      patch_apply.py
       knowledge.py
-      policy.py
-      command.py
-      stage_design.py
-    adapters/
-      base.py
-      python.py
-      node.py
-      go.py
-      rust.py
-      dotnet.py
-      java.py
-      php.py
-      generic.py
+      edit_commands.py
+      preflight.py
+      proposal.py
+      design_stages.py
+      init.py
+      scaffold.py
+      validate.py
+      loader.py
+      json_pointer.py
+      check.py
+    # adapters/ は Phase 3 Step 3.0 (2026-06-21) で廃止。対象プロジェクトの分析は
+    # Phase 5 スキル (LLM) の責務、qgb 本体は機械的検査に徹する。
     schemas/
       config.schema.json
       policy.schema.json
       contract.schema.json
       gate.schema.json
+      gate.runtime.schema.json
       knowledge.schema.json
       req-meta.schema.json
+      patch.schema.json
+      proposal.schema.json
+      project-context.schema.json   # Phase 3 Step 3.0 で新設
     templates/
       req.md
       req.meta.json
@@ -206,6 +217,7 @@ project-root/
   .quality-system/
     config.json
     policy.json
+    project-context.json       # 機械正本: 対象プロジェクトの自己定義 (Phase 3 Step 3.0 で新設)
     req/
       REQ-APP-001.md
       REQ-APP-001.meta.json
@@ -216,7 +228,7 @@ project-root/
     knowledge/
       knowledge.jsonl
       source-index.json
-      project-context.md
+      project-context.md       # 人間正本: 自然言語で書く設計意図と背景
     evidence/
       REQ-APP-001/
         latest/
@@ -845,28 +857,43 @@ Phase 1 では以下は対象外：
 
 ### 6.2 CLI 設計
 
-#### 6.2.1 Phase 1 必須コマンド
+#### 6.2.1 Phase 1〜2 で確立された必須コマンド
 
 ```powershell
 python -m qgb init
-python -m qgb detect
-python -m qgb design-stages
+python -m qgb design-stages [propose-context|adopt]   # Phase 2 Step 2.5 で Pattern B 追加
 python -m qgb scaffold <REQ>
 python -m qgb validate
 python -m qgb validate-policy
 python -m qgb run <REQ>
+python -m qgb check [REQ]                              # Phase 2 Step 2.4
+python -m qgb dev [REQ]                                # Phase 2 Step 2.4 (check の alias)
+python -m qgb patch <target> <patch.json>              # Phase 2 Step 2.2
+python -m qgb add-waiver <REQ> <stage-id> --reason "..."  # Phase 2 Step 2.3
+python -m qgb add-knowledge <file>                     # Phase 2 Step 2.3
 ```
 
-#### 6.2.2 Phase 1 任意コマンド
+#### 6.2.2 Phase 3 Step 3.0 で廃止されたコマンド
+
+```powershell
+python -m qgb detect    # 廃止 (2026-06-21): 対象プロジェクトの分析は Phase 5 スキル (LLM) の責務
+```
+
+`detect` は対象プロジェクトの言語/フレームワーク/test runner を機械的に検出するコマンドだったが、
+(a) 対象プロジェクトの広がり (Markdown / プロンプト集 / 設定群 / 法務テンプレ等) に
+adapter 抽象が追いつかない、(b) 検出結果は ALLOW/DENY 判定の根拠にならない、
+(c) 残存すると Phase 5 スキルが「対象判定 = 機械的検出モジュール」を悪い few-shot として
+学ぶ誘因になる、の 3 点で廃止。対象プロジェクトの自己定義は `project-context.md`
+(人間正本) と `project-context.json` (機械正本) で表現する。
+
+#### 6.2.3 Phase 1 任意コマンド (未実装)
 
 ```powershell
 python -m qgb verify-contract <REQ> <stage-id>
-python -m qgb add-knowledge knowledge.json
-python -m qgb add-waiver <REQ> <stage-id> --reason "..."
 python -m qgb tdd-init <REQ>
 ```
 
-#### 6.2.3 終了コード
+#### 6.2.4 終了コード
 
 | 終了コード | 意味 |
 |---|---|
@@ -878,15 +905,16 @@ python -m qgb tdd-init <REQ>
 
 `64` は BSD sysexits.h の `EX_USAGE` に対応する。`argparse` はデフォルトで引数エラー時に exit 2 を返すが、これは NOT_READY と衝突するため、qgb の CLI は argparse の `error()` を上書きして exit 64 に逃がす。NOT_READY (exit 2) は実行前検証フェーズが意図的に返す状態であり、CLI の引数エラーとは区別される。
 
-#### 6.2.4 将来コマンド
+#### 6.2.5 将来コマンド (Phase 3 以降)
 
 ```powershell
-qgb init
+qgb init                  # bare entry point は Phase 3 繰越項目 13 (低優先)
 qgb run <REQ>
-qgb patch policy patch.json
-qgb design-stages --interactive
-qgb create-skill
+qgb create-skill          # Phase 5 で Skill Creator 化
 ```
+
+`qgb design-stages --interactive` は Phase 2 で意図的に採用しなかった。qgb 本体は LLM を直接呼ばず、`design-stages propose-context` + `design-stages adopt` の構造化 interface に徹する (Pattern B、思想 P2 / P6 / NF-010)。
+
 
 ### 6.3 判定設計
 
@@ -1278,33 +1306,58 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 4. **schema strict mode**: 段階的。前半 format + `$ref` allowlist、`additionalProperties: false` は `--strict` フラグで独立
 5. **waiver 削除**: Phase 2 では add のみ。削除 / revoke / supersede モデルは Phase 3
 
-### Phase 3: adapter 拡張 + Phase 2 繰越 + Phase 1 負債
+### Phase 3: 機械責務側の最終整備 (2026-06-21 全面再構築)
 
-> Codex 計画レビュー (2026-06-01) で Phase 2 から繰り越された項目と、Phase 1 で確定した out-of-scope 負債を統合した。Phase 3 規模は Phase 1 / Phase 2 と同等以上が想定される。
+> Phase 2 完結後の user 指摘 + Codex セカンドオピニオン (2026-06-20 / 2026-06-21) で、当初の Phase 3 計画 (adapter 量産 6 言語 + Phase 2 繰越 + Phase 1 負債) を全面再構築した。
+>
+> 撤回した方針:
+> - **adapter 量産 (Go / Rust / .NET / Java / PHP / Markdown adapter)** — 対象プロジェクトの広がりに adapter 抽象が追いつかず、検出結果は ALLOW/DENY 判定の根拠でない。Phase 5 スキルが対象を読んで分析する責務に統合。
+> - **Phase 4 (CI 連携)** — 廃止。当初項目は別の場所に吸収または WONTFIX (§14 参照)。qgb 自身の CI は本 Phase 3 で最小構成。
+>
+> 新方針: **「機械責務側の最終整備 = Phase 5 スキル提供の前提条件を揃える」**。規模 3.4〜4.3 (Phase 1 / Phase 2 と比べて軽量)。
 
-- **adapter 量産**: Go adapter / Rust adapter / .NET adapter / Java adapter / PHP adapter / Markdown adapter
-- 言語ごとの設計例パック追加
-- **Phase 2 繰越**:
-  - JSON Patch の `move` / `copy`
-  - waiver の削除 / revoke / supersede モデル
-  - `qgb dev` の changed-files 絞り込み (P3 緊張のため REQ 単位の依存マッピングが必要)
-  - schema `additionalProperties: false` の全面適用 (Phase 2 後半判断次第)
-- **Phase 1 負債 (技術的負債、Phase 2 中心軸とは別枠の hotfix 扱い)**:
-  - `subprocess.run` の process tree kill (Windows Job Objects / Unix process groups)
-  - Windows `.bat` / `.cmd` argument escaping
-  - `command` runner の Popen ベース incremental memory cap
-  - fsync / power-loss durability (curated atomic swap の延長)
-  - bare `qgb` entry point (Phase 1 は `python -m qgb` のみ)
+**サブステップ:**
 
-### Phase 4: CI 連携
+- **Step 3.0 detect 廃止 + project-context 導入** (規模 2.0〜2.5)
+  - `qgb detect` / `qgb/core/detect.py` / `qgb/adapters/` 削除
+  - `.quality-system/project-context.json` 新設 (機械正本、schema 検証可能)
+  - 既存 `.quality-system/knowledge/project-context.md` は人間正本として温存
+  - `qgb design-stages propose-context` の出力から `detect` フィールド削除、`project_context` フィールド追加
+  - 補佐 Agent (利用者環境の LLM) が md → json 変換、本番 LLM (Phase 5 スキル) が propose-context → proposal 生成、の二重 LLM 構造
+  - `source_metadata.generated_by` で「人間 / agent-assisted」を区別、`human_reviewed: bool` で人間承認状態を表現
+- **Step 3.1 command runner 強化 + CI 雛形** (規模 1.5〜2.0)
+  - `qgb/core/runner.py` の `_run_command` を `qgb/core/command.py` に切り出し (P9)
+  - Popen + process tree kill (Windows: ctypes 経由 Job Objects + fallback / POSIX: setsid + killpg)
+  - `.bat` / `.cmd` argument escaping (cmd.exe メタ文字 + C++ argv parsing を別扱い)
+  - ストリーム読み取り 16 MiB 上限 (RSS cap は WONTFIX、出力ストリーム cap として処理)
+  - 実 temporary `.bat`/`.cmd` fixture で検証
+  - CI 雛形 (.github/workflows/test.yml): pytest only、windows-latest + ubuntu-latest matrix、actions/checkout + actions/setup-python の commit SHA pin、permissions: contents: read、third-party action ゼロ、secrets 不使用、Dependabot/Renovate なし
+- **Step 3.2 依存解決固定** (規模 0.5〜0.8)
+  - `pip-tools` or 同等で lock/hash (Phase 5 スキル提供時の supply-chain 信頼)
+  - CI で resolved deps 出力
+  - 当初 Phase 4 の「依存 audit / SBOM」はここで吸収
+- **Step 3.3 Phase 2 繰越の実需回収 (任意)** (規模 0.5〜1.0)
+  - Phase 5 で必要が判明したものに限定: `--strict` 実体実装 / waiver 削除 (revoke/supersede) / JSON Patch `move`/`copy` / multi-doc transaction (one-shot rename) / `qgb dev` の changed-files 絞り込み / 全 REQ 一括 check
+  - 先回りで全部やらず、Phase 5 着手中に必要が出たものから
 
-- GitHub Actions 例、GitLab CI 例
-- JUnit XML 出力
-- PR コメント用 summary
-- 採用判定のレビュー連動
-- CI による依存 audit / SBOM 生成 (Phase 1 から繰越)
+**Phase 3 完結条件:**
 
-### Phase 5: Skill Creator 化（エージェント中立）
+- Step 3.0 / 3.1 / 3.2 が完結し、CI 緑
+- Step 3.3 は実需に応じた取捨選択を user と合意して決着
+- Phase 5 (Skill Creator 化) 着手前提が揃う
+
+### Phase 4: 廃止 (2026-06-21)
+
+当初の Phase 4 (CI 連携) は次の理由で廃止した:
+
+- **GitHub Actions / GitLab CI 例**: Phase 5 のスキル生成テンプレに含める (利用者プロジェクト向け)、qgb 本体の独立 Phase にする必然性なし
+- **JUnit XML 出力**: WONTFIX。P11 (ALLOW の比較不可能性) と緊張。qgb の gate.json を CI ツール間で比較可能なふりをする方向はマーケティング目的の qgb 認証化に道を開く
+- **PR コメント用 summary**: WONTFIX。利用者運用、qgb 責務外。summary.md は既に Phase 1 で生成済み
+- **採用判定のレビュー連動**: WONTFIX。利用者の運用設定 (branch protection 等) で実現
+- **CI による依存 audit / SBOM 生成**: Phase 3 Step 3.2 (依存解決固定) で吸収
+- **qgb 自身の CI**: Phase 3 Step 3.1 で最小構成 (qgb の P6 を qgb 自身に適用、POSIX 経路を論証だけで済ませず機械的判定する装置)
+
+### Phase 5: Skill Creator 化（エージェント中立、adapter なしで設計）
 
 - スキル中間表現 `skills/source/` の整備（`metadata.yaml`, `body.md`, `workflow.md`, `references.md`, `prompts/`）
 - コンバータ `tools/build_skill.py` の実装
@@ -1313,9 +1366,10 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 - Gemini CLI 向け成果物（`GEMINI.md` + `.gemini/commands/qgb.toml`）の生成
 - 3 エージェント向け CI ビルドと GitHub Releases へのアタッチ
 - 段階設計フェーズ（パターン B / C）の自律実行
-- 設計例パック few-shot 参照
-- 主要言語ごとの生成例パック
+- 設計例パック few-shot 参照 (Phase 2 で 6 例完成済み、Phase 5 で必要に応じて追加: prompt-collection / terraform-modules / sql-schemas / legal-templates / mixed-devops 等の言語非依存ドメイン)
 - 3 エージェント向け運用ガイド（インストール・更新・トラブルシューティング）
+- **スキルが対象プロジェクトを Read で読んで分析** (adapter なし、対象理解は LLM 責務、ALLOW/DENY は qgb の contract 実行結果で決まる)
+- 利用者プロジェクトに CI テンプレ (GitHub Actions 等) を生成する機能はスキルに含める (当初 Phase 4 の項目を吸収)
 
 ---
 
