@@ -11,11 +11,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from qgb.core.init import run_init
+from qgb.core.init import _materialise_project_context_json, run_init
 from qgb.core.loader import LoaderError, load_project_context, project_context_path
 from qgb.core.schema import validate as schema_validate
 from qgb.core.validate import run_validate
@@ -177,6 +178,33 @@ class TestInitProjectContext:
         path = project_context_path(tmp_path)
         instance = json.loads(path.read_text(encoding="utf-8"))
         assert instance["source_metadata"]["generated_by"] == "human"
+
+    def test_materialise_accepts_injected_now(self) -> None:
+        """Phase 3 Step 3.0 B-5: _materialise_project_context_json の now 注入経路.
+
+        docstring が "tests can pin the timestamp" と謳う以上、injection 経路が
+        生成 JSON の generated_at フィールドに反映されることを直接テストする。
+        段 1 correctness レビュー指摘 M-3 への対応。
+        """
+        fixed = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        text = _materialise_project_context_json(now=fixed)
+        instance = json.loads(text)
+        assert instance["source_metadata"]["generated_at"] == "2026-01-02T03:04:05Z"
+
+    def test_materialise_strips_microseconds(self) -> None:
+        """注入された now が microsecond を持っていても RFC3339 shape に切り詰める."""
+        fixed = datetime(2026, 1, 2, 3, 4, 5, 999_999, tzinfo=timezone.utc)
+        text = _materialise_project_context_json(now=fixed)
+        instance = json.loads(text)
+        # microsecond は切り捨て、RFC3339 形式 (qgb の format checker が通る形)
+        assert instance["source_metadata"]["generated_at"] == "2026-01-02T03:04:05Z"
+
+    def test_materialise_default_now_is_valid_rfc3339(self) -> None:
+        """now を渡さないとき default は datetime.now(timezone.utc) で、生成 JSON は schema 通過."""
+        text = _materialise_project_context_json()
+        instance = json.loads(text)
+        # schema validate を通る (date-time format も含めて)
+        assert schema_validate(instance, "project-context") == []
 
     def test_init_output_validates_via_qgb_validate(self, tmp_path: Path) -> None:
         """init 後の qgb validate が project-context.json を schema validate する."""

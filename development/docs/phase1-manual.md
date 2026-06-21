@@ -117,7 +117,10 @@ py -3 -m venv .venv
 python -m pip install -U pip
 python -m qgb --help
 python -m qgb init
-python -m qgb detect
+# Phase 3 Step 3.0 (2026-06-21) で qgb detect は廃止。
+# init が生成した .quality-system/project-context.{md,json} を
+# 編集して対象プロジェクトの自己定義を書く (md は人間が、json は
+# 補佐 Agent が、人間がレビューして human_reviewed: true に変える)。
 python -m qgb design-stages
 python -m qgb design-stages --commit
 python -m qgb scaffold REQ-APP-001
@@ -128,6 +131,11 @@ python -m qgb run REQ-APP-001
 各コマンドの意味と注意点は §3〜§11 を参照。実際に走らせる際は各
 コマンドの確認プロンプトや出力を確認しつつ進める。`qgb run` は
 `--yes` を付けないと確認プロンプトが出る (§F-008)。
+
+> Phase 2 で追加された日次検証 (`qgb check` / `dev`)、Pattern B
+> (`qgb design-stages propose-context` + `adopt`)、構造化編集
+> (`qgb patch` / `add-waiver` / `add-knowledge`) は本マニュアル
+> Phase 1 範囲外。`requirements_and_development.md` §6.2.1 を参照。
 
 ## 8. 対象プロジェクトでの初期化
 

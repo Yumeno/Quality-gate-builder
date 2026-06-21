@@ -204,6 +204,16 @@ def build_proposal_context(project_root: Path) -> dict[str, Any]:
     # signals that the declaration is provisional (an agent may have
     # drafted it without human approval) — external LLMs should weigh
     # human_reviewed=true content more strongly per P8.
+    #
+    # Schema-validate is intentionally NOT called here: loader returns the
+    # dict in its as-read shape (Phase 3 Step 3.0, P9 — loader does I/O,
+    # validate handles schema). That means a project_context json missing
+    # ``human_reviewed`` entirely will surface here as ``reviewed = None``
+    # and trigger the warning via ``is not True`` (None / False / wrong-type
+    # strings all fail this comparison — only literal True suppresses it).
+    # That is the intended behaviour: any state other than human-approved
+    # is provisional. A separately-run ``qgb validate`` step will catch
+    # schema-level missing-field issues in their own report.
     warnings: list[str] = []
     if isinstance(project_context, dict):
         reviewed = project_context.get("human_reviewed")
