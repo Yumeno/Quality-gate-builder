@@ -139,14 +139,19 @@ def test_run_init_handles_gitignore_without_trailing_newline(tmp_path: Path) -> 
 
 
 def test_init_output_passes_validate(tmp_path: Path) -> None:
-    """Step 4's contract: a freshly-initialised tree must validate cleanly."""
+    """Step 4's contract: a freshly-initialised tree must validate cleanly.
+
+    Phase 3 Step 3.0: project-context.json も init で生成されるので
+    validate target set に追加 ('project-context')。
+    """
     run_init(tmp_path, project_name="round-trip")
     report = run_validate(tmp_path)
     assert not report.has_problems(), report
     # After Step 9, knowledge.jsonl is also part of the validate target
     # set (Phase 1 受け入れ条件 17/18).
+    # Phase 3 Step 3.0: project-context.json も追加。
     schema_names = sorted(name for _, name in report.files_checked)
-    assert schema_names == ["config", "knowledge", "policy"]
+    assert schema_names == ["config", "knowledge", "policy", "project-context"]
 
 
 # ---- CLI: in-process via main() ------------------------------------------

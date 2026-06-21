@@ -61,11 +61,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from qgb.core.detect import run_detect
 from qgb.core.evidence import make_timestamps
 from qgb.core.loader import (
     LoaderError,
     load_policy,
+    load_project_context,
     load_req_meta,
     quality_system_root,
 )
@@ -149,17 +149,28 @@ class AdoptResult:
 def build_proposal_context(project_root: Path) -> dict[str, Any]:
     """Assemble the structured export an external LLM tool reads.
 
-    Contents (prejournal §1-5 — deliberately minimal and stable):
-    detect result, current policy.json verbatim, REQ inventory (id /
-    title / adopted stage ids with required+waived flags), and a
-    machine-readable constraints summary. Contract bodies,
-    knowledge.jsonl and project-context.md are intentionally excluded.
+    Contents (Phase 3 Step 3.0 で構造更新 — deliberately minimal and stable):
+    project_context (target project's self-declaration, optional),
+    current policy.json verbatim, REQ inventory (id / title / adopted
+    stage ids with required+waived flags), and a machine-readable
+    constraints summary. Contract bodies, knowledge.jsonl and
+    project-context.md are intentionally excluded.
+
+    **Phase 3 Step 3.0 change**: the ``detect`` field (machine-derived
+    language / framework / test_runner) was removed. The target project's
+    self-understanding is now expressed via ``project-context.json``
+    (a human-authored or agent-assisted declaration with
+    ``human_reviewed: bool``). When ``project-context.json`` is absent,
+    ``project_context`` is ``None`` and the external LLM is expected to
+    read the target project directly to form its own understanding —
+    consistent with Phase 5 skill responsibility (対象理解は LLM、
+    ALLOW/DENY は qgb の contract 実行結果で決まる).
 
     Raises :class:`qgb.core.loader.LoaderError` when policy.json is
     missing/unreadable (the CLI maps it to NOT_READY) — a project must
     be ``qgb init``-ed before its context can be exported.
     """
-    detect = run_detect(project_root)
+    project_context = load_project_context(project_root)
     policy = load_policy(project_root)
 
     reqs: list[dict[str, Any]] = []
@@ -188,19 +199,31 @@ def build_proposal_context(project_root: Path) -> dict[str, Any]:
             }
         )
 
+    # Phase 3 Step 3.0: collect advisory warnings about the context's
+    # provenance. Most important: project_context.human_reviewed=false
+    # signals that the declaration is provisional (an agent may have
+    # drafted it without human approval) — external LLMs should weigh
+    # human_reviewed=true content more strongly per P8.
+    warnings: list[str] = []
+    if isinstance(project_context, dict):
+        reviewed = project_context.get("human_reviewed")
+        if reviewed is not True:
+            warnings.append(
+                "project_context.human_reviewed is not true; the target "
+                "project's self-declaration has not been approved by a "
+                "human reviewer and should be treated as provisional "
+                "(P8: only explicit user declarations should anchor "
+                "design decisions)"
+            )
     return {
         # P8 framing: machine-readable metadata, not prose (prejournal §1-4).
         "document_kind": PROPOSAL_CONTEXT_DOCUMENT_KIND,
         "schema_version": "1.0",
         "intended_use": "external_tool_input_data",
         "contains_executable_instructions": False,
-        "detect": {
-            "language": detect.selected.language,
-            "framework": detect.selected.framework,
-            "test_runner": detect.selected.test_runner,
-            "confidence": detect.selected.confidence,
-            "adapter_name": detect.selected.adapter_name,
-        },
+        # Phase 3 Step 3.0: project_context replaces detect. None when the
+        # target project has not declared its context via project-context.json.
+        "project_context": project_context,
         "policy": policy,
         "reqs": reqs,
         "constraints": {
@@ -235,6 +258,10 @@ def build_proposal_context(project_root: Path) -> dict[str, Any]:
                 "is preserved when absent)"
             ),
         },
+        # Advisory warnings about the export (Phase 3 Step 3.0). Always
+        # present (empty list when nothing to warn about) so consumers can
+        # rely on the field's existence.
+        "warnings": warnings,
     }
 
 

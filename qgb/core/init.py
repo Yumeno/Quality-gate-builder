@@ -13,9 +13,13 @@ Responsibility (matches requirements doc B-004 / 3.6 / F-002 / F-003):
 
 Out of scope (delegated elsewhere):
 
-* Detecting the target language / framework -> `qgb detect` (Step 6).
 * Designing stages for the target -> `qgb design-stages` (Step 6).
 * Generating REQ scaffolding -> `qgb scaffold` (Step 6).
+
+Phase 3 Step 3.0 で `qgb detect` は廃止された (対象プロジェクトの分析は
+Phase 5 スキル責務に統合)。対象プロジェクトの自己定義は init が生成する
+``.quality-system/project-context.json`` (機械正本、空欄テンプレ) と
+``.quality-system/knowledge/project-context.md`` (人間正本) に書く。
 
 Idempotency and integrity:
 
@@ -33,6 +37,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Literal
@@ -122,6 +127,45 @@ def _materialise_policy() -> str:
 
 def _materialise_project_context() -> str:
     return _read_template("project-context.initial.md")
+
+
+def _materialise_project_context_json(
+    *, now: datetime | None = None
+) -> str:
+    """Produce the initial project-context.json text.
+
+    Phase 3 Step 3.0: 対象プロジェクトの自己定義の機械正本。空欄テンプレを
+    生成し、``human_reviewed: false`` を初期値にする (人間が中身を書き、
+    レビューを経て true に手で書き換える運用)。``generated_by: "human"``
+    が初期値なのは、init 直後は人間が雛形を編集する想定だからで、
+    補佐 Agent が後で更新する場合は agent 側がこのフィールドを
+    ``"agent-assisted"`` に書き換える。
+
+    ``now`` is injectable so tests can pin the timestamp; production code
+    leaves it as ``None`` and uses ``datetime.now(timezone.utc)``.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    # Strip microseconds so the generated_at matches the RFC3339 shape
+    # qgb's format checker accepts (YYYY-MM-DDTHH:MM:SSZ).
+    stamp = now.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data = {
+        "schema_version": "1.0",
+        "human_reviewed": False,
+        "project_kind": "",
+        "purpose": "",
+        "scope": {"in_scope": [], "out_of_scope": []},
+        "technologies": [],
+        "artifact_kinds": [],
+        "platform": [],
+        "non_adopted_methods": [],
+        "references": [],
+        "source_metadata": {
+            "generated_by": "human",
+            "generated_at": stamp,
+        },
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
 def _ensure_dir(path: Path, report: InitReport) -> bool:
@@ -283,6 +327,15 @@ def run_init(
 
     _write_file(qs / "config.json", _materialise_config(project_name), force=force, report=report)
     _write_file(qs / "policy.json", _materialise_policy(), force=force, report=report)
+    # Phase 3 Step 3.0: 機械正本の project-context.json (空欄テンプレ、
+    # human_reviewed:false の初期値で書き出し、利用者または補佐 Agent が
+    # 中身を埋めてレビュー後に true に変える)。
+    _write_file(
+        qs / "project-context.json",
+        _materialise_project_context_json(),
+        force=force,
+        report=report,
+    )
     _write_file(
         qs / "knowledge" / "knowledge.jsonl",
         "",

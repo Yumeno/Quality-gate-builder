@@ -143,6 +143,13 @@ def _iter_target_files(root: Path) -> Iterator[tuple[Path, str]]:
     if policy.is_file():
         yield policy, "policy"
 
+    # Phase 3 Step 3.0: optional project-context.json (target project's
+    # self-declaration). Validate the schema when present; absence is fine
+    # (existing projects keep working without one).
+    project_context = qs / "project-context.json"
+    if project_context.is_file():
+        yield project_context, "project-context"
+
     req_dir = qs / "req"
     if req_dir.is_dir():
         for meta in sorted(req_dir.glob("*.meta.json")):

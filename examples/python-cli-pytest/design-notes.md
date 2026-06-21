@@ -129,3 +129,22 @@ S2 (CLI --help)
   `result: passed` であり、こちらは reproducible。auditor が
   evidence-reference と新規 run を比較するときは log 全文 diff では
   なく exit_code と result を見る。
+
+## Phase 3 Step 3.0 (2026-06-21): project-context の二重ファイル化
+
+Phase 3 Step 3.0 で `qgb detect` / `qgb/adapters/` は廃止された (対象
+プロジェクトの広がりに adapter 抽象が追いつかないため)。対象プロジェクト
+の自己定義は `.quality-system/knowledge/project-context.md` (人間正本) と
+`.quality-system/project-context.json` (機械正本) で表現する設計に移行。
+
+本 example は **Python プロジェクト観察観点を「失われた knowledge」と
+して残す** ため、`project-context.md` に Phase 1 PythonAdapter で蓄積
+した観点 (marker file 信頼度順序 / pyproject.toml から読める情報 /
+test_runner 判定順序 / 除外ディレクトリ) を Phase 5 スキル向け few-shot
+教材として転記した。`project-context.json` は補佐 Agent (claude-code)
+が md から構造化したサンプルで、`human_reviewed: true` を立てている。
+
+スキル (Phase 5) はこの example の md / json を読んで「Python プロジェクト
+を自己定義として書くとはどういうことか」を学ぶ。adapter として qgb に
+組み込まれていた知識が、`project-context` 経由でスキルに伝わる経路に
+なっている。

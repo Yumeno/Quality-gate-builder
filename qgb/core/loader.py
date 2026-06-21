@@ -162,3 +162,31 @@ def load_contract(project_root: Path, contract_ref: str) -> dict[str, Any]:
     """
     candidate = resolve_project_relative(project_root, contract_ref, "contract_ref")
     return _expect_dict(_read_json(candidate), candidate)
+
+
+def project_context_path(project_root: Path) -> Path:
+    """Return the canonical ``.quality-system/project-context.json`` path.
+
+    Phase 3 Step 3.0 で導入。対象プロジェクトの自己定義 (機械正本)。
+    """
+    return quality_system_root(project_root) / "project-context.json"
+
+
+def load_project_context(project_root: Path) -> dict[str, Any] | None:
+    """Load ``.quality-system/project-context.json`` if present.
+
+    Returns ``None`` when the file does not exist (Phase 3 Step 3.0: the
+    file is optional — a project that has not yet declared its context
+    simply omits the field from propose-context output as ``null``).
+
+    Raises :class:`LoaderError` when the file exists but is unreadable or
+    not a JSON object. Schema validation is performed by ``qgb validate``,
+    not here (P9: the loader only handles read + shape; semantic checks
+    belong to the validate path).
+
+    BOM-tolerant via the shared ``_read_json`` helper (utf-8-sig).
+    """
+    path = project_context_path(project_root)
+    if not path.is_file():
+        return None
+    return _expect_dict(_read_json(path), path)

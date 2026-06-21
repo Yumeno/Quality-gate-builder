@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/schemas/project-context.schema.json",
+  "title": "qgb project context (Phase 3 Step 3.0)",
+  "description": "Self-declaration of the target project. Mediates between human prose (.quality-system/knowledge/project-context.md) and machine consumers (qgb design-stages propose-context output, Phase 5 skills). The md file is the human-authored source of truth; this json is the machine-readable structured form. An assisting agent (claude-code / codex-cli / gemini-cli) typically transforms the md into this json, and a human reviews and sets human_reviewed=true. qgb only validates the schema and surfaces warnings (P8: utilising user's explicit declaration); it never derives ALLOW/DENY from this content (P6).",
+  "type": "object",
+  "required": ["schema_version", "human_reviewed", "source_metadata"],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "Project-context schema version. Only '1.0' is supported in Phase 3."
+    },
+    "human_reviewed": {
+      "type": "boolean",
+      "description": "true when a human has reviewed and approved this json (not just an agent draft). qgb design-stages propose-context emits a warning when this is false so external LLMs know the context is provisional. P8 boundary: only human-reviewed declarations count as 'utilising user's explicit declaration'."
+    },
+    "project_kind": {
+      "type": "string",
+      "description": "Free-form descriptor of what kind of artifact set this project produces. Examples: 'python-cli', 'prompt-collection', 'terraform-modules', 'legal-templates', 'mixed-devops'. Intentionally NOT constrained by enum to avoid recreating the language-centric model that adapters had — qgb targets any artifact set that can be machine-checked, not just programming language projects."
+    },
+    "purpose": {
+      "type": "string",
+      "description": "Why this project exists; what value it delivers. Free-form prose."
+    },
+    "scope": {
+      "type": "object",
+      "description": "What this project intends to cover vs. what it explicitly excludes.",
+      "properties": {
+        "in_scope": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "out_of_scope": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "technologies": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form list of technologies used. NOT a single 'language' field by design: a project may use no programming language at all (markdown docs, prompt sets) or many (mixed-devops). Examples: ['python', 'pytest'], ['terraform', 'aws'], ['markdown'], ['claude-code', 'codex-cli']."
+    },
+    "artifact_kinds": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "What kinds of artifacts this project produces. Examples: ['source-code', 'tests'], ['documentation'], ['prompt-templates'], ['ci-configuration'], ['legal-contract-templates']."
+    },
+    "platform": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Target platforms / runtime environments. Examples: ['windows', 'linux'], ['browser'], ['posix-only'], ['language-agnostic']."
+    },
+    "non_adopted_methods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "reason"],
+        "properties": {
+          "method": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      },
+      "description": "Methods explicitly rejected by the project and why. Important context for stage design (LLM should not propose these stages)."
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Free-form kind label. Examples: 'design_doc', 'adr', 'issue', 'external_spec'."
+          },
+          "path": {
+            "type": "string",
+            "description": "Project-relative path or URL. qgb does not dereference these (P8/NF-007: external content is data, not instructions)."
+          }
+        }
+      }
+    },
+    "source_metadata": {
+      "type": "object",
+      "required": ["generated_by", "generated_at"],
+      "properties": {
+        "generated_by": {
+          "type": "string",
+          "enum": ["human", "agent-assisted"],
+          "description": "'human' = handwritten; 'agent-assisted' = an LLM agent helped structure it from project-context.md. The distinction matters for P8: human-authored json is a primary user declaration; agent-assisted json should be human-reviewed (human_reviewed=true) before being trusted as such."
+        },
+        "agent_name": {
+          "type": "string",
+          "description": "When generated_by='agent-assisted': identifier of the assisting agent (e.g. 'claude-code', 'codex-cli', 'gemini-cli'). qgb does not dispatch on this value; it is provenance only."
+        },
+        "agent_version": {
+          "type": "string"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this json was generated (RFC 3339 / ISO 8601)."
+        },
+        "source_md_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of .quality-system/knowledge/project-context.md at the time of generation. Allows detecting md updates that orphan the json (Phase 3+: qgb validate-policy may surface a project_context_stale advisory when md hash differs)."
+        }
+      }
+    }
+  }
+}

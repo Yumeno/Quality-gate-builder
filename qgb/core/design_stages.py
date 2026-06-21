@@ -1,19 +1,26 @@
-"""Stage design proposal & commit (Step 6d).
+"""Stage design proposal & commit (Step 6d, Phase 3 Step 3.0 で detect 廃止反映).
 
-Phase 1 rule-based suggestion: pick a template from ``examples/`` based on
-the language reported by :func:`qgb.core.detect.run_detect`, copy its
+Phase 1 rule-based suggestion: copy ``examples/generic-minimal``'s
 ``policy.json#stages`` as a starting point, and let the user adopt or
 discard. The proposal phase is read-only; commit is handled separately
 by :func:`commit_design`.
+
+**Phase 3 Step 3.0 change**: 旧版は :func:`qgb.core.detect.run_detect` の
+言語判定結果に応じてテンプレ選択する設計だったが、Phase 1 から実態は
+「Python / Markdown 検出も generic-minimal にフォールバック」と決まって
+いて detect 結果は banner にしか反映されていなかった。adapter / detect
+廃止 (Step 3.0) に伴い detect 依存を削除し、常に generic-minimal を
+返す形に整理する。legacy rule-based 経路 (``qgb design-stages [--json]
+[--commit]``) は後方互換のため温存。新しい設計フローは Pattern B
+(``qgb design-stages propose-context`` + ``qgb design-stages adopt``) を
+使う想定で、こちらは Phase 2 Step 2.5 で確立済み。
 
 **Phase 1 scope (per Codex 計画レビュー 2026-05-31):**
 
 * Template source is the real ``examples/<name>/.quality-system/policy.json``
   file — not an in-code dict. This keeps templates and ``qgb run`` inputs
   in lockstep.
-* Phase 1 ships exactly one template: ``examples/generic-minimal``. Python
-  CLI / Markdown detections also fall back to it; ``detect`` output is
-  reflected in the human message but not in template selection.
+* Phase 1 ships exactly one template: ``examples/generic-minimal``.
 * Atomic commit copies the project's ``.quality-system/`` to a temp tree,
   edits the temp ``policy.json``, runs ``validate_policy_preflight`` over
   the temp tree, and only ``os.replace``-swaps the real ``policy.json``
@@ -39,8 +46,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from qgb.adapters.base import DetectionResult
-from qgb.core.detect import run_detect
 from qgb.core.preflight import validate_policy_preflight
 
 # Phase 1 templates live in the repo's examples/ tree, located by walking
@@ -77,11 +82,16 @@ class DesignProposal:
     lives in :class:`CommitOutcome` and in the CLI's JSON envelope.
     Conflating them invited a "proposal carries its own commit status"
     misuse pattern that would have to be unwound in Phase 2 anyway.
+
+    Phase 3 Step 3.0: the ``detect`` field was removed. The legacy
+    rule-based proposer no longer reports machine-derived language
+    information — that responsibility moved to Phase 5 skills, with the
+    target project's self-declaration carried by
+    ``.quality-system/project-context.json``.
     """
 
     template: str
     stages: list[StageProposal]
-    detect: DetectionResult
     warnings: list[str] = field(default_factory=list)
 
 
@@ -89,22 +99,31 @@ def propose_design(project_root: Path) -> DesignProposal:
     """Build a :class:`DesignProposal` for ``project_root``.
 
     The proposal phase does not touch the project's ``.quality-system/``.
+
+    Phase 3 Step 3.0 で detect 呼び出しを撤去。Phase 1 から
+    "Python / Markdown 検出もすべて generic-minimal にフォールバック"
+    と決まっており detect 結果はテンプレ選択に影響しなかったため、
+    ``project_root`` の語彙的存在は維持しつつ常に default テンプレを
+    返す簡素な実装に整理する。``project_root`` 引数は backwards
+    compatibility と将来 (project-context.json を読んで template を
+    選ぶ拡張) のために残す。
     """
-    detect_result = run_detect(project_root)
-    template_name = _pick_template(detect_result)
+    template_name = _pick_template()
     stages = _load_template_stages(template_name)
     return DesignProposal(
         template=template_name,
         stages=stages,
-        detect=detect_result,
     )
 
 
-def _pick_template(_detect_result: DetectionResult) -> str:
+def _pick_template() -> str:
     """Phase 1: always return the default template.
 
-    Per the Codex 計画レビュー, Python and Markdown detections fall back
-    to ``generic-minimal``; only the banner reflects the real language.
+    Per the Codex 計画レビュー, Python and Markdown detections fell back
+    to ``generic-minimal`` even when detect existed. Phase 3 Step 3.0 で
+    detect 自体を廃止したため、選択ロジックの形だけ残して常に default
+    を返す (将来 project-context.json の technologies / artifact_kinds を
+    参照する拡張余地はある)。
     """
     return _DEFAULT_TEMPLATE
 

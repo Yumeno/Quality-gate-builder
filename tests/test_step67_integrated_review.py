@@ -195,18 +195,10 @@ def test_load_template_stages_rejects_malformed_template(tmp_path: Path) -> None
 
 
 # ---- A3: .PY case-insensitive matching ------------------------------
-
-
-def test_python_adapter_recognises_uppercase_py_extension(tmp_path: Path) -> None:
-    """Windows で `Script.PY` (大文字) も Python signal として認識."""
-    from qgb.adapters.python import PythonAdapter
-
-    (tmp_path / "Main.PY").write_text("print(1)\n", encoding="utf-8")
-    (tmp_path / "Other.PY").write_text("print(2)\n", encoding="utf-8")
-    (tmp_path / "Third.Py").write_text("print(3)\n", encoding="utf-8")
-    result = PythonAdapter().detect(tmp_path)
-    assert result is not None, "uppercase .PY must be recognised on case-insensitive FS"
-    assert result.language == "python"
+# Phase 3 Step 3.0 で adapter / detect 一式が撤去されたため本テストは削除。
+# 元テストは PythonAdapter が Windows 大文字小文字非依存 FS で .PY を
+# 認識することの確認だったが、対象プロジェクトの言語判定は Phase 5 スキル
+# (LLM) の責務に統合されたため adapter 自体が不要になった。
 
 
 # ---- A9: summary.md all-waived wording -------------------------------

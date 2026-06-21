@@ -27,6 +27,11 @@ SCHEMA_FILES = {
     # Phase 2 Step 2.5: external proposal documents accepted by
     # `qgb design-stages adopt` (Pattern B).
     "proposal": "proposal.schema.json",
+    # Phase 3 Step 3.0: target project's self-declaration
+    # (.quality-system/project-context.json). Mediates between human prose
+    # (project-context.md) and machine consumers (propose-context output,
+    # Phase 5 skills). Replaces the detect/adapter mechanism.
+    "project-context": "project-context.schema.json",
 }
 
 

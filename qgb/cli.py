@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from qgb import __version__
-from qgb.adapters.base import DetectionResult
 from qgb.core import evidence as evidence_mod
 from qgb.core.decision import decide
 from qgb.core.design_stages import (
@@ -23,7 +22,6 @@ from qgb.core.design_stages import (
     commit_design,
     propose_design,
 )
-from qgb.core.detect import run_detect
 from qgb.core.evidence import write_evidence
 from qgb.core.init import InitReport, run_init
 from qgb.core.preflight import (
@@ -553,105 +551,25 @@ def _handle_validate_policy(args: argparse.Namespace) -> int:
 # ---- detect --------------------------------------------------------------
 
 
-def _print_detect_text(result: DetectionResult, stream) -> None:
-    sel = result.selected
-    parts: list[str] = [f"Detected: {sel.language}"]
-    if sel.framework:
-        parts.append(f"framework={sel.framework}")
-    if sel.test_runner:
-        parts.append(f"test_runner={sel.test_runner}")
-    parts.append(f"confidence={sel.confidence:.2f}")
-    parts.append(f"adapter={sel.adapter_name}")
-    print(" / ".join(parts), file=stream)
-
-    if sel.evidence:
-        print("Evidence:", file=stream)
-        for ev in sel.evidence:
-            tail = f" ({ev.note})" if ev.note else ""
-            print(f"  - [{ev.kind}] {ev.where}{tail}", file=stream)
-
-    if len(result.candidates) > 1:
-        print("", file=stream)
-        print(
-            f"Other candidates ({len(result.candidates) - 1}):", file=stream
-        )
-        for cand in result.candidates:
-            if cand is sel:
-                continue
-            print(
-                f"  - {cand.language} (confidence={cand.confidence:.2f}, "
-                f"adapter={cand.adapter_name})",
-                file=stream,
-            )
-
-
-def _detect_to_json(result: DetectionResult) -> dict[str, object]:
-    def profile_dict(p) -> dict[str, object]:
-        return {
-            "language": p.language,
-            "framework": p.framework,
-            "test_runner": p.test_runner,
-            "confidence": p.confidence,
-            "adapter_name": p.adapter_name,
-            "evidence": [
-                {"kind": ev.kind, "where": ev.where, "note": ev.note}
-                for ev in p.evidence
-            ],
-        }
-
-    return {
-        # Codex 補修 7: schema_version is the integration contract for
-        # downstream consumers (Step 6d design-stages, future skills).
-        # Bump on any breaking change to the JSON shape.
-        "schema_version": 1,
-        "ok": True,
-        "selected": profile_dict(result.selected),
-        "candidates": [profile_dict(p) for p in result.candidates],
-    }
-
-
-def _handle_detect(args: argparse.Namespace) -> int:
-    root = Path(args.path).resolve()
-    if not root.exists():
-        print(f"qgb detect: path does not exist: {root}", file=sys.stderr)
-        return EXIT_USAGE
-    if not root.is_dir():
-        print(
-            f"qgb detect: --path must point at a project directory, "
-            f"not a file: {root}",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE
-
-    result = run_detect(root)
-
-    if args.json:
-        json.dump(
-            _detect_to_json(result), sys.stdout, ensure_ascii=False, indent=2
-        )
-        sys.stdout.write("\n")
-    else:
-        _print_detect_text(result, sys.stdout)
-
-    return EXIT_OK
-
-
 # ---- design-stages -------------------------------------------------------
+#
+# Phase 3 Step 3.0: detect コマンド / _print_detect_text / _detect_to_json /
+# _handle_detect / _detect_profile_dict は削除。対象プロジェクトの
+# 言語/フレームワーク判定は adapter 抽象では捉えきれない領域 (Markdown /
+# プロンプト集 / 設定群 / 法務テンプレ等) に追いつかず、検出結果は
+# ALLOW/DENY 判定の根拠にならないため (基本設計 §14 / philosophy.md P6 / P7)。
+# 対象プロジェクトの自己定義は .quality-system/project-context.{md,json}
+# に書く設計に移行。
 
 
 def _proposal_to_json(proposal: DesignProposal) -> dict[str, object]:
     # Codex 補修 7: `committed` lives on the envelope (CLI-level state),
     # not on the proposal dataclass itself. Proposal carries pure data.
+    # Phase 3 Step 3.0: detect フィールド削除 (機械的言語判定の廃止)。
     return {
         "schema_version": 1,
         "ok": True,
         "committed": False,
-        "detect": {
-            "selected": _detect_profile_dict(proposal.detect.selected),
-            "candidates": [
-                _detect_profile_dict(p) for p in proposal.detect.candidates
-            ],
-        },
         "proposed": {
             "template": proposal.template,
             "stages": [
@@ -669,28 +587,8 @@ def _proposal_to_json(proposal: DesignProposal) -> dict[str, object]:
     }
 
 
-def _detect_profile_dict(p) -> dict[str, object]:
-    return {
-        "language": p.language,
-        "framework": p.framework,
-        "test_runner": p.test_runner,
-        "confidence": p.confidence,
-        "adapter_name": p.adapter_name,
-        "evidence": [
-            {"kind": ev.kind, "where": ev.where, "note": ev.note}
-            for ev in p.evidence
-        ],
-    }
-
-
 def _print_proposal_text(proposal: DesignProposal, stream) -> None:
-    sel = proposal.detect.selected
-    banner = f"Detected: {sel.language}"
-    if sel.framework:
-        banner += f" / framework={sel.framework}"
-    if sel.test_runner:
-        banner += f" / test_runner={sel.test_runner}"
-    print(banner, file=stream)
+    # Phase 3 Step 3.0: detect 由来の banner を削除。
     print(f"Recommended template: {proposal.template}", file=stream)
     print("", file=stream)
     print("Proposed stages:", file=stream)
@@ -1576,13 +1474,16 @@ def build_parser() -> QgbArgumentParser:
         "design-stages",
         help="propose verification stages for the target project",
         description=(
-            "Suggest a set of stages for the target project based on "
-            "`qgb detect` output and a Phase 1 template (generic-minimal). "
-            "Without --commit, this prints the proposal only; with --commit "
-            "the proposal is validated by `validate-policy` and, if it "
-            "passes, atomically written to .quality-system/policy.json. "
-            "Returns 0 on success, 2 (NOT_READY) on commit refusal or "
-            "validate-policy blockers, 64 on usage errors."
+            "Suggest a set of stages for the target project using the "
+            "Phase 1 template (generic-minimal). Without --commit, this "
+            "prints the proposal only; with --commit the proposal is "
+            "validated by `validate-policy` and, if it passes, atomically "
+            "written to .quality-system/policy.json. Returns 0 on success, "
+            "2 (NOT_READY) on commit refusal or validate-policy blockers, "
+            "64 on usage errors. Note: this is the Phase 1 rule-based "
+            "proposer (kept for compatibility); the recommended Phase 2+ "
+            "flow is `qgb design-stages propose-context` + `adopt` "
+            "(Pattern B with an external LLM)."
         ),
     )
     ds_p.add_argument(
@@ -1626,14 +1527,14 @@ def build_parser() -> QgbArgumentParser:
         "propose-context",
         help="export project state as JSON input material for an external LLM tool",
         description=(
-            "Export the design-relevant project state (detect result, "
-            "current policy.json, REQ inventory, design constraints) as "
-            "one JSON document. This is INPUT MATERIAL for an external "
-            "LLM tool; qgb itself never calls an LLM (Pattern B). "
-            "Output is always JSON. Prefer --out on Windows: PowerShell "
-            "5.1 pipes re-encode stdout via the console code page and "
-            "can mangle non-ASCII content; --out writes the file as "
-            "UTF-8 explicitly. Returns 0 on success, 2 when the project "
+            "Export the design-relevant project state (project_context "
+            "if declared, current policy.json, REQ inventory, design "
+            "constraints) as one JSON document. This is INPUT MATERIAL "
+            "for an external LLM tool; qgb itself never calls an LLM "
+            "(Pattern B). Output is always JSON. Prefer --out on Windows: "
+            "PowerShell 5.1 pipes re-encode stdout via the console code "
+            "page and can mangle non-ASCII content; --out writes the file "
+            "as UTF-8 explicitly. Returns 0 on success, 2 when the project "
             "has no readable policy.json (run qgb init first), 64 on "
             "usage errors."
         ),
@@ -1741,31 +1642,9 @@ def build_parser() -> QgbArgumentParser:
     )
     sc_p.set_defaults(handler=_handle_scaffold)
 
-    # detect: real handler (Step 6c).
-    detect_p = subparsers.add_parser(
-        "detect",
-        help="detect target project language, framework, and test runner",
-        description=(
-            "Inspect the target project tree (no policy / no contracts) "
-            "and propose a language/framework/test_runner profile. Phase 1 "
-            "ships PythonAdapter and GenericAdapter; the latter always "
-            "matches as a fallback. Output is a single 'selected' profile "
-            "plus the full 'candidates' list. The confidence value is a "
-            "heuristic ranking score (not a probability). "
-            "Returns 0 always (generic is the safety net); 64 on usage errors."
-        ),
-    )
-    detect_p.add_argument(
-        "--path",
-        default=".",
-        help="Target project root (default: current directory)",
-    )
-    detect_p.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit a machine-readable JSON report to stdout instead of text",
-    )
-    detect_p.set_defaults(handler=_handle_detect)
+    # Phase 3 Step 3.0: detect subcommand 削除 (機械的言語判定を qgb 本体から
+    # 撤去、対象プロジェクトの自己定義は project-context.{md,json} へ移行)。
+    # 詳細は requirements_and_development.md §6.2.2 を参照。
 
     # init: real handler (Step 3).
     init_p = subparsers.add_parser(

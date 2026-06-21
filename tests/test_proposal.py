@@ -101,6 +101,74 @@ class TestProposeContext:
         assert rc == 2
         assert "cannot export context" in capsys.readouterr().err
 
+    # ---- Phase 3 Step 3.0: project_context field --------------------
+
+    def test_project_context_absent_yields_null(self, copy_generic_minimal):
+        """generic-minimal fixture has no project-context.json; field should be null."""
+        root = copy_generic_minimal()
+        ctx = build_proposal_context(root)
+        assert "project_context" in ctx
+        assert ctx["project_context"] is None
+        # No warning when the field is simply absent (declaration optional).
+        assert ctx["warnings"] == []
+
+    def test_project_context_human_reviewed_true_carries_no_warning(
+        self, copy_generic_minimal
+    ):
+        root = copy_generic_minimal()
+        (root / ".quality-system" / "project-context.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "human_reviewed": True,
+                    "project_kind": "test-fixture",
+                    "source_metadata": {
+                        "generated_by": "human",
+                        "generated_at": "2026-06-21T00:00:00Z",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        ctx = build_proposal_context(root)
+        assert ctx["project_context"]["human_reviewed"] is True
+        assert ctx["project_context"]["project_kind"] == "test-fixture"
+        assert ctx["warnings"] == []
+
+    def test_project_context_human_reviewed_false_carries_warning(
+        self, copy_generic_minimal
+    ):
+        root = copy_generic_minimal()
+        (root / ".quality-system" / "project-context.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "human_reviewed": False,
+                    "source_metadata": {
+                        "generated_by": "agent-assisted",
+                        "agent_name": "claude-code",
+                        "generated_at": "2026-06-21T00:00:00Z",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        ctx = build_proposal_context(root)
+        assert ctx["project_context"]["human_reviewed"] is False
+        assert len(ctx["warnings"]) == 1
+        assert "human_reviewed is not true" in ctx["warnings"][0]
+        assert "P8" in ctx["warnings"][0]
+
+    def test_no_detect_field_in_context(self, copy_generic_minimal):
+        """Phase 3 Step 3.0: 'detect' field is removed from context output."""
+        root = copy_generic_minimal()
+        ctx = build_proposal_context(root)
+        assert "detect" not in ctx
+
 
 # ---------------------------------------------------------------------------
 # adopt: success paths

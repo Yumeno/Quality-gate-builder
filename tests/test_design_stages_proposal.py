@@ -1,16 +1,14 @@
-"""Step 6d 項目 1: qgb design-stages 提案フェーズ.
+"""Step 6d 項目 1: qgb design-stages 提案フェーズ (Phase 3 Step 3.0 で detect 廃止反映).
 
 Phase 1 のルールベース推定 + ユーザー確認の提案部分:
 
-* detect を内部で呼んで language を取得
 * template (Phase 1 は examples/generic-minimal 1 種のみ) の policy.json を読む
 * "提案された stages 案" を text / JSON で表示
 * policy.json は **書かない** (提案のみ)
 
-Codex 計画レビュー指針:
-- template は実ファイル (examples/generic-minimal) を読みに行く
-- Python CLI / Markdown 検出時も Phase 1 では generic にフォールバック
-- 表示文だけ detect 結果を反映 ("Detected: ...")
+Phase 3 Step 3.0 change:
+- detect 関連テスト (banner 検査 / pyproject による python 反映 / JSON detect field) は削除
+- 対象プロジェクトの自己定義は project-context.{md,json} に移行 (本テストの守備範囲外)
 """
 
 from __future__ import annotations
@@ -28,11 +26,13 @@ from qgb.cli import EXIT_OK, EXIT_USAGE, main
 def test_design_stages_emits_proposal_text(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """空ディレクトリ (generic detect) で stage 提案が text に出る."""
+    """空ディレクトリで stage 提案が text に出る (Phase 3 Step 3.0: detect banner なし)."""
     exit_code = main(["design-stages", "--path", str(tmp_path)])
     assert exit_code == EXIT_OK
     out = capsys.readouterr().out
-    assert "Detected" in out or "detected" in out.lower()
+    # Phase 3 Step 3.0: "Detected" banner は廃止 (detect 機能撤去)。
+    # template 名と stage 提案セクションだけが必須。
+    assert "Recommended template" in out
     assert "Proposed stages" in out or "proposed" in out.lower()
     # generic-minimal template の stage が出ている。
     assert "S1" in out
@@ -59,26 +59,17 @@ def test_design_stages_does_not_write_policy(
     assert after == initial_policy
 
 
-def test_design_stages_reflects_detect_language_in_text(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """pyproject.toml がある dir では detect が python を返し、提案 text に反映."""
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "demo"\n', encoding="utf-8"
-    )
-    exit_code = main(["design-stages", "--path", str(tmp_path)])
-    assert exit_code == EXIT_OK
-    out = capsys.readouterr().out
-    assert "python" in out.lower()
+# Phase 3 Step 3.0 廃止: test_design_stages_reflects_detect_language_in_text
+# は detect 機能を前提とするテストだったので削除 (detect 自体が撤去された)。
 
 
 # ---- JSON 出力 -----------------------------------------------------------
 
 
-def test_design_stages_json_has_proposal_and_detect(
+def test_design_stages_json_has_proposal(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--json は schema_version + selected detect + proposed stages を含む."""
+    """--json は schema_version + proposed stages を含む (Phase 3 Step 3.0: detect なし)."""
     exit_code = main(["design-stages", "--json", "--path", str(tmp_path)])
     assert exit_code == EXIT_OK
     parsed = json.loads(capsys.readouterr().out)
@@ -87,9 +78,8 @@ def test_design_stages_json_has_proposal_and_detect(
     assert parsed["ok"] is True
     assert "committed" in parsed and parsed["committed"] is False
 
-    # detect の selected が含まれる。
-    assert "detect" in parsed
-    assert "selected" in parsed["detect"]
+    # Phase 3 Step 3.0: detect フィールドは出力されない。
+    assert "detect" not in parsed
 
     # proposed stages がリストで入る。
     assert "proposed" in parsed

@@ -318,10 +318,12 @@ _STEP8_EXAMPLES = [
         "name": "python-cli-pytest",
         "dir": EXAMPLES / "python-cli-pytest",
         "req_id": "REQ-APP-001",
-        # 3 contracts + policy + req-meta + config = 6 spec files
-        "expected_files": 6,
+        # 3 contracts + policy + req-meta + config + project-context = 7 spec files
+        # (Phase 3 Step 3.0: project-context.json を記入例として追加)
+        "expected_files": 7,
         "expected_schema_names": [
-            "config", "contract", "contract", "contract", "policy", "req-meta",
+            "config", "contract", "contract", "contract", "policy",
+            "project-context", "req-meta",
         ],
         "expected_basis_contracts": [
             "CONTRACT-REQ-APP-001-S1",

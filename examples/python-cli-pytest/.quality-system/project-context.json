@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "human_reviewed": true,
+  "project_kind": "python-cli",
+  "purpose": "demo_cli (シンプルな Python CLI) に対する qgb 設計例。Phase 2 で確立した 6 example のうち Python + pytest 版として、対象プロジェクトの自己定義と段階設計の対応関係を示す。",
+  "scope": {
+    "in_scope": [
+      "src/demo_cli/ 配下の Python ソース",
+      "tests/ 配下の pytest テスト",
+      "CLI の文字列出力 (substring_match 検査対象)"
+    ],
+    "out_of_scope": [
+      "パッケージ配布 (PyPI 等)",
+      "パフォーマンスベンチマーク",
+      "コードカバレッジ等の統計的品質指標 (P11 に抵触する比較指標化リスク)"
+    ]
+  },
+  "technologies": [
+    "python",
+    "pytest"
+  ],
+  "artifact_kinds": [
+    "source-code",
+    "tests",
+    "cli-entry-point"
+  ],
+  "platform": [
+    "windows",
+    "linux"
+  ],
+  "non_adopted_methods": [
+    {
+      "method": "snapshot testing",
+      "reason": "出力に環境依存値 (path / 日時) が混じる場合、意味のある diff にならない"
+    },
+    {
+      "method": "property-based testing (hypothesis)",
+      "reason": "シンプル CLI には過剰、学習例としてのシグナル/ノイズ比が悪い"
+    }
+  ],
+  "references": [
+    {
+      "kind": "design_notes",
+      "path": "design-notes.md"
+    },
+    {
+      "kind": "readme",
+      "path": "README.md"
+    }
+  ],
+  "source_metadata": {
+    "generated_by": "agent-assisted",
+    "agent_name": "claude-code",
+    "agent_version": "opus-4.7",
+    "generated_at": "2026-06-21T03:30:00Z",
+    "source_md_sha256": "f1b50f14ed4dad16030f2b860da0981da921916733779287a2133601fcbe3bfa"
+  }
+}
