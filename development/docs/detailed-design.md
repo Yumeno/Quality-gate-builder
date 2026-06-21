@@ -44,7 +44,11 @@ quality-gate-builder/
       runner.py                         # file_exists / substring_match 実行 (Step 5)
       decision.py                       # ALLOW/DENY 判定 (Step 5)
       evidence.py                       # gate.json/summary.md/log の 2 系統書き出し (Step 5)
-    adapters/__init__.py               # Phase 1 では空
+    # adapters/ は Phase 1 Step 6c で base / generic / python の 3 種を実装したが、
+    # Phase 3 Step 3.0 (2026-06-21) で対象プロジェクトの分析責務を
+    # Phase 5 スキルに移して撤去 (§14)。本書の上流節 (§5.1 / §9 等) で
+    # adapter が「現役」と読める箇所は、Phase 1 完結時点の真実を歴史記録
+    # として残したもの。
     schemas/                            # バンドルされる JSON Schema 群
       README.md
       config.schema.json
@@ -424,10 +428,10 @@ Initialisation errors (M):
 
 ### 6.6 やらないこと (他コマンドの責務)
 
-- 対象系の言語/フレームワーク推定 → `qgb detect` (Step 6)
-- 段階設計の中身 → `qgb design-stages` (Step 6)
+- 対象系の言語/フレームワーク推定 → ~~`qgb detect` (Step 6)~~ **Phase 3 Step 3.0 で廃止**。対象プロジェクトの自己定義は `.quality-system/project-context.{md,json}` に人間 + 補佐 Agent が書く運用に移行 (§14)
+- 段階設計の中身 → `qgb design-stages` (Step 6d / Phase 2 Step 2.5 Pattern B)
 - REQ + contract 雛形 → `qgb scaffold` (Step 6)
-- 初期状態の整合性チェック → `qgb validate` (Step 2) と `qgb validate-policy` (Step 6) で必要に応じて
+- 初期状態の整合性チェック → `qgb validate` (Step 2) と `qgb validate-policy` (Step 6a) で必要に応じて
 
 ### 6.7 init → validate ラウンドトリップ保証
 
@@ -838,7 +842,7 @@ Step 5 三次補修 (2026-05-23) で C 部分 (timestamp/run_id 責務分離 + R
 |---|---|
 | `qgb validate-policy` 本体 + preflight 診断 API + fixture 復活 | Step 6a |
 | `qgb run --yes` / runner/evidence 構造化 (atomic / QGB_KEEP_RUNS) + `qgb verify` 撤回 | Step 6b (完結 2026-05-31) |
-| `qgb detect` + adapters/python + adapters/generic | Step 6c (完結 2026-05-31) |
+| ~~`qgb detect` + adapters/python + adapters/generic~~ | Step 6c (完結 2026-05-31) → **Phase 3 Step 3.0 (2026-06-21) で撤去**、§14 参照 |
 | `qgb design-stages` 提案・採用 + `qgb scaffold` | Step 6d (完結 2026-05-31) |
 | TDD phase=red の expected-failure 本実装 (gate.json で DENY を期待値として扱う) | Step 7 (完結 2026-05-31) |
 | `command` verification_type | Step 7 (完結 2026-05-31) |

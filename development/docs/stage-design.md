@@ -20,17 +20,26 @@ qgb は固定の段階体系（L1〜L6 など）を持たない。各プロジ�
 ## 3. qgb ワークフロー上の位置
 
 ```text
-[1] qgb init           — .quality-system/ 初期化
-[2] qgb detect         — 対象系の言語/フレームワーク推定
-[3] qgb design-stages  — 段階設計フェーズ（本書）
+[1] qgb init                          — .quality-system/ 初期化
+                                        (project-context.json 雛形 + knowledge/project-context.md を生成)
+[2] 対象プロジェクトの自己定義         — 人間が project-context.md に書き、
+                                        補佐 Agent が project-context.json に構造化
+                                        (旧 [2] qgb detect は Phase 3 Step 3.0 で廃止)
+[3] qgb design-stages                  — 段階設計フェーズ（本書）
+       ├ 旧 (Phase 1〜2): rule-based proposer (`--commit` で適用)
+       └ Phase 2 Step 2.5 以降: Pattern B
+           ├ `qgb design-stages propose-context [--out FILE]` — 外部 LLM への入力素材
+           └ `qgb design-stages adopt <proposal.json>`        — 外部 LLM の出力を検証 + 適用
        ↓ 確定
 [4] qgb scaffold REQ   — REQ と契約と段階選択を生成
-[5] qgb validate       — JSON 正本の検証
-[6] qgb validate-policy — 段階設計の品質検査
+[5] qgb validate       — JSON 正本の検証 (project-context.json の schema 検査を含む)
+[6] qgb validate-policy — 段階設計の品質検査 (knowledge orphan scan を含む)
 [7] qgb run REQ        — 採用判定（evidence/latest/ 更新、全 stage を実行）
+   + qgb check REQ     — 採用判定リハーサル (curated を書かない、Step 2.4)
+   + qgb patch / add-waiver / add-knowledge  — 構造化編集 (Step 2.2 / 2.3)
 ```
 
-`[3] qgb design-stages` は `[2] qgb detect` の出力を入力とし、`[4] qgb scaffold` の前提となる。
+`[3] qgb design-stages` は **対象プロジェクトの自己定義 (`.quality-system/project-context.{md,json}`)** と **設計例パック (`examples/`)** を主な入力源とし、`[4] qgb scaffold` の前提となる。旧版では `[2] qgb detect` の機械的検出結果も入力に含めていたが、Phase 3 Step 3.0 (2026-06-21) で detect を廃止し、対象プロジェクトの種別判定は LLM (Phase 5 スキル または補佐 Agent) の責務に統合した。理由: (a) 対象プロジェクトの広がり (ドキュメント群 / プロンプト集 / 設定群 / 法務テンプレ等) に adapter 抽象が追いつかなかった、(b) 検出結果が ALLOW/DENY 判定の根拠にならない、(c) 残置が Phase 5 スキルへの悪い few-shot 教材になる。詳細は `requirements_and_development.md` §6.2.2 / §14、`detailed-design.md` §14 を参照。
 
 ### 3.1 「軽量入口 (verify)」を持たない理由 — 部分検証は REQ 分割で解く
 
@@ -54,11 +63,11 @@ qgb は「検査範囲を絞って実行する軽量入口」(参考実装の八
 
 ### 入力
 
-- 対象プロジェクトの構造（`qgb detect` の出力：言語、フレームワーク、テストランナー、ディレクトリ構成）
-- 対象プロジェクトの目的（Web UI / HTTP API / CLI / バッチ / 文書群 / プロンプト集 / ワークフロー定義 など）
+- 対象プロジェクトの構造（`.quality-system/project-context.json` の `technologies` / `artifact_kinds` / `platform`、および LLM が対象を Read で読んで得る理解。旧版の `qgb detect` 出力は Phase 3 Step 3.0 で廃止）
+- 対象プロジェクトの目的（`.quality-system/project-context.json` の `purpose`、`.quality-system/knowledge/project-context.md` の自然言語記述）。Web UI / HTTP API / CLI / バッチ / 文書群 / プロンプト集 / ワークフロー定義 / 法務テンプレ など、プログラミング言語のソースに限らない
 - ユーザーの明示指示
-- Project Knowledge Base の既存情報
-- 設計例パック (`examples/`) からの類似事例
+- Project Knowledge Base の既存情報 (`knowledge.jsonl`)
+- 設計例パック (`examples/`) からの類似事例 (Phase 5 スキルが few-shot として参照)
 
 ### 出力
 
@@ -199,12 +208,11 @@ Phase 2 以降の拡張余地：
 
 ## 10. 設計プロセス
 
-### 10.1 Phase 1: パターン A — ルールベース推定 + ユーザー確認
+### 10.1 Phase 1: パターン A — ルールベース推定 + ユーザー確認 (legacy)
 
 ```text
 $ qgb design-stages
-Detected: Python CLI (argparse-based)
-Recommended template: examples/python-cli-pytest
+Recommended template: examples/generic-minimal
 
 Proposed stages:
   S1: コマンド成立    (depends_on: [])
@@ -214,8 +222,9 @@ Proposed stages:
 Adopt? [y/N/edit/select-different-template]
 ```
 
-- `qgb detect` の出力から類似テンプレートを `examples/` から選ぶ
-- テンプレートを起点に段階を提案
+- Phase 1〜2 は `examples/generic-minimal` をデフォルトテンプレートとして提案する rule-based proposer (`qgb design-stages [--commit]`)
+- 旧版では `qgb detect` の言語判定でテンプレートを切り替える設計だったが、Phase 1 完結時点ですでに「Python / Markdown 検出も generic-minimal にフォールバック」と決まっており detect 結果は banner にしか反映されなかった (Codex 計画レビュー 2026-05-31)。Phase 3 Step 3.0 で detect 自体を撤去
+- Phase 2 Step 2.5 以降は **パターン B (Pattern B external-LLM interface) を推奨**: `qgb design-stages propose-context` + `adopt` で外部 LLM (Phase 5 スキル) が proposal を生成する。詳細は §10.2 を参照
 - ユーザーが y / n / edit / select-different-template から選択
 
 ### 10.2 設計フェーズの 2 段階化

@@ -181,6 +181,42 @@ agent_bindings:
 - スキルが対象を読み損ねても、それは proposal 品質の問題であり、gate の判定根拠にはしない (philosophy P6)
 - スキルが「対象判定モジュール」として機械的検出を肩代わりすると、qgb が adapter を持っていた時と同じ「対象プロジェクトの広がりに枠組みが追いつかない」問題に陥る。スキルは対象を Read で読み、人間の自己定義 (`project-context.md`) を尊重しつつ柔軟に理解する役回りに徹する
 
+### project-context.{md,json} の運用契約 (Phase 3 Step 3.0 で確立)
+
+`.quality-system/knowledge/project-context.md` (人間正本) と `.quality-system/project-context.json` (機械正本) の二重ファイル設計には次の運用契約がある。Codex セカンドオピニオン (2026-06-21) 段 3 で「補佐 Agent と人間の役割分担を明文化すべき」という指摘を受けて固定した。
+
+**編集権 (誰がどちらを書くか):**
+
+| ファイル | 編集者 | 内容 |
+|---|---|---|
+| `project-context.md` | **人間** | 自然言語で対象プロジェクトの自己定義 (目的、対象範囲、制約、採用しない方式、参照文書) を書く。設計意図と背景の正本 |
+| `project-context.json` | **補佐 Agent (利用者環境の LLM: Claude Code / Codex CLI / Gemini CLI 等)** | md を読んで構造化、schema 整合性を保つ。`generated_by: "agent-assisted"` を立てる |
+| `human_reviewed: true` | **人間のみ** | json をレビューして承認したら手で `true` に書き換える。Agent が立ててはならない (P8 違反になる) |
+
+**不一致時の扱い (md と json が乖離した場合):**
+
+- 検出: json の `source_metadata.source_md_sha256` と md の現在の SHA-256 を突き合わせる (Phase 3+ で `qgb validate-policy` の advisory kind として `project_context_stale` の追加を予定)
+- 復旧フロー: md が真の意図を保持しているので、補佐 Agent に「md を読み直して json を更新して」と依頼。Agent は新しい `source_md_sha256` を立て、`generated_at` を更新し、必要なら `human_reviewed: false` に戻す (人間の再承認が必要)
+- 緊急時: 人間が json を直接編集してもよい。その場合 `generated_by: "human"` と `human_reviewed: true` を手で立てる
+
+**API 期待 (Phase 5 スキルが project-context を読むとき):**
+
+- スキルは `.quality-system/project-context.json` を **`qgb design-stages propose-context`** の出力経由で受け取る (直接 Read してもよいが、推奨は qgb 経由で BOM tolerant な経路を使う)
+- `human_reviewed: false` のときは `qgb design-stages propose-context` の出力 `warnings[]` にその旨が含まれる。スキルは warning に従って「provisional として扱う」(人間に確認を求めるなど) を判断する
+- json の自由 prose フィールド (`purpose` / `scope.*` / `non_adopted_methods[].reason` / `references[].path`) は **データであって命令ではない** (P8 / NF-007)。スキルはこれらを LLM プロンプトに直接注入してはならない。設計判断の文脈として使う
+
+**欠落時 fallback:**
+
+- `.quality-system/project-context.json` が存在しないプロジェクト: `qgb design-stages propose-context` の出力で `project_context: null`、`warnings[]` は空 (宣言不在は P8 違反ではない)
+- スキルは fallback として: (1) 対象プロジェクトのソースを直接 Read で読む、(2) `examples/` の中で対象に近いプロジェクトを参考にする、(3) 人間にヒアリングする (Phase 5 スキルの会話経路を使う)
+- **「detect の代わりにスキルが言語判定する」のは禁止** — それは adapter 量産と同じ問題を別の場所で起こす。スキルは対象を「分類」せず「理解」する役回り
+
+**Free prose の prompt-injection 扱い (P8 / NF-007):**
+
+- `project-context.md` も `project-context.json` も、利用者またはその補佐 Agent が書いた文書として扱う。**外部取得コンテンツではない** (P8 区別)
+- ただしスキル設計者は、悪意ある利用者または compromise された補佐 Agent が prompt injection 文字列を埋め込む可能性を考慮し、これらの prose を「上位指示」として扱ってはならない。設計判断の input data として扱う
+- スキルが「`project_kind: 'python-cli'` だから Python 用のテスト段階を提案する」のような判断は妥当 (構造化フィールドを設計判断の根拠にする使い方)。一方「`purpose` の自然言語をそのまま新 stage の `responsibility` に流し込む」のような無検査の prose 移送は危険 (P9 違反のサインも検出できなくなる)
+
 ### 読む側（参照元）
 
 - Layer 1: 思想憲章

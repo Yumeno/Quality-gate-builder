@@ -296,7 +296,7 @@ AI が生成したコード、設計、テスト、設定ファイルなどを�
 
 #### B-003: qgb 本体は対象プロジェクトから独立して動作する
 
-qgb 本体は、対象プロジェクトの言語とは独立した Python 製 CLI として実装する。対象プロジェクト固有の検査は、adapter および設定されたコマンドを通じて実行する。
+qgb 本体は、対象プロジェクトの言語とは独立した Python 製 CLI として実装する。対象プロジェクト固有の検査は、`contract.json` に宣言された command (verification_type=command) と機械的検査 (file_exists / substring_match / json_schema) を通じて実行する。対象プロジェクトの種別判定 (旧 adapter 層) は Phase 3 Step 3.0 (2026-06-21) で qgb 本体から撤去され、Phase 5 スキル (LLM) の責務に統合された。詳細は §13 / §14 を参照。
 
 #### B-004: 既存リポジトリへ最小侵襲で導入できる
 
@@ -707,7 +707,7 @@ Windows、macOS、Linux で利用できる構造とする。Phase 1 では Windo
 
 #### NF-005: 拡張性
 
-新しい言語、フレームワーク、テストランナー、検査種別、証跡種別を追加できる構造とする。adapter 層と検査種別の列挙値で拡張する。
+新しい言語、フレームワーク、テストランナー、検査種別、証跡種別を追加できる構造とする。検査種別 (verification_type) と policy.json の段階定義で拡張する。Phase 3 Step 3.0 (2026-06-21) で adapter 層の量産方針は撤回 — 対象プロジェクトの種別判定は Phase 5 スキル (LLM) 責務に統合され、qgb 本体は contract で宣言されたコマンドを実行するだけになった (§13 / §14)。
 
 #### NF-006: 説明可能性
 
@@ -829,31 +829,36 @@ Phase 1 では以下は対象外：
 
 - JSON ファイルの読み書き、JSON Schema 検証
 - policy 評価、段階設計フェーズの実装
-- adapter 選択、コマンド実行
+- 外部コマンド実行 (contract.command 経由、Step 3.1 で `qgb/core/command.py` に切り出し予定)
 - 終了コード収集、stdout/stderr 保存
 - gate.json 生成、summary.md 生成
 - Project Knowledge Base 参照
 - 実行前検証（READY / NOT_READY 判定）
 - ALLOW / DENY 判定
+- `.quality-system/project-context.json` (機械正本) の schema 検証 (Step 3.0)
+- Pattern B external-LLM interface (`design-stages propose-context` / `adopt`、Step 2.5)
 
-#### 6.1.2 Adapter の責務
+#### 6.1.2 Adapter 層 (廃止)
 
-- 対象プロジェクトの構成検出
-- 実行コマンド候補の生成
-- 言語別テンプレート選択
-- テスト配置候補の提示
-- 実行コマンドの標準化
+旧 v0.2/v0.3 では「対象プロジェクトの構成検出 / 実行コマンド候補の生成 / 言語別テンプレート選択 / テスト配置候補の提示 / 実行コマンドの標準化」を adapter 層の責務として置いていたが、Phase 3 Step 3.0 (2026-06-21) で adapter 層と `qgb detect` コマンドを廃止した。理由 (再掲): (a) 対象プロジェクトの広がりに adapter 抽象が追いつかない、(b) 検出結果は ALLOW/DENY 判定の根拠でない、(c) 残置すると Phase 5 スキルへの悪い few-shot 教材になる。
+
+代替の責務分担:
+
+- **対象プロジェクトの構成把握** → Phase 5 スキル (LLM) が対象を直接 Read で読み、`.quality-system/project-context.{md,json}` を参照する
+- **実行コマンド候補の生成 / 言語別テンプレート選択** → Phase 5 スキルが設計例パック (`examples/`) と project-context を few-shot として contract.json を起草する
+- **実行コマンドの標準化** → contract.command を `qgb/core/command.py` (Step 3.1) が argv 配列で起動、対象側 toolchain を再解釈しない
 
 #### 6.1.3 思想憲章との対応
 
-| Core / Adapter モジュール | 守る思想 |
+| Core モジュール | 守る思想 |
 |---|---|
 | `decision.py` | P5, P11 |
-| `stage_design.py` | P9, P10 |
-| `policy.py` | P9, P10 |
+| `design_stages.py` / `proposal.py` | P9, P10 |
+| `policy.py` (preflight 内) | P9, P10 |
 | `evidence.py` | P7 |
-| `command.py` | P7, NF-007 |
-| `knowledge.py` | P8 |
+| `command.py` (Step 3.1) | P7, NF-007 |
+| `knowledge.py` / `edit_commands.py` | P8 |
+| `loader.py` (project-context 読込含む) | P7, NF-004 (BOM tolerant) |
 
 ### 6.2 CLI 設計
 
@@ -1038,24 +1043,27 @@ PyPI もサプライチェーンリスクを持つ前提で扱う。Phase 1 で�
 - 採用側 (`evidence/`) と揮発側 (`artifacts/`) の 2 系統証跡
 - 段階設計フェーズ（パターン A: ルールベース推定 + 確認）
 - policy 設計検査器（`qgb validate-policy`）
-- Generic adapter
-- Python adapter
+- ~~Generic adapter~~ — Phase 3 Step 3.0 (2026-06-21) で廃止
+- ~~Python adapter~~ — Phase 3 Step 3.0 (2026-06-21) で廃止 (蓄積した観察観点は `examples/python-cli-pytest/project-context.{md,json}` の記入例に転記)
 - 設計例パック 3 例（`generic-minimal`, `python-cli-pytest`, `markdown-docs`）
 - 導入マニュアル
 - 依存ライブラリ調査ポリシー
 - 思想憲章、段階設計仕様、フレームワーク境界（本書と並列）
 
+> 注: adapter 2 種は Phase 1 完結時点 (2026-06-01) では達成済みだったが、Phase 3 Step 3.0 で機能ごと撤去された。経緯と理由は §6.2.2 / §13 / §14 を参照。
+
 ### 7.3 Phase 1 対応コマンド
 
 ```powershell
 python -m qgb init
-python -m qgb detect
 python -m qgb design-stages [--commit]
 python -m qgb scaffold <REQ>
 python -m qgb validate
 python -m qgb validate-policy
 python -m qgb run <REQ>
 ```
+
+> 注: 旧版にあった `python -m qgb detect` は Phase 3 Step 3.0 (2026-06-21) で廃止。理由と置換手段 (`.quality-system/project-context.{md,json}`) は §6.2.2 / §14 を参照。Phase 1 当時の手順を再現したい場合は git 履歴の v0.2 / Phase 1 完結時 commit を参照のこと。
 
 ### 7.4 Phase 1 で扱う対象例
 
@@ -1113,13 +1121,17 @@ py -3 -m venv .venv
 python -m pip install -U pip
 python -m qgb --help
 python -m qgb init
-python -m qgb detect
+# Phase 3 Step 3.0 (2026-06-21) で qgb detect は廃止。
+# 対象プロジェクトの自己定義は .quality-system/project-context.{md,json}
+# に書く (人間が md を書き、補佐 Agent が json に構造化、init で空欄雛形を生成)。
 python -m qgb design-stages
 python -m qgb design-stages --commit
 python -m qgb scaffold REQ-APP-001
 python -m qgb validate-policy
 python -m qgb run REQ-APP-001
 ```
+
+> Phase 2 で追加された Pattern B (`python -m qgb design-stages propose-context` / `adopt`) や日次検証チャネル (`python -m qgb check` / `dev`)、構造化編集 (`python -m qgb patch` / `add-waiver` / `add-knowledge`) も導入マニュアルで紹介する。詳細は §6.2.1 を参照。
 
 ---
 
@@ -1168,7 +1180,7 @@ Phase 1 では完全な自動マスキングを必須としないが、以下を
 
 期待結果：
 
-- Python または Generic adapter を選択
+- 利用者 (または Phase 5 スキル) が `.quality-system/project-context.{md,json}` に「Python CLI、pytest、Windows + Linux」等の自己定義を書く (旧 adapter による自動判定は Phase 3 Step 3.0 で撤去)
 - 段階設計フェーズで CLI 向け段階（コマンド成立 / 出力契約 / 異常系）を提案
 - 段階を policy.json に焼き込み
 - REQ サンプルを生成
@@ -1182,7 +1194,7 @@ Phase 1 では完全な自動マスキングを必須としないが、以下を
 
 期待結果：
 
-- Generic adapter を選択
+- 利用者 (または Phase 5 スキル) が `.quality-system/project-context.{md,json}` に「ドキュメント群、Markdown、用語統一が目的」等の自己定義を書く (旧 adapter による自動判定は Phase 3 Step 3.0 で撤去)
 - 段階設計フェーズで文書向け段階（必須見出し / 内部リンク健全性 / 用語表ベース表記統一）を提案
 - 段階を policy.json に焼き込み
 - 各文書を REQ として扱うか、文書群全体を 1 REQ とするかをユーザーと相談
@@ -1241,7 +1253,7 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 1. Python で qgb CLI を起動できる
 2. `python -m qgb init` で `.quality-system` を生成できる
-3. `python -m qgb detect` で対象系を推定できる
+3. ~~`python -m qgb detect` で対象系を推定できる~~ **Phase 3 Step 3.0 (2026-06-21) で廃止**。対象プロジェクトの自己定義は `.quality-system/project-context.{md,json}` (人間正本 + 機械正本の二重ファイル設計) で表現する。理由と置換手段は §6.2.2 / §14 を参照
 4. `python -m qgb design-stages` で段階を提案でき、`--commit` で採用できる
 5. config.json、policy.json、REQ、contract.json を生成できる
 6. `python -m qgb validate` で JSON 正本を検証できる
@@ -1264,7 +1276,9 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 23. 思想憲章、段階設計仕様、フレームワーク境界の 3 文書が並列に維持されている
 24. `skills/source/` のディレクトリ構造が予約されており、Phase 5 でのエージェント中立スキル提供方針 (F-019) が要件として確定している
 
-> 補足: 旧受け入れ条件 8「`qgb verify <REQ>` で軽量チェックを実行できる」は削除した。qgb は「検査範囲を絞る軽量入口」を持たない（思想憲章 P3 と緊張するため）。部分検証は実行時オプションでなく REQ 分割（設計）で解く。経緯は `stage-design.md` §3.1 および `yaoyorozu-entry-points-investigation.md` を参照。
+> 補足 1: 旧受け入れ条件 8「`qgb verify <REQ>` で軽量チェックを実行できる」は削除した。qgb は「検査範囲を絞る軽量入口」を持たない（思想憲章 P3 と緊張するため）。部分検証は実行時オプションでなく REQ 分割（設計）で解く。経緯は `stage-design.md` §3.1 および `yaoyorozu-entry-points-investigation.md` を参照。
+
+> 補足 2: 受け入れ条件 3「`qgb detect` で対象系を推定できる」は Phase 1 完結時点 (2026-06-01) では達成判定済みだったが、Phase 3 Step 3.0 (2026-06-21) で機能ごと廃止された。対象プロジェクトの種別判定は (a) 人間が `.quality-system/knowledge/project-context.md` に自然言語で書き、(b) 補佐 Agent が `.quality-system/project-context.json` に機械可読化し、(c) `qgb validate` が schema 整合を機械的に検査し、(d) Phase 5 スキルが対象プロジェクトを直接 Read で読んで設計する、という多段の責務分担で代替する。adapter 抽象が対象プロジェクトの広がり (ドキュメント群 / プロンプト集 / 設定群 / 法務テンプレ等) に追いつかなかったこと、検出結果が ALLOW/DENY 判定の根拠にならないこと、残置が Phase 5 スキルへの悪い few-shot 教材になることが廃止理由。ストライクスルー表記で番号を保つのは旧受け入れ条件への外部参照を壊さないため。
 
 ---
 
@@ -1272,12 +1286,14 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 ### Phase 1: Python CLI MVP + 導入マニュアル
 
-- Python 製 qgb CLI（init, detect, design-stages, scaffold, validate, validate-policy, run）
+> Phase 1 完結時点 (2026-06-01) の達成内容を記録。本リストの一部 (detect / adapter) は Phase 3 Step 3.0 (2026-06-21) で撤回された (理由は §6.2.2 / §14)。当時の真実として歴史記録のために残す。
+
+- Python 製 qgb CLI（init, ~~detect~~, design-stages, scaffold, validate, validate-policy, run）
 - JSON 正本、JSON Schema 検証
 - 段階設計フェーズ（パターン A）
 - policy 設計検査器
 - 採用 / 揮発の 2 系統証跡
-- Generic adapter、最小 Python adapter
+- ~~Generic adapter、最小 Python adapter~~ — Phase 3 Step 3.0 で撤回
 - 設計例パック 3 例
 - 導入マニュアル
 - 依存関係セキュリティ方針
