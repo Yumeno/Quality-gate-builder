@@ -335,9 +335,12 @@ _STEP8_EXAMPLES = [
         "name": "markdown-docs",
         "dir": EXAMPLES / "markdown-docs",
         "req_id": "REQ-DOC-001",
-        "expected_files": 6,
+        # 3 contracts + policy + req-meta + config + project-context = 7 spec files
+        # (Phase 3 Step 3.0: project-context.json を non-code 対象の記入例として追加)
+        "expected_files": 7,
         "expected_schema_names": [
-            "config", "contract", "contract", "contract", "policy", "req-meta",
+            "config", "contract", "contract", "contract", "policy",
+            "project-context", "req-meta",
         ],
         "expected_basis_contracts": [
             "CONTRACT-REQ-DOC-001-S1",

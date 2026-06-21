@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "human_reviewed": true,
+  "project_kind": "markdown-documentation",
+  "purpose": "docs/ 配下の Markdown ドキュメント群に対する qgb 設計例。Phase 1〜2 で確立した 6 example のうち non-code 対象 (言語ソースを含まない) のサンプルとして、file_exists + substring_match + json_schema の組合せで「文書セットの起点 / authoring 規約 / 構造化 metadata の妥当性」を機械的に担保する設計を示す。Phase 3 Step 3.0 (2026-06-21) 以降は project-context.{md,json} 二重ファイル設計の non-code 対象記入例も兼ねる。",
+  "scope": {
+    "in_scope": [
+      "docs/ 配下の Markdown ファイル",
+      "docs/metadata.json の構造",
+      "ナビゲーション生成や検索 index の入力となる metadata の妥当性"
+    ],
+    "out_of_scope": [
+      "文章の意味的妥当性 (typo / 文法 / 用語ぶれ)",
+      "リンク先の生存確認 (404 検出)",
+      "多言語版の翻訳整合性",
+      "パフォーマンス指標 (ページサイズ / 読了時間)"
+    ]
+  },
+  "technologies": [
+    "markdown",
+    "json"
+  ],
+  "artifact_kinds": [
+    "documentation",
+    "structured-metadata"
+  ],
+  "platform": [
+    "platform-agnostic"
+  ],
+  "non_adopted_methods": [
+    {
+      "method": "link checker (markdown-link-check)",
+      "reason": "外部ツール依存が増えるため本 example の最小性を逸脱、実プロジェクトで必要なら command verification_type で立てる"
+    },
+    {
+      "method": "spell checker (aspell / textlint)",
+      "reason": "辞書依存と false positive 管理が重い、本 example のスコープ外"
+    },
+    {
+      "method": "wordcount / length floor",
+      "reason": "threshold 型は qgb の ALLOW/DENY 二値判定モデルに合わない (philosophy P11)"
+    },
+    {
+      "method": "Markdown AST レベル検査",
+      "reason": "substring_match の最小例を逸脱、必要なら利用者が command 経由で markdownlint / remark の contract を立てる設計"
+    },
+    {
+      "method": "多言語整合性検査",
+      "reason": "docs.<lang>.metadata.json 形式の多言語版管理は本 example のスコープ外、必要なら別 stage / 別 REQ で扱う"
+    }
+  ],
+  "references": [
+    {
+      "kind": "design_notes",
+      "path": "design-notes.md"
+    },
+    {
+      "kind": "readme",
+      "path": "README.md"
+    }
+  ],
+  "source_metadata": {
+    "generated_by": "agent-assisted",
+    "agent_name": "claude-code",
+    "agent_version": "opus-4.7",
+    "generated_at": "2026-06-22T00:00:00Z",
+    "source_md_sha256": "ee3274b2272991cd043e87266ac2efe1e7cadefcf1bbf463e392b50a10f65882"
+  }
+}

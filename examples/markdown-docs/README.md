@@ -49,8 +49,12 @@ python -m qgb run REQ-DOC-001 --yes --path examples/markdown-docs
 The expected outcome is `ALLOW`. The canonical evidence (gate.json,
 summary.md, stage logs) is committed at
 `evidence-reference/REQ-DOC-001/latest/`. There is no Python dependency
-on the target side; `qgb detect` falls back to the generic adapter
-because Phase 1 ships no Markdown-specific adapter (planned for Phase 2).
+on the target side. Phase 3 Step 3.0 (2026-06-21) で adapter / `qgb detect`
+は撤去された (理由: 対象プロジェクトの広がりに adapter 抽象が追いつかない、
+詳細は `requirements_and_development.md` §6.2.2 / §14)。Markdown ドキュメント
+群のような non-code プロジェクトの自己定義は `.quality-system/project-context.md`
+(人間正本) と `.quality-system/project-context.json` (機械正本) に書く。本
+example でも両ファイルを記入例として用意している。
 
 ### Path convention: forward slash, project-relative
 
@@ -70,5 +74,8 @@ Windows users authoring `docs/metadata.json` should write
 backslashes. The schema pattern intentionally rejects
 `"docs\\index.md"` so the convention is enforced at validation time.
 
-Phase 2 may relax this if a Markdown-specific adapter introduces a
-path-normalising layer; Phase 1 keeps the contract literal.
+Phase 1 keeps the contract literal (forward-slash, project-relative).
+adapter は Phase 3 Step 3.0 で撤去されたため、path 正規化は contract
+記述者 (人間 / Phase 5 スキル) の責務として固定。schema pattern が
+`^docs/.+\\.md$` で backslash を reject するので、ここで規律が機械的
+に強制される。
