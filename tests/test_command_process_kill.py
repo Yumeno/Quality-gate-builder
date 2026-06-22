@@ -109,8 +109,7 @@ def _wait_heartbeat_started(heartbeat_path: Path, deadline_seconds: float) -> bo
     os.name != "posix",
     reason=(
         "POSIX-only: validates os.setsid + killpg covers grandchildren. "
-        "Windows path is exercised by the Job Object test below "
-        "(currently xfail until Step 3.1b-3)."
+        "Windows path is exercised by the Job Object test below."
     ),
 )
 def test_posix_kill_reaches_grandchildren(tmp_path: Path) -> None:
@@ -144,20 +143,27 @@ def test_posix_kill_reaches_grandchildren(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.xfail(
-    os.name == "nt",
-    reason=(
-        "Step 3.1b-2 only addresses POSIX. Windows grandchildren leak "
-        "until Step 3.1b-3 swaps Popen.kill for a Job Object kill."
-    ),
-    strict=False,
-)
 @pytest.mark.skipif(
     os.name != "nt",
-    reason="Windows-only mirror of the POSIX kill test.",
+    reason="Windows-only: validates Job Object kill reaches grandchildren.",
 )
 def test_windows_kill_reaches_grandchildren(tmp_path: Path) -> None:
-    """Step 3.1b-3 placeholder: same shape as POSIX, expected to fail now."""
+    """Step 3.1b-3: Job Object kill must terminate descendants too.
+
+    Mirror of :func:`test_posix_kill_reaches_grandchildren` for the
+    Windows code path. ``WindowsJob`` is set up by ``_run_subprocess``;
+    on timeout, ``TerminateJobObject`` kills every assigned process —
+    direct child plus grandchildren spawned after the assign.
+
+    If this test fails on a CI runner that *does* satisfy
+    :func:`qgb.core._win_job.is_supported`, that usually means qgb's
+    own host process is itself running inside a Job Object that
+    forbids nested jobs. The :class:`_SubprocessResult.runner_warning`
+    field should be populated in that case; if so, this test will
+    fail loudly because the heartbeat continues — which is the
+    intended behaviour, since "grandchild leak" is exactly the
+    audit-visible degradation we promised to flag.
+    """
     token = uuid.uuid4().hex
     heartbeat = tmp_path / f"child-alive-{token}.txt"
     parent_src = _parent_script_source(heartbeat)
@@ -169,12 +175,51 @@ def test_windows_kill_reaches_grandchildren(tmp_path: Path) -> None:
         timeout_seconds=1.0,
     )
 
-    assert result.timed_out
+    assert result.timed_out, (
+        "expected the 1 s timeout to fire before the parent's 120 s sleep "
+        f"completes, got timed_out=False with returncode={result.returncode}"
+    )
 
-    assert _wait_heartbeat_started(heartbeat, deadline_seconds=3.0)
-    assert _wait_heartbeat_plateau(heartbeat, _HEARTBEAT_PAUSE_SECONDS)
+    assert _wait_heartbeat_started(heartbeat, deadline_seconds=3.0), (
+        f"grandchild never created heartbeat file {heartbeat} — the test "
+        "cannot distinguish 'kill propagated' from 'never started'."
+    )
+
+    assert _wait_heartbeat_plateau(heartbeat, _HEARTBEAT_PAUSE_SECONDS), (
+        f"heartbeat at {heartbeat} kept being updated after kill — the "
+        "grandchild process leaked past the Windows Job Object kill. "
+        f"runner_warning={result.runner_warning!r}"
+    )
 
 
 def test_timeout_constant_unchanged() -> None:
     """Sanity: the public default timeout is still 60 s."""
     assert _COMMAND_DEFAULT_TIMEOUT_SECONDS == 60
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows-only sanity: nominal run produces no runner_warning.",
+)
+def test_windows_nominal_run_emits_no_runner_warning(tmp_path: Path) -> None:
+    """Regression guard: a healthy host should never degrade to fallback.
+
+    If this test fails on CI, the qgb host is running in an
+    environment where ``WindowsJob`` cannot be created or assigned
+    — typically a nested Job Object. The fallback path is by design
+    (Codex 指摘: P7 証跡優先), but it should never trigger on a
+    plain CI runner. A failure here is a signal that the CI
+    configuration changed, not that ``command.py`` is broken.
+    """
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", "print('ok')"],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=5.0,
+    )
+    assert not result.timed_out
+    assert result.returncode == 0
+    assert result.runner_warning is None, (
+        "Windows nominal run should not emit a runner_warning. "
+        f"Got: {result.runner_warning!r}"
+    )

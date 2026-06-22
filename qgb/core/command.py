@@ -10,15 +10,17 @@ Sub-step status:
 
 * Step 3.1a (DONE) — carve-out from runner.py, behaviour byte-identical
   with ``subprocess.run``.
-* Step 3.1b-1 (DONE) — switched ``subprocess.run`` to ``subprocess.Popen``
-  with incremental reader threads. External behaviour
-  byte-equivalent.
-* Step 3.1b-2 (this sub-step) — POSIX process group kill. The child is
-  put into its own session via ``preexec_fn=os.setsid``, and timeouts
-  kill the **whole process group** via ``killpg(SIGTERM)`` → grace →
-  ``killpg(SIGKILL)``. Windows path is still ``Popen.kill`` until
-  3.1b-3 — that asymmetry is intentional, see ``_terminate_process``.
-* Step 3.1b-3 — Windows process tree kill via Job Objects (ctypes).
+* Step 3.1b-1 (DONE) — switched to ``subprocess.Popen`` + reader threads.
+* Step 3.1b-2 (DONE) — POSIX process group kill via
+  ``preexec_fn=os.setsid`` + ``killpg``.
+* Step 3.1b-3 (this sub-step) — Windows process tree kill via
+  :class:`qgb.core._win_job.WindowsJob`. Child is created
+  ``CREATE_SUSPENDED``, assigned to the job, then resumed — so it
+  cannot spawn unassigned grandchildren even momentarily. If Job
+  Object setup fails (nested job / privilege issue), we degrade to
+  the old ``Popen.kill`` path AND surface a ``runner_warning`` field
+  on :class:`_SubprocessResult` so the gate.json log captures the
+  asymmetry rather than hiding it (Codex 指摘: P7 証跡優先).
 * Step 3.1c — 16 MiB execution cap, separate from the 64 KiB log tail
   (run_subprocess switches to bytes counters + active kill).
 * Step 3.1d — ``.bat`` / ``.cmd`` argument escaping (cmd.exe
@@ -88,12 +90,21 @@ class _SubprocessResult:
     replaced (not raised) so a stage cannot crash on a bad byte in a
     user command's output — the bytes-to-text loss is the price we pay
     for putting binary-ish output into a markdown log.
+
+    Step 3.1b-3: ``runner_warning`` is a structured field set when the
+    Windows Job Object setup degraded to the per-process kill fallback
+    (typically because the qgb host process is itself inside an
+    incompatible Job Object). ``None`` means "no warnings, kill path
+    was the full strength one for this platform." Step 3.1c will lift
+    this into a gate.runtime structured field so audit logs can be
+    searched.
     """
 
     returncode: int
     stdout: str
     stderr: str
     timed_out: bool
+    runner_warning: str | None = None
 
 
 def _tail_truncate(text: str, cap: int) -> tuple[str, bool]:
@@ -138,7 +149,10 @@ def _drain_stream(stream: BinaryIO, sink: bytearray) -> None:
             pass
 
 
-def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process(
+    process: subprocess.Popen[bytes],
+    win_job: object | None = None,
+) -> None:
     """Kill ``process`` and its descendants as best the platform allows.
 
     Step 3.1b-2 (POSIX): the child was started with
@@ -148,18 +162,24 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     for cooperative shutdown, then send SIGKILL to whatever is left.
     This is the conventional two-stage POSIX kill.
 
-    Step 3.1b-3 (Windows, not yet implemented): falls back to
-    ``Popen.kill`` so the direct child dies, but Windows
-    grandchildren can still survive — a separate sub-step will
-    introduce a Job Object so the whole tree dies atomically.
+    Step 3.1b-3 (Windows): when ``win_job`` is a
+    :class:`qgb.core._win_job.WindowsJob` instance, calling
+    ``terminate()`` on it kills every process in the job (the direct
+    child plus every grandchild created after the assign). The job
+    handle is closed by the ``with`` block in :func:`_run_subprocess`,
+    and the ``KILL_ON_JOB_CLOSE`` flag provides defense-in-depth
+    against a qgb crash between assign and close. When ``win_job`` is
+    ``None`` (job setup failed; ``runner_warning`` is being recorded
+    by the caller), we fall back to ``Popen.kill`` for the direct
+    child only.
 
     The function never raises:
 
     * ``ProcessLookupError`` from a race where the child exited between
       poll and signal is ignored — that race resolves the goal anyway.
-    * ``PermissionError`` on Windows (e.g. when a child has dropped
-      privileges) is logged via stderr only; the runner_warning path
-      will surface it in Step 3.1c via a structured field.
+    * Win32 errors from ``WindowsJob.terminate`` are swallowed inside
+      the wrapper for the same reason: there is no useful recovery
+      and the caller is already returning a failed StageResult.
 
     Caller must ``process.wait()`` after this returns so the OS reaps
     the zombie / Popen releases its handles.
@@ -191,8 +211,14 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
         except ProcessLookupError:
             return
     else:
-        # Windows: direct child only until Step 3.1b-3 puts the
-        # subprocess into a Job Object.
+        # Windows: prefer the Job Object terminate path. If
+        # win_job is None we already recorded a runner_warning
+        # and accept that grandchildren may leak.
+        if win_job is not None:
+            try:
+                win_job.terminate()  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 - any Win32 failure becomes a leak risk we cannot avoid here
+                pass
         try:
             process.kill()
         except ProcessLookupError:
@@ -211,22 +237,26 @@ def _run_subprocess(
 
     * ``shell=False``, ``stdin=DEVNULL`` — same constraints, no shell
       interpolation, no interactive input.
-    * On timeout, the child is killed via :func:`_terminate_process`
-      (POSIX: SIGTERM-then-SIGKILL on the whole process group; Windows:
-      direct ``Popen.kill`` until 3.1b-3 swaps in Job Objects). The
-      captured-so-far output is returned with ``timed_out=True``.
+    * On timeout, the child (and its descendants, on a supported OS)
+      is killed via :func:`_terminate_process`. The captured-so-far
+      output is returned with ``timed_out=True``.
     * ``FileNotFoundError`` / ``PermissionError`` from Popen
       construction propagate to the caller, matching the old contract.
 
-    Process tree kill status (Step 3.1b-2 of 3 in this sub-cluster):
+    Process tree kill status (Step 3.1b-3 lands the Windows path):
 
     * POSIX: a new session via ``preexec_fn=os.setsid`` makes
       ``process.pid`` a process group leader. ``killpg`` then reaches
       every descendant **unless** the descendant has explicitly
       detached via its own ``setsid()`` — those willingly-orphaned
       processes are out of scope (framework-shape.md §5).
-    * Windows: still per-process. ``Popen.kill`` terminates the direct
-      child; grandchildren can survive until Step 3.1b-3.
+    * Windows: the child is created ``CREATE_SUSPENDED``, assigned to
+      a :class:`qgb.core._win_job.WindowsJob`, then resumed. Job
+      ``KILL_ON_JOB_CLOSE`` plus our explicit ``TerminateJobObject``
+      on timeout kill the entire tree. If Job Object setup fails
+      (nested job, privilege issue), we degrade to ``Popen.kill`` of
+      the direct child only AND populate ``runner_warning`` so the
+      stage log captures the asymmetry rather than hiding it.
 
     No 16 MiB output cap yet — Step 3.1c lands an active kill when
     either stream exceeds the cap.
@@ -242,6 +272,10 @@ def _run_subprocess(
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
     }
+
+    runner_warning: str | None = None
+    win_job = None
+
     if _IS_POSIX:
         # ``preexec_fn=os.setsid`` runs in the child after ``fork()``
         # but before ``exec``, making the child the leader of a new
@@ -252,12 +286,106 @@ def _run_subprocess(
         # qgb here because reader threads are started **after** Popen
         # returns; at the fork instant the parent is single-threaded.
         popen_kwargs["preexec_fn"] = os.setsid  # type: ignore[assignment]
+    else:
+        # Windows path: try to create a Job Object and start the
+        # child suspended so we can assign it before any grandchild
+        # spawns. If the job can't be created, runner_warning is set
+        # and the child runs without the job — grandchildren may leak
+        # in that case but the visible behaviour stays consistent.
+        from qgb.core._win_job import JobUnsupportedError, WindowsJob, is_supported
+
+        if is_supported():
+            try:
+                win_job = WindowsJob()
+            except JobUnsupportedError as exc:
+                runner_warning = (
+                    "windows job object unavailable; "
+                    "process tree kill degraded to direct-child only "
+                    f"({exc})"
+                )
+                win_job = None
+            if win_job is not None:
+                # CREATE_SUSPENDED so the child doesn't execute any
+                # code (and therefore can't spawn grandchildren) until
+                # we have assigned it to the job.
+                _CREATE_SUSPENDED = 0x00000004
+                popen_kwargs["creationflags"] = _CREATE_SUSPENDED
+        else:
+            runner_warning = (
+                "windows job object api unavailable; "
+                "process tree kill degraded to direct-child only"
+            )
 
     # Default buffered I/O (bufsize=-1) is what gives us ``BufferedReader``
     # on stdout/stderr — its ``read1`` returns whatever bytes are
     # available without waiting for a full buffer, which is what the
     # reader threads need for prompt progress.
     process = subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603 - argv list, shell=False
+
+    # Windows: assign-then-resume. If assign fails we still need to
+    # resume the child or it will hang forever; degrade to a warning
+    # and fall through.
+    if win_job is not None:
+        from qgb.core._win_job import JobUnsupportedError
+
+        try:
+            win_job.assign(process.pid)
+        except JobUnsupportedError as exc:
+            new_warning = (
+                "windows job object assign failed; "
+                "process tree kill degraded to direct-child only "
+                f"({exc})"
+            )
+            runner_warning = (
+                new_warning if runner_warning is None
+                else f"{runner_warning}; {new_warning}"
+            )
+            # Close the unused job so its KILL_ON_JOB_CLOSE doesn't
+            # surprise anyone — it's empty anyway.
+            win_job.close()
+            win_job = None
+        # Resume the child's main thread now that the job is set up
+        # (or failed setup is logged). Popen on Windows stashes the
+        # primary-thread handle on a private attribute.
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            # ``_handle`` is a Popen private; on CPython for Windows
+            # it's a ``subprocess.Handle`` (an int subclass). We get
+            # the thread handle from ``process._handle`` via the
+            # documented Popen attribute ``_handle`` — but Popen also
+            # exposes the main thread handle as ``_handle`` is the
+            # process handle; the main thread handle is private under
+            # ``_thread_handle`` since 3.13 / ``_handle`` is the process.
+            # We use the value Popen captured for ResumeThread.
+            thread_handle = getattr(process, "_handle_thread", None)
+            if thread_handle is None:
+                # 3.11/3.12 expose the thread handle as
+                # ``process._handle`` is the *process* and the *main
+                # thread handle* is on the private subprocess.STARTUPINFO
+                # mechanism. The safest portable approach is to call
+                # OpenThread on process.pid → main thread, but Popen
+                # already kept the handle: ``process._handle`` is the
+                # process handle, not the thread handle, and stdlib
+                # closes the thread handle after CREATE_SUSPENDED only
+                # if we do not pass it. To resume reliably we instead
+                # use the well-known ``NtResumeProcess``-equivalent:
+                # call ResumeThread on every thread of the process. To
+                # avoid this complexity entirely we use OpenThread on
+                # the main thread id, which we get from the snapshot.
+                _resume_via_main_thread(kernel32, process.pid)
+            else:
+                kernel32.ResumeThread(thread_handle)
+        except Exception as exc:  # noqa: BLE001
+            new_warning = (
+                "windows resume thread failed; child may be stuck "
+                f"suspended ({exc})"
+            )
+            runner_warning = (
+                new_warning if runner_warning is None
+                else f"{runner_warning}; {new_warning}"
+            )
 
     stdout_sink = bytearray()
     stderr_sink = bytearray()
@@ -289,7 +417,7 @@ def _run_subprocess(
         returncode = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
-        _terminate_process(process)
+        _terminate_process(process, win_job=win_job)
         # wait() again so the OS reaps the zombie and reader threads
         # see EOF on the now-closed pipes. No timeout on the second
         # wait because the child has been signalled to die.
@@ -301,6 +429,11 @@ def _run_subprocess(
     out_thread.join(timeout=5)
     err_thread.join(timeout=5)
 
+    # Closing the job triggers KILL_ON_JOB_CLOSE for any straggler
+    # processes; safe to call even after explicit TerminateJobObject.
+    if win_job is not None:
+        win_job.close()
+
     stdout_text = bytes(stdout_sink).decode("utf-8", errors="replace")
     stderr_text = bytes(stderr_sink).decode("utf-8", errors="replace")
 
@@ -309,7 +442,61 @@ def _run_subprocess(
         stdout=stdout_text,
         stderr=stderr_text,
         timed_out=timed_out,
+        runner_warning=runner_warning,
     )
+
+
+def _resume_via_main_thread(kernel32, pid: int) -> None:
+    """Open the main thread of ``pid`` and call ResumeThread on it.
+
+    Used as a fallback when Popen doesn't expose the main thread
+    handle (CPython 3.11+ behaviour). We walk the toolhelp snapshot
+    for the first thread belonging to the process and resume it.
+    Any error here is fatal to the suspended child; the caller
+    surfaces it via ``runner_warning``.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    _TH32CS_SNAPTHREAD = 0x00000004
+    _THREAD_SUSPEND_RESUME = 0x0002
+
+    class _THREADENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ThreadID", wintypes.DWORD),
+            ("th32OwnerProcessID", wintypes.DWORD),
+            ("tpBasePri", wintypes.LONG),
+            ("tpDeltaPri", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPTHREAD, 0)
+    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+        raise OSError("CreateToolhelp32Snapshot failed")
+
+    try:
+        entry = _THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(_THREADENTRY32)
+        ok = kernel32.Thread32First(snapshot, ctypes.byref(entry))
+        while ok:
+            if entry.th32OwnerProcessID == pid:
+                kernel32.OpenThread.restype = wintypes.HANDLE
+                thread_handle = kernel32.OpenThread(
+                    _THREAD_SUSPEND_RESUME, False, entry.th32ThreadID
+                )
+                if thread_handle:
+                    try:
+                        kernel32.ResumeThread(thread_handle)
+                        return
+                    finally:
+                        kernel32.CloseHandle(thread_handle)
+            ok = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
+        raise OSError(f"no threads found for pid {pid}")
+    finally:
+        kernel32.CloseHandle(snapshot)
 
 
 def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
