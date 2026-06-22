@@ -236,17 +236,24 @@ def build_gate_document(
                 }
             )
             continue
-        stages_payload.append(
-            {
-                "id": r.stage_id,
-                "name": r.name,
-                "result": r.result,
-                "verification_type": r.verification_type,
-                "exit_code": r.exit_code,
-                "contract_ref": r.contract_ref,
-                "log_ref": f"stages/{r.stage_id}.log",
-            }
-        )
+        stage_entry: dict[str, Any] = {
+            "id": r.stage_id,
+            "name": r.name,
+            "result": r.result,
+            "verification_type": r.verification_type,
+            "exit_code": r.exit_code,
+            "contract_ref": r.contract_ref,
+            "log_ref": f"stages/{r.stage_id}.log",
+        }
+        # Step 3.1c: only emit reason / runner_warning when they were
+        # populated by the runner. Keeping them absent on natural-exit
+        # stages preserves byte-compatibility with pre-3.1c gate.json
+        # files and avoids cluttering the curated audit log.
+        if r.reason is not None:
+            stage_entry["reason"] = r.reason
+        if r.runner_warning is not None:
+            stage_entry["runner_warning"] = r.runner_warning
+        stages_payload.append(stage_entry)
 
     paths: dict[str, Any] = {"run_dir": run_dir_rel}
     if curated_latest_rel is not None:

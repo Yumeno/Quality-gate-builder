@@ -38,7 +38,12 @@ from pathlib import Path
 
 import pytest
 
-from qgb.core.command import _COMMAND_DEFAULT_TIMEOUT_SECONDS, _run_subprocess
+from qgb.core.command import (
+    _COMMAND_DEFAULT_TIMEOUT_SECONDS,
+    _COMMAND_EXECUTION_CAP_BYTES,
+    _COMMAND_LOG_TAIL_CAP_BYTES,
+    _run_subprocess,
+)
 
 _HEARTBEAT_PAUSE_SECONDS = 2.0
 
@@ -195,6 +200,105 @@ def test_windows_kill_reaches_grandchildren(tmp_path: Path) -> None:
 def test_timeout_constant_unchanged() -> None:
     """Sanity: the public default timeout is still 60 s."""
     assert _COMMAND_DEFAULT_TIMEOUT_SECONDS == 60
+
+
+def test_cap_constants_step3_1c() -> None:
+    """Step 3.1c: execution cap = 16 MiB, log tail cap = 64 KiB.
+
+    These values appear in framework-shape.md §5 and the gate.runtime
+    schema reason enum; pin them so accidental edits show up as a
+    regression.
+    """
+    assert _COMMAND_EXECUTION_CAP_BYTES == 16 * 1024 * 1024
+    assert _COMMAND_LOG_TAIL_CAP_BYTES == 64 * 1024
+
+
+def _cap_overflow_script(stream: str, target_bytes: int) -> str:
+    """Source for a Python child that prints ``target_bytes`` to ``stream``.
+
+    We write in 1 MiB chunks via ``sys.stdout.buffer.write`` /
+    ``sys.stderr.buffer.write`` to bypass text-mode buffering and
+    give the reader threads chunky observable progress. After the
+    burst the child sleeps for a long time so the cap-driven kill —
+    not natural exit — is what terminates it.
+    """
+    assert stream in ("stdout", "stderr")
+    return (
+        "import sys, time\n"
+        f"stream = sys.{stream}.buffer\n"
+        "chunk = b'x' * (1024 * 1024)\n"
+        f"remaining = {target_bytes}\n"
+        "while remaining > 0:\n"
+        "    write = chunk if remaining >= len(chunk) else chunk[:remaining]\n"
+        "    stream.write(write)\n"
+        "    stream.flush()\n"
+        "    remaining -= len(write)\n"
+        "time.sleep(60)\n"
+    )
+
+
+def test_stdout_cap_exceeded_kills_and_reports(tmp_path: Path) -> None:
+    """Step 3.1c: stdout > 16 MiB triggers tree kill with structured reason."""
+    target = _COMMAND_EXECUTION_CAP_BYTES + 2 * 1024 * 1024  # 18 MiB
+
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", _cap_overflow_script("stdout", target)],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=30.0,  # generous; cap should fire well before this
+    )
+
+    assert result.reason == "stdout_cap_exceeded", (
+        f"expected reason=stdout_cap_exceeded, got reason={result.reason!r} "
+        f"(timed_out={result.timed_out}, "
+        f"stdout_len={len(result.stdout)}, stderr_len={len(result.stderr)})"
+    )
+    # The exact byte count after kill is non-deterministic (depends on
+    # how many writes raced past the cap), but we always saw at least
+    # one full cap's worth.
+    assert len(result.stdout.encode("utf-8", errors="replace")) >= _COMMAND_EXECUTION_CAP_BYTES
+
+
+def test_stderr_cap_exceeded_kills_and_reports(tmp_path: Path) -> None:
+    """Step 3.1c: stderr > 16 MiB triggers tree kill with stderr reason."""
+    target = _COMMAND_EXECUTION_CAP_BYTES + 2 * 1024 * 1024
+
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", _cap_overflow_script("stderr", target)],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=30.0,
+    )
+
+    assert result.reason == "stderr_cap_exceeded", (
+        f"expected reason=stderr_cap_exceeded, got reason={result.reason!r}"
+    )
+    assert len(result.stderr.encode("utf-8", errors="replace")) >= _COMMAND_EXECUTION_CAP_BYTES
+
+
+def test_nominal_run_emits_no_reason(tmp_path: Path) -> None:
+    """A normal exit must leave reason=None so audits aren't false-positive."""
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", "print('hello'); print('world')"],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=5.0,
+    )
+    assert result.reason is None
+    assert not result.timed_out
+    assert result.returncode == 0
+
+
+def test_timeout_emits_command_timeout_reason(tmp_path: Path) -> None:
+    """Timeout path: reason=command_timeout, timed_out=True (back-compat alias)."""
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", "import time; time.sleep(60)"],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=1.0,
+    )
+    assert result.timed_out is True
+    assert result.reason == "command_timeout"
 
 
 @pytest.mark.skipif(

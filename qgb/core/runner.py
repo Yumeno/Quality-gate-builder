@@ -46,7 +46,24 @@ StageOutcome = Literal["passed", "failed", "waived"]
 
 @dataclass(frozen=True)
 class StageResult:
-    """In-memory outcome of running a single adopted stage."""
+    """In-memory outcome of running a single adopted stage.
+
+    Step 3.1c added two optional structured fields that flow through
+    to gate.json:
+
+    * ``reason`` — machine enum (``command_timeout`` /
+      ``stdout_cap_exceeded`` / ``stderr_cap_exceeded``). Present only
+      when the runner had to actively terminate the process tree.
+    * ``runner_warning`` — human-readable note when a degraded kill
+      path was used (Windows Job Object setup failed, descendants
+      may leak). Caller surfaces this in evidence.py so audit reviews
+      can find compromised stages by string-searching gate.json.
+
+    Both fields default to None so non-command stages
+    (``file_exists`` / ``substring_match`` / ``json_schema``) need not
+    populate them. evidence.py omits absent fields from gate.json,
+    keeping byte-compatibility with pre-3.1c gates.
+    """
 
     stage_id: str
     name: str
@@ -55,6 +72,8 @@ class StageResult:
     result: StageOutcome
     exit_code: int | None
     log_text: str
+    reason: str | None = None
+    runner_warning: str | None = None
 
 
 # ---------------------------------------------------------------------------

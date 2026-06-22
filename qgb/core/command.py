@@ -13,16 +13,18 @@ Sub-step status:
 * Step 3.1b-1 (DONE) — switched to ``subprocess.Popen`` + reader threads.
 * Step 3.1b-2 (DONE) — POSIX process group kill via
   ``preexec_fn=os.setsid`` + ``killpg``.
-* Step 3.1b-3 (this sub-step) — Windows process tree kill via
-  :class:`qgb.core._win_job.WindowsJob`. Child is created
-  ``CREATE_SUSPENDED``, assigned to the job, then resumed — so it
-  cannot spawn unassigned grandchildren even momentarily. If Job
-  Object setup fails (nested job / privilege issue), we degrade to
-  the old ``Popen.kill`` path AND surface a ``runner_warning`` field
-  on :class:`_SubprocessResult` so the gate.json log captures the
-  asymmetry rather than hiding it (Codex 指摘: P7 証跡優先).
-* Step 3.1c — 16 MiB execution cap, separate from the 64 KiB log tail
-  (run_subprocess switches to bytes counters + active kill).
+* Step 3.1b-3 (DONE) — Windows process tree kill via
+  :class:`qgb.core._win_job.WindowsJob`. ``runner_warning`` field on
+  :class:`_SubprocessResult` records Job Object setup failures so
+  fallback to direct-child kill is auditable.
+* Step 3.1c (this sub-step) — 16 MiB per-stream execution cap. Reader
+  threads watch their sink size and signal :class:`threading.Event`
+  on overflow; the supervisor in :func:`_run_subprocess` then runs
+  the same kill path as a timeout. Stream name is recorded in
+  :attr:`_SubprocessResult.reason` so the log can tell stdout
+  overflow from stderr overflow. Reason enum covers every non-passing
+  exit so the gate.runtime schema gets a finite machine-readable set
+  (Codex 指摘: P7 構造化フィールド).
 * Step 3.1d — ``.bat`` / ``.cmd`` argument escaping (cmd.exe
   metacharacters + MSVCRT argv parsing, two distinct escapers).
 
@@ -51,17 +53,36 @@ if TYPE_CHECKING:
     from qgb.core.runner import StageOutcome, StageResult
 
 
-# Per-stream output cap (Codex 計画レビュー: 64 KiB, tail-prioritised).
-# Failure tracebacks tend to appear at the tail of stderr, so we keep the
-# last bytes of each stream rather than the first.
-_COMMAND_STREAM_CAP_BYTES = 64 * 1024
+# Step 3.1c (Codex 指摘で 2 つの cap を明示分離):
+#
+# * EXECUTION cap is what the reader threads enforce on the live
+#   process. Once stdout OR stderr reaches 16 MiB we kill the process
+#   tree to prevent a runaway command from exhausting qgb's RAM.
+#   The cap is **per stream**, not summed: a noisy stderr should not
+#   eat the budget that lets stdout finish a 12 MiB pytest summary.
+# * LOG_TAIL cap is what we serialise to gate.json / stage logs.
+#   Tracebacks tend to live at the tail, so we keep the trailing
+#   64 KiB of each stream rather than the first bytes.
+#
+# Worst-case retained-in-RAM under cap: stdout 16 MiB + stderr 16 MiB
+# + log construction overhead ≈ 35 MiB. This is the explicit ceiling
+# the docs and framework-shape §5 quote.
+_COMMAND_EXECUTION_CAP_BYTES = 16 * 1024 * 1024
+_COMMAND_LOG_TAIL_CAP_BYTES = 64 * 1024
+
+# Back-compat alias for code that imports the old name; tests pin this
+# constant value. Step 3.1c-internal code uses _COMMAND_LOG_TAIL_CAP_BYTES
+# for clarity.
+_COMMAND_STREAM_CAP_BYTES = _COMMAND_LOG_TAIL_CAP_BYTES
+
 _COMMAND_DEFAULT_TIMEOUT_SECONDS = 60
 
 
 # Step 3.1b-1: switch to Popen + reader threads. The chunk size is the
 # usual subprocess pipe granularity; it balances syscall overhead and
-# wakeup latency. Larger values matter once Step 3.1c adds a 16 MiB
-# execution cap and we need to notice overruns promptly.
+# wakeup latency. Step 3.1c needs to notice overruns within ~one
+# chunk's worth of bytes so 64 KiB keeps overshoot well under the
+# 16 MiB cap.
 _READER_CHUNK_BYTES = 64 * 1024
 
 
@@ -72,38 +93,68 @@ _READER_CHUNK_BYTES = 64 * 1024
 # field — Step 3.1d-and-later may make it configurable if needed.
 _POSIX_KILL_GRACE_SECONDS = 3.0
 
+# Step 3.1c: how often the supervisor polls cap_event and process
+# exit while wait()-ing in the long-running path. Same order as
+# _POSIX_KILL_GRACE_SECONDS poll granularity — enough latency budget
+# for ~16 MiB overshoot at sub-ms detection.
+_CAP_POLL_INTERVAL_SECONDS = 0.1
+
 _IS_POSIX = os.name == "posix"
+
+
+# Step 3.1c: structured exit reasons surfaced through
+# _SubprocessResult.reason. None means "child exited normally; check
+# returncode for pass/fail." These strings will appear in
+# gate.runtime.stages[].reason once the schema is extended (Task 26),
+# so the values themselves are part of the gate.json contract — do
+# not rename without a schema migration.
+_REASON_COMMAND_TIMEOUT = "command_timeout"
+_REASON_STDOUT_CAP_EXCEEDED = "stdout_cap_exceeded"
+_REASON_STDERR_CAP_EXCEEDED = "stderr_cap_exceeded"
 
 
 @dataclass(frozen=True)
 class _SubprocessResult:
     """In-memory outcome of a single subprocess invocation.
 
-    ``timed_out`` is True iff :func:`_run_subprocess` had to kill the
-    child because its ``timeout`` expired. ``returncode`` may be a
-    signal-like negative number on POSIX in that case; on Windows the
-    Popen ``kill`` translates to an arbitrary positive code. Callers
-    should treat ``timed_out`` as the authoritative flag and use
-    ``returncode`` only when ``timed_out`` is False.
-
     ``stdout`` / ``stderr`` are utf-8 decoded text. Decode errors are
     replaced (not raised) so a stage cannot crash on a bad byte in a
     user command's output — the bytes-to-text loss is the price we pay
-    for putting binary-ish output into a markdown log.
+    for putting binary-ish output into a markdown log. Note that the
+    bytes are **already capped at 16 MiB per stream** by the reader
+    threads (Step 3.1c); the further 64 KiB tail truncation in
+    :func:`run_command` is for log readability, not RAM safety.
+
+    ``timed_out`` is True iff the supervisor had to kill the child
+    because its ``timeout`` expired (it is a convenience alias for
+    ``reason == "command_timeout"`` — kept distinct for back-compat
+    with tests that pin ``timed_out`` directly).
+
+    Step 3.1c: ``reason`` is a structured machine-readable exit code:
+
+    * ``None`` — child exited naturally; consult ``returncode``.
+    * ``"command_timeout"`` — wall-clock timeout fired.
+    * ``"stdout_cap_exceeded"`` — stdout reached 16 MiB.
+    * ``"stderr_cap_exceeded"`` — stderr reached 16 MiB.
+
+    Future runners may add codes for spawn / internal failures, but
+    those are currently surfaced via exception-flow (caller's
+    ``except FileNotFoundError`` etc.), not via ``reason``.
 
     Step 3.1b-3: ``runner_warning`` is a structured field set when the
     Windows Job Object setup degraded to the per-process kill fallback
     (typically because the qgb host process is itself inside an
     incompatible Job Object). ``None`` means "no warnings, kill path
-    was the full strength one for this platform." Step 3.1c will lift
-    this into a gate.runtime structured field so audit logs can be
-    searched.
+    was the full strength one for this platform." Step 3.1c lifts
+    this and ``reason`` into a gate.runtime structured field so audit
+    logs can be searched.
     """
 
     returncode: int
     stdout: str
     stderr: str
     timed_out: bool
+    reason: str | None = None
     runner_warning: str | None = None
 
 
@@ -122,22 +173,48 @@ def _tail_truncate(text: str, cap: int) -> tuple[str, bool]:
     return tail_bytes.decode("utf-8", errors="ignore"), True
 
 
-def _drain_stream(stream: BinaryIO, sink: bytearray) -> None:
-    """Read every byte from ``stream`` into ``sink`` until EOF.
+def _drain_stream(
+    stream: BinaryIO,
+    sink: bytearray,
+    cap_bytes: int,
+    cap_event: threading.Event,
+    stream_name: str,
+    overflow_record: list[str],
+) -> None:
+    """Read every byte from ``stream`` into ``sink`` until EOF or cap hit.
 
     Used as a reader-thread target. We accept the raw bytes here (no
     per-thread decode) so multi-byte boundaries are not silently split
     between thread chunks — the full bytes are decoded once at the end
-    in :func:`_run_subprocess`. The ``readinto1``-style ``read1`` call
-    blocks only on the pipe, not on EOF/exit, so the thread quits
-    promptly when the child closes its end (kill or natural exit).
+    in :func:`_run_subprocess`. The ``read1`` call blocks only on the
+    pipe, not on EOF/exit, so the thread quits promptly when the child
+    closes its end (kill or natural exit).
+
+    Step 3.1c: once the sink reaches ``cap_bytes``, the thread sets
+    ``cap_event`` and appends the offending stream name to
+    ``overflow_record`` (a list used as a thread-safe one-shot signal —
+    Python list append is atomic under the GIL). The thread then keeps
+    draining so the child does not block on a full pipe — the
+    supervisor in :func:`_run_subprocess` is responsible for issuing
+    the kill, after which the read1 will return b"" and the thread
+    exits. Excess bytes ARE appended past ``cap_bytes`` so the log can
+    still show the last 64 KiB; the supervisor only cares that the
+    cap was crossed at least once.
     """
+    overflow_recorded = False
     try:
         while True:
             chunk = stream.read1(_READER_CHUNK_BYTES)
             if not chunk:
                 return
             sink.extend(chunk)
+            if not overflow_recorded and len(sink) >= cap_bytes:
+                # First crossing wins. We do this before .set() so the
+                # supervisor sees a populated overflow_record by the
+                # time it inspects cap_event.
+                overflow_record.append(stream_name)
+                overflow_recorded = True
+                cap_event.set()
     finally:
         # Step 3.1b-1: closing the pipe end on this side is safe even
         # when the child has already exited. The Popen wrapper closes
@@ -258,8 +335,11 @@ def _run_subprocess(
       the direct child only AND populate ``runner_warning`` so the
       stage log captures the asymmetry rather than hiding it.
 
-    No 16 MiB output cap yet — Step 3.1c lands an active kill when
-    either stream exceeds the cap.
+    Step 3.1c: each reader thread enforces a 16 MiB per-stream
+    execution cap. Crossing the cap sets a shared
+    :class:`threading.Event`; the supervisor loop polls both that
+    event and the process exit and kills the tree on overflow with
+    ``reason="stdout_cap_exceeded"`` / ``"stderr_cap_exceeded"``.
     """
     # OS-specific Popen kwargs. ``preexec_fn`` is POSIX-only and would
     # raise ``ValueError`` on Windows if passed at all, so we build the
@@ -397,26 +477,84 @@ def _run_subprocess(
     assert process.stdout is not None
     assert process.stderr is not None
 
+    # Step 3.1c: shared cap-event + overflow_record (first stream name
+    # to cross the cap). overflow_record is a list because list.append
+    # under the GIL is atomic enough for our single-writer-per-thread
+    # use; the supervisor only reads it after cap_event is set.
+    cap_event = threading.Event()
+    overflow_record: list[str] = []
+
     out_thread = threading.Thread(
         target=_drain_stream,
-        args=(process.stdout, stdout_sink),
+        args=(
+            process.stdout,
+            stdout_sink,
+            _COMMAND_EXECUTION_CAP_BYTES,
+            cap_event,
+            "stdout",
+            overflow_record,
+        ),
         name="qgb-cmd-stdout-reader",
         daemon=True,
     )
     err_thread = threading.Thread(
         target=_drain_stream,
-        args=(process.stderr, stderr_sink),
+        args=(
+            process.stderr,
+            stderr_sink,
+            _COMMAND_EXECUTION_CAP_BYTES,
+            cap_event,
+            "stderr",
+            overflow_record,
+        ),
         name="qgb-cmd-stderr-reader",
         daemon=True,
     )
     out_thread.start()
     err_thread.start()
 
+    # Step 3.1c: supervise the wait. Three terminating conditions:
+    #
+    #   1. ``process.wait`` returns: child exited (natural or already
+    #      kicked by some external signal).
+    #   2. cap_event fires: one of the reader threads has crossed the
+    #      16 MiB sink limit. We kill, then wait() to reap.
+    #   3. deadline expires: classic timeout. We kill, then wait().
+    #
+    # We poll on ``_CAP_POLL_INTERVAL_SECONDS`` granularity rather than
+    # using a single ``wait(timeout=...)`` so cap detection latency is
+    # bounded — otherwise an overflow could sit unactioned for up to
+    # the full ``timeout_seconds``.
     timed_out = False
-    try:
-        returncode = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+    cap_exceeded_stream: str | None = None
+    deadline = time.monotonic() + timeout_seconds
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        if cap_event.is_set():
+            # First-wins ordering: drain_stream appended before .set(),
+            # so the list has at least one element.
+            cap_exceeded_stream = overflow_record[0]
+            break
+        # Wait up to whichever is smaller: cap-poll interval or the
+        # remaining deadline. This bounds both detection latencies.
+        wait_for = min(_CAP_POLL_INTERVAL_SECONDS, remaining)
+        try:
+            returncode = process.wait(timeout=wait_for)
+            break  # natural exit
+        except subprocess.TimeoutExpired:
+            continue
+    else:
+        # ``while True`` never falls through, but mypy / readers may
+        # appreciate a marker for the no-natural-exit branches above
+        returncode = None  # type: ignore[unreachable]
+
+    # Branch consolidation: if either timeout or cap fired we need to
+    # kill the tree and reap.
+    if timed_out or cap_exceeded_stream is not None:
         _terminate_process(process, win_job=win_job)
         # wait() again so the OS reaps the zombie and reader threads
         # see EOF on the now-closed pipes. No timeout on the second
@@ -437,11 +575,24 @@ def _run_subprocess(
     stdout_text = bytes(stdout_sink).decode("utf-8", errors="replace")
     stderr_text = bytes(stderr_sink).decode("utf-8", errors="replace")
 
+    # Pick the structured reason. Cap overflow takes precedence over
+    # timeout: a cap was actually crossed even if the timeout also
+    # happens to be expired by the time we get here.
+    if cap_exceeded_stream == "stdout":
+        reason: str | None = _REASON_STDOUT_CAP_EXCEEDED
+    elif cap_exceeded_stream == "stderr":
+        reason = _REASON_STDERR_CAP_EXCEEDED
+    elif timed_out:
+        reason = _REASON_COMMAND_TIMEOUT
+    else:
+        reason = None
+
     return _SubprocessResult(
         returncode=returncode,
         stdout=stdout_text,
         stderr=stderr_text,
         timed_out=timed_out,
+        reason=reason,
         runner_warning=runner_warning,
     )
 
@@ -646,14 +797,69 @@ def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
             log_text="\n".join(log_lines) + "\n",
         )
 
-    if sub_result.timed_out:
+    # Step 3.1c: runner-side anomalies surface as ``reason`` codes.
+    # Cap overflow takes precedence over timeout (a cap exceeded by
+    # the very last chunk also tends to trip the timeout once kill
+    # propagates). The runner_warning, when present, is appended to
+    # every non-passing path so the gate.json log retains the
+    # Job-Object-fallback signal.
+    if sub_result.reason in (
+        _REASON_STDOUT_CAP_EXCEEDED,
+        _REASON_STDERR_CAP_EXCEEDED,
+    ):
+        stream_name = (
+            "stdout"
+            if sub_result.reason == _REASON_STDOUT_CAP_EXCEEDED
+            else "stderr"
+        )
+        cap_mib = _COMMAND_EXECUTION_CAP_BYTES // (1024 * 1024)
         out_tail, out_trunc = _tail_truncate(
-            sub_result.stdout, _COMMAND_STREAM_CAP_BYTES
+            sub_result.stdout, _COMMAND_LOG_TAIL_CAP_BYTES
         )
         err_tail, err_trunc = _tail_truncate(
-            sub_result.stderr, _COMMAND_STREAM_CAP_BYTES
+            sub_result.stderr, _COMMAND_LOG_TAIL_CAP_BYTES
+        )
+        log_lines.append(
+            f"{stream_name} exceeded {cap_mib} MiB execution cap; "
+            "process tree killed"
+        )
+        log_lines.append(f"reason: {sub_result.reason}")
+        if sub_result.runner_warning:
+            log_lines.append(f"runner_warning: {sub_result.runner_warning}")
+        log_lines.append(
+            f"stdout ({'truncated, tail only' if out_trunc else 'full'}):"
+        )
+        log_lines.append(out_tail)
+        log_lines.append(
+            f"stderr ({'truncated, tail only' if err_trunc else 'full'}):"
+        )
+        log_lines.append(err_tail)
+        log_lines.append(
+            f"result: failed ({stream_name} exceeded {cap_mib} MiB)"
+        )
+        return StageResult(
+            stage_id=stage.stage_id,
+            name=stage.name,
+            verification_type=stage.verification_type,
+            contract_ref=stage.contract_ref,
+            result="failed",
+            exit_code=None,
+            log_text="\n".join(log_lines) + "\n",
+            reason=sub_result.reason,
+            runner_warning=sub_result.runner_warning,
+        )
+
+    if sub_result.timed_out:
+        out_tail, out_trunc = _tail_truncate(
+            sub_result.stdout, _COMMAND_LOG_TAIL_CAP_BYTES
+        )
+        err_tail, err_trunc = _tail_truncate(
+            sub_result.stderr, _COMMAND_LOG_TAIL_CAP_BYTES
         )
         log_lines.append(f"timeout after {timeout_seconds}s")
+        log_lines.append(f"reason: {_REASON_COMMAND_TIMEOUT}")
+        if sub_result.runner_warning:
+            log_lines.append(f"runner_warning: {sub_result.runner_warning}")
         log_lines.append(
             f"stdout ({'truncated, tail only' if out_trunc else 'full'}):"
         )
@@ -671,15 +877,19 @@ def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
             result="failed",
             exit_code=None,
             log_text="\n".join(log_lines) + "\n",
+            reason=sub_result.reason,
+            runner_warning=sub_result.runner_warning,
         )
 
     out_tail, out_trunc = _tail_truncate(
-        sub_result.stdout, _COMMAND_STREAM_CAP_BYTES
+        sub_result.stdout, _COMMAND_LOG_TAIL_CAP_BYTES
     )
     err_tail, err_trunc = _tail_truncate(
-        sub_result.stderr, _COMMAND_STREAM_CAP_BYTES
+        sub_result.stderr, _COMMAND_LOG_TAIL_CAP_BYTES
     )
     log_lines.append(f"exit_code: {sub_result.returncode}")
+    if sub_result.runner_warning:
+        log_lines.append(f"runner_warning: {sub_result.runner_warning}")
     log_lines.append(
         f"stdout ({'truncated, tail only' if out_trunc else 'full'}):"
     )
@@ -707,4 +917,6 @@ def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
         result=outcome,
         exit_code=int(sub_result.returncode),
         log_text="\n".join(log_lines) + "\n",
+        reason=sub_result.reason,
+        runner_warning=sub_result.runner_warning,
     )

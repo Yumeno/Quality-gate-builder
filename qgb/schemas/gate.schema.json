@@ -150,6 +150,20 @@
             "type": "string",
             "minLength": 1
           },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "command_timeout",
+              "stdout_cap_exceeded",
+              "stderr_cap_exceeded"
+            ],
+            "description": "Step 3.1c: machine-readable reason for a non-passing command stage. Optional — present only when qgb.core.command had to terminate the process tree (timeout or 16 MiB per-stream execution cap). Absent for natural exits regardless of exit_code. Enum values are part of the gate.json contract; new codes require a schema migration."
+          },
+          "runner_warning": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Step 3.1b-3 / 3.1c: free-text record of degraded kill paths (e.g. Windows Job Object setup failed → grandchildren may leak). Optional — when present, indicates the gate's audit trail has a known weakness on this stage that no machine could compensate for. Search for non-null runner_warning in basis audits to find compromised stages."
+          },
           "synthetic": {
             "type": "boolean",
             "description": "Step 6+7 統合レビュー RA1: true when the evidence builder synthesised this entry because the runner produced no result for the adopted stage. Distinguishes runner-integrity gaps from normal stage failures."
