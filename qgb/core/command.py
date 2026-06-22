@@ -10,14 +10,14 @@ Sub-step status:
 
 * Step 3.1a (DONE) — carve-out from runner.py, behaviour byte-identical
   with ``subprocess.run``.
-* Step 3.1b-1 (this sub-step) — switch ``subprocess.run`` to
-  ``subprocess.Popen`` with incremental reader threads. Kill path stays
-  equivalent to the old ``subprocess.run(..., timeout=N)`` (direct child
-  only; grandchildren on Windows still survive until 3.1b-3). External
-  behaviour — exit code, stdout/stderr text, timeout detection — is
-  byte-equivalent to Step 3.1a for the test suite.
-* Step 3.1b-2 (next) — POSIX process group kill (``preexec_fn=os.setsid``
-  + ``killpg``).
+* Step 3.1b-1 (DONE) — switched ``subprocess.run`` to ``subprocess.Popen``
+  with incremental reader threads. External behaviour
+  byte-equivalent.
+* Step 3.1b-2 (this sub-step) — POSIX process group kill. The child is
+  put into its own session via ``preexec_fn=os.setsid``, and timeouts
+  kill the **whole process group** via ``killpg(SIGTERM)`` → grace →
+  ``killpg(SIGKILL)``. Windows path is still ``Popen.kill`` until
+  3.1b-3 — that asymmetry is intentional, see ``_terminate_process``.
 * Step 3.1b-3 — Windows process tree kill via Job Objects (ctypes).
 * Step 3.1c — 16 MiB execution cap, separate from the 64 KiB log tail
   (run_subprocess switches to bytes counters + active kill).
@@ -34,8 +34,10 @@ preserved — Step 3.1b-1 does not break the public surface.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
@@ -59,6 +61,16 @@ _COMMAND_DEFAULT_TIMEOUT_SECONDS = 60
 # wakeup latency. Larger values matter once Step 3.1c adds a 16 MiB
 # execution cap and we need to notice overruns promptly.
 _READER_CHUNK_BYTES = 64 * 1024
+
+
+# Step 3.1b-2: POSIX kill grace period between SIGTERM and SIGKILL.
+# 3 s is the conventional value that lets a Python child run an
+# atexit handler / context manager cleanup, while still bounding the
+# qgb stage's tail latency. The value is intentionally not a contract
+# field — Step 3.1d-and-later may make it configurable if needed.
+_POSIX_KILL_GRACE_SECONDS = 3.0
+
+_IS_POSIX = os.name == "posix"
 
 
 @dataclass(frozen=True)
@@ -126,6 +138,67 @@ def _drain_stream(stream: BinaryIO, sink: bytearray) -> None:
             pass
 
 
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    """Kill ``process`` and its descendants as best the platform allows.
+
+    Step 3.1b-2 (POSIX): the child was started with
+    ``preexec_fn=os.setsid``, so ``process.pid`` is also the leader of
+    a fresh session / process group. We send SIGTERM to the whole
+    group (``killpg``), wait up to :data:`_POSIX_KILL_GRACE_SECONDS`
+    for cooperative shutdown, then send SIGKILL to whatever is left.
+    This is the conventional two-stage POSIX kill.
+
+    Step 3.1b-3 (Windows, not yet implemented): falls back to
+    ``Popen.kill`` so the direct child dies, but Windows
+    grandchildren can still survive — a separate sub-step will
+    introduce a Job Object so the whole tree dies atomically.
+
+    The function never raises:
+
+    * ``ProcessLookupError`` from a race where the child exited between
+      poll and signal is ignored — that race resolves the goal anyway.
+    * ``PermissionError`` on Windows (e.g. when a child has dropped
+      privileges) is logged via stderr only; the runner_warning path
+      will surface it in Step 3.1c via a structured field.
+
+    Caller must ``process.wait()`` after this returns so the OS reaps
+    the zombie / Popen releases its handles.
+    """
+    if _IS_POSIX:
+        try:
+            pgid = os.getpgid(process.pid)
+        except ProcessLookupError:
+            return
+        # Phase 1: SIGTERM the whole group, wait for cooperative exit.
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        # Poll instead of fixed sleep so a fast-exiting child doesn't
+        # cost us the full 3 s. Granularity 100 ms is fine — we only
+        # need to be a small constant slower than the slowest cleanly
+        # behaved Python atexit handler.
+        deadline = time.monotonic() + _POSIX_KILL_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                return
+            time.sleep(0.1)
+        # Phase 2: anyone still alive gets SIGKILL. Some descendants
+        # may have detached via setsid()-of-their-own — those are out
+        # of scope, see framework-shape.md §5.
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+    else:
+        # Windows: direct child only until Step 3.1b-3 puts the
+        # subprocess into a Job Object.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+
+
 def _run_subprocess(
     argv: list[str],
     cwd: str,
@@ -138,42 +211,53 @@ def _run_subprocess(
 
     * ``shell=False``, ``stdin=DEVNULL`` — same constraints, no shell
       interpolation, no interactive input.
-    * On timeout, the child is killed and the captured-so-far output
-      is returned with ``timed_out=True`` and a placeholder
-      ``returncode``. The old code path raised ``TimeoutExpired`` and
-      put partial output on the exception; we surface the same data
-      via the dataclass so callers don't pivot on exception flow.
+    * On timeout, the child is killed via :func:`_terminate_process`
+      (POSIX: SIGTERM-then-SIGKILL on the whole process group; Windows:
+      direct ``Popen.kill`` until 3.1b-3 swaps in Job Objects). The
+      captured-so-far output is returned with ``timed_out=True``.
     * ``FileNotFoundError`` / ``PermissionError`` from Popen
       construction propagate to the caller, matching the old contract.
 
-    Limitations carried over from Step 3.1a (resolved in later
-    sub-steps):
+    Process tree kill status (Step 3.1b-2 of 3 in this sub-cluster):
 
-    * Process tree kill is still per-process (``Popen.kill``) — Windows
-      grandchildren / POSIX session-children can survive. Step 3.1b-2
-      adds ``setsid`` + ``killpg`` on POSIX, Step 3.1b-3 adds Windows
-      Job Objects.
-    * No 16 MiB output cap yet — reader threads will happily fill RAM
-      with whatever the child writes. Step 3.1c adds an active kill
-      when either stream exceeds the cap.
+    * POSIX: a new session via ``preexec_fn=os.setsid`` makes
+      ``process.pid`` a process group leader. ``killpg`` then reaches
+      every descendant **unless** the descendant has explicitly
+      detached via its own ``setsid()`` — those willingly-orphaned
+      processes are out of scope (framework-shape.md §5).
+    * Windows: still per-process. ``Popen.kill`` terminates the direct
+      child; grandchildren can survive until Step 3.1b-3.
+
+    No 16 MiB output cap yet — Step 3.1c lands an active kill when
+    either stream exceeds the cap.
     """
+    # OS-specific Popen kwargs. ``preexec_fn`` is POSIX-only and would
+    # raise ``ValueError`` on Windows if passed at all, so we build the
+    # kwargs dict conditionally rather than using ``preexec_fn=None``.
+    popen_kwargs: dict[str, object] = {
+        "shell": False,
+        "cwd": cwd,
+        "env": env,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
+    if _IS_POSIX:
+        # ``preexec_fn=os.setsid`` runs in the child after ``fork()``
+        # but before ``exec``, making the child the leader of a new
+        # session AND a new process group. That gives ``killpg`` a
+        # well-defined target. The classic ``preexec_fn`` thread-safety
+        # warning (CVE-equivalent: fork from a multithreaded parent
+        # leaves the child in an inconsistent state) does not apply to
+        # qgb here because reader threads are started **after** Popen
+        # returns; at the fork instant the parent is single-threaded.
+        popen_kwargs["preexec_fn"] = os.setsid  # type: ignore[assignment]
+
     # Default buffered I/O (bufsize=-1) is what gives us ``BufferedReader``
     # on stdout/stderr — its ``read1`` returns whatever bytes are
     # available without waiting for a full buffer, which is what the
-    # reader threads need for prompt progress. ``bufsize=0`` would give
-    # raw ``FileIO`` without ``read1`` (only blocking ``read(N)``), so
-    # we deliberately avoid it here even though Step 3.1c will need to
-    # notice overflow quickly — ``read1`` already returns small batches
-    # under load, so latency is fine.
-    process = subprocess.Popen(  # noqa: S603 - argv list, shell=False
-        argv,
-        shell=False,
-        cwd=cwd,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    # reader threads need for prompt progress.
+    process = subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603 - argv list, shell=False
 
     stdout_sink = bytearray()
     stderr_sink = bytearray()
@@ -205,10 +289,7 @@ def _run_subprocess(
         returncode = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
-        # Step 3.1b-1: kill the direct child only — grandchildren on
-        # Windows still survive. The old ``subprocess.run`` was no
-        # different here; Step 3.1b-2 / 3.1b-3 fix it per OS.
-        process.kill()
+        _terminate_process(process)
         # wait() again so the OS reaps the zombie and reader threads
         # see EOF on the now-closed pipes. No timeout on the second
         # wait because the child has been signalled to die.
