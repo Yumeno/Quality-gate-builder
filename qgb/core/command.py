@@ -396,11 +396,29 @@ def _run_subprocess(
                 "process tree kill degraded to direct-child only"
             )
 
+    # Step 3.1d: Windows ``.bat`` / ``.cmd`` argument escaping.
+    # ``subprocess.list2cmdline`` (used by Popen on Windows when args
+    # is a list) only quotes when whitespace or ``"`` is present;
+    # cmd.exe metacharacters (& | < > % ...) are left bare, so
+    # passing ``["a & b"]`` to a ``.bat`` would invoke a second
+    # command. For ``.bat`` / ``.cmd`` we build the command line
+    # ourselves (with metacharacter-aware quoting) and pass it to
+    # Popen as a single string — Popen on Windows then forwards the
+    # string verbatim to ``CreateProcessW`` instead of re-quoting it.
+    # For non-``.bat`` targets we keep the original argv-list path,
+    # which is correct for plain ``.exe`` / interpreter invocations.
+    from qgb.core._win_bat_escape import build_command_line, needs_bat_escaping
+
+    if needs_bat_escaping(argv):
+        spawn_args: list[str] | str = build_command_line(argv)
+    else:
+        spawn_args = argv
+
     # Default buffered I/O (bufsize=-1) is what gives us ``BufferedReader``
     # on stdout/stderr — its ``read1`` returns whatever bytes are
     # available without waiting for a full buffer, which is what the
     # reader threads need for prompt progress.
-    process = subprocess.Popen(argv, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603 - argv list, shell=False
+    process = subprocess.Popen(spawn_args, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603 - argv list or pre-built cmdline, shell=False
 
     # Windows: assign-then-resume. If assign fails we still need to
     # resume the child or it will hang forever; degrade to a warning
