@@ -1,0 +1,77 @@
+# qgb test CI (Phase 3 Step 3.1e, 2026-06-23).
+#
+# Design rationale:
+#
+# - **Why a CI at all?** Step 3.1 applies qgb's own philosophy P6
+#   ("LLM 単独 ALLOW 禁止") to qgb itself: "Windows ローカルで pytest が
+#   通った" だけでは POSIX 経路の証跡にならない。CI 緑 = 機械的判定
+#   (P7 再現可能証跡). See development/docs/journal/phase3-step3-1-prejournal.md
+#   "1. なぜ CI 雛形を本 Step に含めるのか".
+#
+# - **Matrix minimality (Codex 指摘で 3.10 + 3.12 二端のみ).** Python
+#   3.11 を省く判断は P11 (ALLOW の比較不可能性 = OS × version 組合せ
+#   ごとに別判定) と整合。Phase 5 提供前に 3.11 追加を再判断する予定。
+#
+# - **third-party action ゼロ (NF-011).** actions/checkout + actions/setup-python
+#   のみ GitHub 公式。Dependabot/Renovate なし、SHA pin 手動更新、
+#   pin 更新規約は SECURITY.md で明文化済。
+#
+# - **secrets 不使用 / permissions: contents: read.** この CI は読み取り
+#   専用なので token leak リスクを最小化。persist-credentials: false
+#   で checkout が token を残さないようにする (Codex 指摘)。
+#
+# - **timeout-minutes: 20.** Step 3.1c の 16 MiB cap + process tree kill
+#   が機能してもなお stuck した場合の最終ガード (Codex 指摘)。
+#
+# - **pull_request_target 不使用.** PR 由来コードに read 以上を与えない
+#   (Codex 指摘); on.pull_request のみ。
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      # actions/checkout v7.0.0 (2026-06-18) — SHA pin per SECURITY.md
+      # "Action SHA Pin Policy". Update via the procedure documented
+      # there; do not bump silently.
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      # actions/setup-python v6.2.0 (2026-01-22) — SHA pin per SECURITY.md.
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install qgb (editable, with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Show resolved environment
+        run: |
+          python --version
+          pip --version
+          pip list
+
+      - name: Run pytest
+        run: pytest -ra

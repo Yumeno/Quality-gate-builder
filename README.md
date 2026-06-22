@@ -2,12 +2,12 @@
 
 `quality-gate-builder` (`qgb`) generates trace-based quality gates for arbitrary target projects: REQ documents, machine-checkable contracts, layered verification stages, evidence, and ALLOW/DENY decisions.
 
-This repository is the **Phase 1 MVP** of qgb. Stable behaviour is not yet guaranteed.
+Stable behaviour is not yet guaranteed.
 
 ## Status
 
-- Phase 1 implementation tracked in [Issue #14](https://github.com/Yumeno/Quality-gate-builder/issues/14).
-- Current step: Step 0 (project skeleton).
+- Phase 1 (Python CLI MVP) and Phase 2 (編集を安全にする) completed.
+- Phase 3 (機械責務側の最終整備) in progress; see `development/docs/journal/` for the latest Step.
 
 ## Documentation
 
@@ -18,6 +18,7 @@ This repository is the **Phase 1 MVP** of qgb. Stable behaviour is not yet guara
 - [`development/docs/project-background.md`](development/docs/project-background.md) — Project background.
 - [`development/docs/wakaba-talk-summary.md`](development/docs/wakaba-talk-summary.md) — Summary of the originating talk.
 - [`development/docs/yaoyorozu-system-references.md`](development/docs/yaoyorozu-system-references.md) — Reference implementation notes.
+- [`SECURITY.md`](SECURITY.md) — CI action SHA pin policy + vulnerability reporting.
 
 ## Installation (development)
 
