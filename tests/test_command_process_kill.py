@@ -42,6 +42,7 @@ from qgb.core.command import (
     _COMMAND_DEFAULT_TIMEOUT_SECONDS,
     _COMMAND_EXECUTION_CAP_BYTES,
     _COMMAND_LOG_TAIL_CAP_BYTES,
+    _CapExceededState,
     _run_subprocess,
 )
 
@@ -370,4 +371,61 @@ def test_windows_nominal_run_emits_no_runner_warning(tmp_path: Path) -> None:
     assert result.runner_warning is None, (
         "Windows nominal run should not emit a runner_warning. "
         f"Got: {result.runner_warning!r}"
+    )
+
+
+# ---- _CapExceededState 単体テスト (補修 #5) ----------------------------------
+
+
+def test_cap_state_initial_is_not_set() -> None:
+    """補修 #5: 新規状態は未到達 (中間ステートが存在しない出発点)."""
+    state = _CapExceededState()
+    assert state.is_set() is False
+    assert state.name is None
+
+
+def test_cap_state_first_set_wins() -> None:
+    """補修 #5: first-wins セマンティクスを 1 オブジェクトで保証."""
+    state = _CapExceededState()
+    assert state.try_set("stdout") is True
+    assert state.is_set() is True
+    assert state.name == "stdout"
+
+    # 2 回目以降は False、name は変化しない
+    assert state.try_set("stderr") is False
+    assert state.name == "stdout"
+
+
+def test_cap_state_set_atomicity_under_threads() -> None:
+    """補修 #5: 並行 try_set でも name が必ず確定値、None ではない.
+
+    旧設計 (cap_event + overflow_record[0]) はこの不変条件を GIL 依存
+    で暗黙的に保っていた。_CapExceededState は Lock で明示的に保つ。
+
+    本テストは 100 スレッドが同時に try_set("stdout") / try_set("stderr")
+    を呼ぶシナリオで「is_set() が True なのに name が None」という
+    中間ステートが観測されないことを assert する。
+    """
+    import threading as _th
+
+    state = _CapExceededState()
+    barrier = _th.Barrier(100)
+
+    def attempt(name: str) -> None:
+        barrier.wait()
+        state.try_set(name)
+
+    threads = []
+    for i in range(100):
+        name = "stdout" if i % 2 == 0 else "stderr"
+        t = _th.Thread(target=attempt, args=(name,))
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+
+    # is_set が True なら name は必ず stdout か stderr (None でない)
+    assert state.is_set() is True
+    assert state.name in ("stdout", "stderr"), (
+        f"intermediate state observed: is_set=True but name={state.name!r}"
     )

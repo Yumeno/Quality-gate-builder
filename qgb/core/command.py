@@ -99,7 +99,7 @@ _READER_CHUNK_BYTES = 64 * 1024
 # field — Step 3.1d-and-later may make it configurable if needed.
 _POSIX_KILL_GRACE_SECONDS = 3.0
 
-# Step 3.1c: how often the supervisor polls cap_event and process
+# Step 3.1c: how often the supervisor polls cap_state and process
 # exit while wait()-ing in the long-running path. Same order as
 # _POSIX_KILL_GRACE_SECONDS poll granularity — enough latency budget
 # for ~16 MiB overshoot at sub-ms detection.
@@ -164,6 +164,52 @@ class _SubprocessResult:
     runner_warning: str | None = None
 
 
+class _CapExceededState:
+    """First-wins cap overflow signal — name + flag を 1 オブジェクトに統合.
+
+    Step 3.1 補修 #5 (philosophy P7 + P9 + 「入らない設計」, Codex r2 指摘):
+
+    旧設計は ``threading.Event`` (= flag) と ``list[str]`` (= stream
+    name 蓄積) の 2 変数で「cap exceeded 状態」を表現していた。これは
+    「event 立っているのに stream name が読めない」中間ステートを
+    GIL の挙動に依存して回避する暗黙的な設計だった (`append` 後に
+    ``set`` する順序契約)。
+
+    本クラスは 1 オブジェクトで:
+    - ``name`` (str | None): 先着の stream 名
+    - ``is_set()``: 越えたかどうか
+    - ``try_set(name)``: first-wins で stream 名を記録
+
+    を ``Lock`` で保護する。「中間ステート」が **言語仕様レベルで
+    存在しない** 設計。GIL の atomic-append 挙動への依存もなくなる
+    ので、将来の free-threading 化 (PEP 703) にも耐性。
+
+    Lock の取得コストは _drain_stream あたり最大 1 回 (first-wins で
+    set 後は判定スキップ) なので runtime 影響は無視できる範囲。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._name: str | None = None
+
+    def try_set(self, name: str) -> bool:
+        """First call sets the name and returns True; later calls return False."""
+        with self._lock:
+            if self._name is None:
+                self._name = name
+                return True
+            return False
+
+    @property
+    def name(self) -> str | None:
+        """Stream name that first crossed the cap, or None if not crossed yet."""
+        return self._name
+
+    def is_set(self) -> bool:
+        """True iff some stream has crossed the cap."""
+        return self._name is not None
+
+
 def _tail_truncate(text: str, cap: int) -> tuple[str, bool]:
     """Truncate ``text`` to its trailing ``cap`` bytes (utf-8 safe enough).
 
@@ -183,9 +229,8 @@ def _drain_stream(
     stream: BinaryIO,
     sink: bytearray,
     cap_bytes: int,
-    cap_event: threading.Event,
+    cap_state: _CapExceededState,
     stream_name: str,
-    overflow_record: list[str],
 ) -> None:
     """Read every byte from ``stream`` into ``sink`` until EOF or cap hit.
 
@@ -196,16 +241,18 @@ def _drain_stream(
     pipe, not on EOF/exit, so the thread quits promptly when the child
     closes its end (kill or natural exit).
 
-    Step 3.1c: once the sink reaches ``cap_bytes``, the thread sets
-    ``cap_event`` and appends the offending stream name to
-    ``overflow_record`` (a list used as a thread-safe one-shot signal —
-    Python list append is atomic under the GIL). The thread then keeps
-    draining so the child does not block on a full pipe — the
-    supervisor in :func:`_run_subprocess` is responsible for issuing
-    the kill, after which the read1 will return b"" and the thread
-    exits. Excess bytes ARE appended past ``cap_bytes`` so the log can
-    still show the last 64 KiB; the supervisor only cares that the
-    cap was crossed at least once.
+    Step 3.1 補修 #5: cap 状態を ``_CapExceededState`` に統合
+    (旧 ``cap_event`` + ``overflow_record`` 2 変数の race-prone な
+    分離を排除)。``cap_state.try_set(stream_name)`` が first-wins
+    で stream 名と flag を 1 命令で確定させる。
+
+    The thread keeps draining after a cap crossing so the child does
+    not block on a full pipe — the supervisor in
+    :func:`_run_subprocess` is responsible for issuing the kill, after
+    which the read1 will return b"" and the thread exits. Excess
+    bytes ARE appended past ``cap_bytes`` so the log can still show
+    the last 64 KiB; the supervisor only cares that the cap was
+    crossed at least once.
     """
     overflow_recorded = False
     try:
@@ -215,12 +262,11 @@ def _drain_stream(
                 return
             sink.extend(chunk)
             if not overflow_recorded and len(sink) >= cap_bytes:
-                # First crossing wins. We do this before .set() so the
-                # supervisor sees a populated overflow_record by the
-                # time it inspects cap_event.
-                overflow_record.append(stream_name)
+                # First-wins: try_set returns True only for the first
+                # caller. False means another stream already won; we
+                # still mark our local flag so we don't keep checking.
+                cap_state.try_set(stream_name)
                 overflow_recorded = True
-                cap_event.set()
     finally:
         # Step 3.1b-1: closing the pipe end on this side is safe even
         # when the child has already exited. The Popen wrapper closes
@@ -465,12 +511,9 @@ def _run_subprocess(
     assert process.stdout is not None
     assert process.stderr is not None
 
-    # Step 3.1c: shared cap-event + overflow_record (first stream name
-    # to cross the cap). overflow_record is a list because list.append
-    # under the GIL is atomic enough for our single-writer-per-thread
-    # use; the supervisor only reads it after cap_event is set.
-    cap_event = threading.Event()
-    overflow_record: list[str] = []
+    # Step 3.1 補修 #5: cap 状態を _CapExceededState に統合
+    # (旧 cap_event + overflow_record 2 変数の race-prone な分離を消す)。
+    cap_state = _CapExceededState()
 
     out_thread = threading.Thread(
         target=_drain_stream,
@@ -478,9 +521,8 @@ def _run_subprocess(
             process.stdout,
             stdout_sink,
             _COMMAND_EXECUTION_CAP_BYTES,
-            cap_event,
+            cap_state,
             "stdout",
-            overflow_record,
         ),
         name="qgb-cmd-stdout-reader",
         daemon=True,
@@ -491,9 +533,8 @@ def _run_subprocess(
             process.stderr,
             stderr_sink,
             _COMMAND_EXECUTION_CAP_BYTES,
-            cap_event,
+            cap_state,
             "stderr",
-            overflow_record,
         ),
         name="qgb-cmd-stderr-reader",
         daemon=True,
@@ -509,7 +550,7 @@ def _run_subprocess(
     #   1. ``process.poll()`` が None でない → natural exit
     #      (子が既に死んでいるなら、deadline 到達でも timeout 扱いに
     #      しない — gate.json が "死んでいたのに timeout" を語らない)
-    #   2. ``cap_event`` set → cap exceeded
+    #   2. ``cap_state.is_set()`` → cap exceeded
     #   3. ``time.monotonic() >= deadline`` → timeout
     #      (子が生きている and 時間切れ、で確定)
     #
@@ -531,10 +572,10 @@ def _run_subprocess(
             # ここに吸収される。
             returncode = rc
             break
-        if cap_event.is_set():
-            # 状態 2: cap exceeded。drain_stream が overflow_record を
-            # append してから .set() しているので [0] は必ず存在。
-            cap_exceeded_stream = overflow_record[0]
+        if cap_state.is_set():
+            # 状態 2: cap exceeded。_CapExceededState.try_set が Lock
+            # 保護されているため、name は常に確定値 (None でない)。
+            cap_exceeded_stream = cap_state.name
             break
         if time.monotonic() >= deadline:
             # 状態 3: timeout。子が生きている and 時間切れ、で確定。
