@@ -189,24 +189,29 @@ def build_command_line(argv: list[str]) -> str:
     The result is suitable for ``subprocess.Popen(args=string,
     shell=False)`` on Windows.
 
-    For each non-argv-0 item we apply **both** Windows-side layers:
+    For **every** argv item (including argv[0], the script path), we
+    apply the appropriate Windows quoting:
 
-    1. The cmd.exe carat pass (``^`` before each ``& | < > ( ) % ^``)
-       — this protects against cmd.exe metacharacter scanning which
-       happens **even inside** the quoted region when the target is
-       a ``.bat`` / ``.cmd`` (see Microsoft's "everyone quotes
-       arguments the wrong way" article; the cmd.exe-as-intermediary
-       case is the load-bearing scenario).
-    2. The MSVCRT quoting pass (:func:`escape_argv_for_msvcrt`) —
-       this protects against argv splitting and escapes ``"``
-       characters per CRT rules.
+    * ``argv[0]`` runs through :func:`escape_argv_for_msvcrt` only.
+      The script path can contain spaces (``C:\\Program Files\\...``)
+      so MSVCRT quoting is required to keep CreateProcessW's argv
+      parsing from splitting it. The carat pass is skipped because
+      the script extension (``.bat`` / ``.cmd``) itself never
+      contains cmd.exe metacharacters; carat-prefixing would corrupt
+      the path lookup.
+    * ``argv[1:]`` runs through **both** layers (carat → MSVCRT, in
+      that order). The carat pass (``^`` before each ``& | < > ( ) % ^``)
+      neutralises cmd.exe metacharacter scanning which happens even
+      inside quoted regions when the target is a ``.bat`` / ``.cmd``
+      (Microsoft's "everyone quotes arguments the wrong way"
+      scenario). The MSVCRT pass then protects against argv splitting.
 
-    Order matters: the carat MUST run first so the ``^`` characters
-    it introduces are inside the quoted region that the MSVCRT pass
-    creates. If we applied MSVCRT first, the carat pass would prefix
-    the surrounding ``"`` and corrupt the token.
-
-    ``argv[0]`` (the script path) is left untouched.
+    Step 3.1 補修 #4 (philosophy P8 + NF-007 + 「入らない設計」):
+    旧実装は head を unquoted で結合していたため、``C:\\Program Files
+    \\MyTool\\run.bat`` のようなスペース入りパスで argv 分割が起き、
+    別 .exe が起動される脆弱性があった (command injection と同質)。
+    head/tail で扱いが違う特殊ステートを消し、「全 argv に均一な
+    quoting policy を適用する」設計に統一した。
 
     Empty argv → empty string (caller is expected to check
     ``needs_bat_escaping`` first; calling with an empty argv would
@@ -214,7 +219,11 @@ def build_command_line(argv: list[str]) -> str:
     """
     if not argv:
         return ""
-    head = argv[0]
+    # Step 3.1 補修 #4: head にも MSVCRT quoting を適用。スペース入りの
+    # script path (例: C:\Program Files\MyTool\run.bat) でも argv 分割
+    # されない。carat pass は head には不要 (script extension が
+    # metacharacter を含まないため)。
+    head = escape_argv_for_msvcrt(argv[0])
     escaped_tail: list[str] = []
     for a in argv[1:]:
         carat_escaped = _carat_escape_metacharacters(a)

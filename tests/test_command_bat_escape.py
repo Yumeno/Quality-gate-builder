@@ -201,6 +201,33 @@ def test_build_command_line_empty_argv() -> None:
     assert build_command_line([]) == ""
 
 
+def test_build_command_line_head_with_spaces_is_quoted() -> None:
+    """補修 #4 回帰防止: argv[0] (script path) にスペースがあれば quote.
+
+    旧実装は head を unquoted で結合していたため、
+    ``C:\\Program Files\\MyTool\\run.bat`` のような path で argv 分割が
+    起き、CreateProcessW が ``C:\\Program`` を実行ファイル扱いして
+    別 .exe が起動される脆弱性があった。head にも MSVCRT quoting
+    を適用することで、Windows 標準インストール先のパスでも安全に
+    動作する。
+    """
+    cl = build_command_line([r"C:\Program Files\MyTool\run.bat"])
+    assert cl == '"C:\\Program Files\\MyTool\\run.bat"'
+
+
+def test_build_command_line_head_with_spaces_and_tail() -> None:
+    """補修 #4 回帰防止: head にスペース + tail も同時にあるケース."""
+    cl = build_command_line(
+        [r"C:\Program Files\x\run.bat", "alpha", "beta with space"]
+    )
+    assert cl == '"C:\\Program Files\\x\\run.bat" alpha "beta with space"'
+
+
+def test_build_command_line_head_without_spaces_unchanged() -> None:
+    """head にスペース・metachar が無ければ MSVCRT quoting は no-op."""
+    assert build_command_line(["run.bat", "arg"]) == "run.bat arg"
+
+
 # ---- end-to-end: real .bat fixture (Windows only) ------------------------
 
 
@@ -317,6 +344,60 @@ def test_bat_fixture_no_command_injection(tmp_path: Path) -> None:
     assert lines == ["argv[1]=foo & whoami"], (
         "command injection slipped past .bat escaping; "
         f"stdout: {result.stdout!r}"
+    )
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="End-to-end .bat fixture is Windows-only; POSIX has no cmd.exe.",
+)
+def test_bat_fixture_runs_from_path_with_spaces(tmp_path: Path) -> None:
+    """補修 #4 回帰防止: スペースを含む script path でも正しく起動できる.
+
+    旧実装は build_command_line が head (argv[0]) を unquoted で結合
+    していたため、``C:\\Program Files\\...\\run.bat`` のような Windows
+    標準インストール先パスを指定すると、CreateProcessW が argv[0] を
+    ``C:\\Program`` と解釈し、別の実行ファイルを起動する脆弱性が
+    あった。head にも MSVCRT quoting を適用する補修 #4 により、
+    スペース入りパスでも安全に動作する。
+
+    本テストは fixture script を **意図的にスペース入りディレクトリ**
+    に置き、qgb から正常起動 + 引数 round-trip を end-to-end で検証。
+    """
+    from qgb.core.command import _run_subprocess
+
+    nested_dir = tmp_path / "dir with spaces"
+    nested_dir.mkdir()
+    bat = nested_dir / "echo args.bat"
+    bat.write_text(_BAT_ECHO_SCRIPT, encoding="ascii")
+
+    payload = ["alpha", "beta with space", "gamma & delta"]
+
+    result = _run_subprocess(
+        argv=[str(bat), *payload],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=15.0,
+    )
+
+    assert not result.timed_out, (
+        f"script in spaced path hung — stderr={result.stderr!r}"
+    )
+    assert result.returncode == 0, (
+        f"script in spaced path failed to start (returncode="
+        f"{result.returncode}); stdout={result.stdout!r}, "
+        f"stderr={result.stderr!r}. This is the 補修 #4 regression "
+        "signal: head was probably built unquoted."
+    )
+
+    received: list[str] = []
+    for line in result.stdout.splitlines():
+        if "=" not in line or not line.startswith("argv["):
+            continue
+        received.append(line.split("=", 1)[1])
+    assert received == payload, (
+        "args did not round-trip from spaced path; "
+        f"sent={payload}, received={received}, stdout={result.stdout!r}"
     )
 
 
