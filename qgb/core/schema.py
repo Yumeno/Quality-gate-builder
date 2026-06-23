@@ -8,8 +8,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import resources
-from importlib.resources.abc import Traversable
 from typing import Any
+
+# Step 3.1e: ``Traversable`` lives in ``importlib.resources.abc`` on
+# Python >= 3.12, but only in ``importlib.abc`` on 3.10 / 3.11 (the
+# resources.abc submodule does not exist there). pyproject.toml says
+# requires-python = ">=3.10", so we have to support both. The
+# importlib.abc location is deprecated in 3.12+ and slated for
+# removal in 3.14 — until 3.12 becomes the floor, the runtime probe
+# below is the supported pattern.
+try:
+    from importlib.resources.abc import Traversable
+except ImportError:  # Python < 3.12
+    from importlib.abc import Traversable
 
 import jsonschema
 from jsonschema import Draft202012Validator, FormatChecker
