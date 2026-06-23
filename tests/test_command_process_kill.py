@@ -276,6 +276,50 @@ def test_stderr_cap_exceeded_kills_and_reports(tmp_path: Path) -> None:
     assert len(result.stderr.encode("utf-8", errors="replace")) >= _COMMAND_EXECUTION_CAP_BYTES
 
 
+def test_no_false_positive_timeout_when_child_exits_near_deadline(
+    tmp_path: Path,
+) -> None:
+    """補修 #1 回帰防止: 子が deadline 直前に exit したら natural exit 扱い.
+
+    旧 supervisor 設計 (``remaining <= 0`` を ``process.wait`` 前に判定)
+    では、deadline まで残り 100 ms 未満の窓で子が exit すると、次の
+    ループ先頭で ``remaining`` が負になり ``timed_out=True`` が立っ
+    てしまう false-positive ステートがあった。補修 #1 で 3 状態
+    直交分割 (poll → cap → deadline) にしたため、子が死んでいれば
+    必ず natural exit に倒れる。本テストはこの不変条件を回帰的に守る。
+
+    実装ノート: 子に「timeout の 90% を sleep してから exit」させる
+    ことで、確率的に deadline 直前 exit を引き起こす。固定 sleep の
+    値は OS scheduler の jitter を踏まえて selected。
+    """
+    timeout = 1.0
+    sleep_target = 0.9  # timeout の 90% スリープしてから exit
+    src = (
+        "import time\n"
+        f"time.sleep({sleep_target})\n"
+        "print('done')\n"
+    )
+
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", src],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=timeout,
+    )
+
+    # 子は exit している = natural exit 経路
+    assert result.timed_out is False, (
+        "child exited normally near deadline but supervisor reported "
+        f"timed_out=True (reason={result.reason!r}). The 3-state "
+        "orthogonal supervisor must prefer natural exit over deadline."
+    )
+    assert result.reason is None, (
+        f"reason should be None on natural exit, got {result.reason!r}"
+    )
+    assert result.returncode == 0
+    assert "done" in result.stdout
+
+
 def test_nominal_run_emits_no_reason(tmp_path: Path) -> None:
     """A normal exit must leave reason=None so audits aren't false-positive."""
     result = _run_subprocess(

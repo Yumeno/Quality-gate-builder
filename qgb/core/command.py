@@ -531,44 +531,49 @@ def _run_subprocess(
     out_thread.start()
     err_thread.start()
 
-    # Step 3.1c: supervise the wait. Three terminating conditions:
+    # Step 3.1 補修 #1 (philosophy P7: 再現可能な証跡の徹底):
+    # supervisor loop の状態を 3 つに直交分割する。
     #
-    #   1. ``process.wait`` returns: child exited (natural or already
-    #      kicked by some external signal).
-    #   2. cap_event fires: one of the reader threads has crossed the
-    #      16 MiB sink limit. We kill, then wait() to reap.
-    #   3. deadline expires: classic timeout. We kill, then wait().
+    # 各 iteration の先頭で確定的に 1 状態を判定する優先順:
     #
-    # We poll on ``_CAP_POLL_INTERVAL_SECONDS`` granularity rather than
-    # using a single ``wait(timeout=...)`` so cap detection latency is
-    # bounded — otherwise an overflow could sit unactioned for up to
-    # the full ``timeout_seconds``.
+    #   1. ``process.poll()`` が None でない → natural exit
+    #      (子が既に死んでいるなら、deadline 到達でも timeout 扱いに
+    #      しない — gate.json が "死んでいたのに timeout" を語らない)
+    #   2. ``cap_event`` set → cap exceeded
+    #   3. ``time.monotonic() >= deadline`` → timeout
+    #      (子が生きている and 時間切れ、で確定)
+    #
+    # これにより 3 状態が排他になり、「死んでいるのに timeout」が
+    # 論理的に到達不能になる。旧設計 (``remaining <= 0`` 先頭判定 +
+    # ``process.wait(timeout=...)`` の二段) は scheduler のタイミング
+    # 次第で false-positive timeout を生み得るステート空間を持ってい
+    # た — その空間自体を消す ("入らない設計", Codex 段 3 r2)。
     timed_out = False
     cap_exceeded_stream: str | None = None
+    returncode: int | None = None
     deadline = time.monotonic() + timeout_seconds
 
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            timed_out = True
+        rc = process.poll()
+        if rc is not None:
+            # 状態 1: natural exit。timed_out / cap_exceeded は False
+            # のまま確定。子が deadline 直前に exit したケースも
+            # ここに吸収される。
+            returncode = rc
             break
         if cap_event.is_set():
-            # First-wins ordering: drain_stream appended before .set(),
-            # so the list has at least one element.
+            # 状態 2: cap exceeded。drain_stream が overflow_record を
+            # append してから .set() しているので [0] は必ず存在。
             cap_exceeded_stream = overflow_record[0]
             break
-        # Wait up to whichever is smaller: cap-poll interval or the
-        # remaining deadline. This bounds both detection latencies.
-        wait_for = min(_CAP_POLL_INTERVAL_SECONDS, remaining)
-        try:
-            returncode = process.wait(timeout=wait_for)
-            break  # natural exit
-        except subprocess.TimeoutExpired:
-            continue
-    else:
-        # ``while True`` never falls through, but mypy / readers may
-        # appreciate a marker for the no-natural-exit branches above
-        returncode = None  # type: ignore[unreachable]
+        if time.monotonic() >= deadline:
+            # 状態 3: timeout。子が生きている and 時間切れ、で確定。
+            timed_out = True
+            break
+        # まだ判定できるシグナルなし。短く sleep して再 poll。
+        # _CAP_POLL_INTERVAL_SECONDS は 100 ms 程度で、cap 検出 latency
+        # と CPU 使用率のバランスを取った値。
+        time.sleep(_CAP_POLL_INTERVAL_SECONDS)
 
     # Branch consolidation: if either timeout or cap fired we need to
     # kill the tree and reap.
