@@ -167,7 +167,9 @@ class _SubprocessResult:
 class _CapExceededState:
     """First-wins cap overflow signal — name + flag を 1 オブジェクトに統合.
 
-    Step 3.1 補修 #5 (philosophy P7 + P9 + 「入らない設計」, Codex r2 指摘):
+    Step 3.1 補修 #5 (philosophy P7 + P9 + 「入らない設計」, Codex r2 指摘)
+    で導入。補修 #6 (Codex 段 5 r1) で **read も Lock 内** に揃え、
+    「説明と実装の同期境界」を一致させた。
 
     旧設計は ``threading.Event`` (= flag) と ``list[str]`` (= stream
     name 蓄積) の 2 変数で「cap exceeded 状態」を表現していた。これは
@@ -176,16 +178,17 @@ class _CapExceededState:
     ``set`` する順序契約)。
 
     本クラスは 1 オブジェクトで:
-    - ``name`` (str | None): 先着の stream 名
-    - ``is_set()``: 越えたかどうか
-    - ``try_set(name)``: first-wins で stream 名を記録
+    - ``try_set(name)``: first-wins で stream 名を記録 (Lock 内)
+    - ``snapshot()``: 現在の name を Lock 内で読む (None なら未到達)
+    - ``is_set()``: 越えたかどうか (snapshot のラッパー)
 
-    を ``Lock`` で保護する。「中間ステート」が **言語仕様レベルで
-    存在しない** 設計。GIL の atomic-append 挙動への依存もなくなる
-    ので、将来の free-threading 化 (PEP 703) にも耐性。
+    を ``Lock`` で保護する。「中間ステート」が **同期境界の中で完結**
+    する設計。GIL の atomic-write 挙動への依存もなくなるので、将来の
+    free-threading 化 (PEP 703) にも耐性。
 
     Lock の取得コストは _drain_stream あたり最大 1 回 (first-wins で
-    set 後は判定スキップ) なので runtime 影響は無視できる範囲。
+    set 後は判定スキップ) + supervisor / 最終判定での read 数回なので
+    runtime 影響は無視できる範囲。
     """
 
     def __init__(self) -> None:
@@ -200,14 +203,19 @@ class _CapExceededState:
                 return True
             return False
 
-    @property
-    def name(self) -> str | None:
-        """Stream name that first crossed the cap, or None if not crossed yet."""
-        return self._name
+    def snapshot(self) -> str | None:
+        """Return the stream name that first crossed the cap (Lock 内 read).
+
+        補修 #6 (Codex 段 5 r1): name / is_set を Lock 内で読むことで
+        「同期境界の中で読み書きが完結する」契約を明示化。CPython
+        GIL の object reference atomic-write に暗黙依存しない。
+        """
+        with self._lock:
+            return self._name
 
     def is_set(self) -> bool:
-        """True iff some stream has crossed the cap."""
-        return self._name is not None
+        """True iff some stream has crossed the cap (Lock 内 read)."""
+        return self.snapshot() is not None
 
 
 def _tail_truncate(text: str, cap: int) -> tuple[str, bool]:
@@ -542,62 +550,62 @@ def _run_subprocess(
     out_thread.start()
     err_thread.start()
 
-    # Step 3.1 補修 #1 (philosophy P7: 再現可能な証跡の徹底):
-    # supervisor loop の状態を 3 つに直交分割する。
+    # Step 3.1 補修 #1 + #6 (philosophy P7: 再現可能な証跡の徹底):
     #
-    # 各 iteration の先頭で確定的に 1 状態を判定する優先順:
+    # supervisor loop は **観測契機** のみを扱う。最終結果は reader
+    # thread を join した後に確定する (補修 #6 = Codex 段 5 r1 指摘で
+    # 「観測契機の優先順 ≠ 最終結果の優先順」と判明したため)。
     #
-    #   1. ``process.poll()`` が None でない → natural exit
-    #      (子が既に死んでいるなら、deadline 到達でも timeout 扱いに
-    #      しない — gate.json が "死んでいたのに timeout" を語らない)
-    #   2. ``cap_state.is_set()`` → cap exceeded
-    #   3. ``time.monotonic() >= deadline`` → timeout
-    #      (子が生きている and 時間切れ、で確定)
+    # supervisor 観測契機の優先順 (loop を抜けるトリガー):
     #
-    # これにより 3 状態が排他になり、「死んでいるのに timeout」が
-    # 論理的に到達不能になる。旧設計 (``remaining <= 0`` 先頭判定 +
-    # ``process.wait(timeout=...)`` の二段) は scheduler のタイミング
-    # 次第で false-positive timeout を生み得るステート空間を持ってい
-    # た — その空間自体を消す ("入らない設計", Codex 段 3 r2)。
-    timed_out = False
-    cap_exceeded_stream: str | None = None
-    returncode: int | None = None
+    #   A. ``process.poll()`` 非 None → 子が exit (kill 不要)
+    #   B. ``cap_state.is_set()`` → cap 越え (kill 必要)
+    #   C. ``time.monotonic() >= deadline`` → 時間切れ (kill 必要)
+    #
+    # この観測契機は **早期離脱の判定** であって、最終結果ではない。
+    # 例えば A で抜けた場合でも、その瞬間 reader thread が cap を
+    # まだ書き終えていない可能性があり、reader を join した時点で
+    # cap_state が真になるケースがある (child writes over cap →
+    # child exits quickly → supervisor が poll を先に観測する race)。
+    #
+    # 最終結果の優先順 (reader join 後に確定):
+    #
+    #   1. cap exceeded (出力 16 MiB 超過の事実が観測されたら、子の
+    #      exit/timeout に関係なく cap_exceeded を最終 reason に)
+    #   2. timeout (cap でない and 時間切れ)
+    #   3. natural exit
+    #
+    # この設計により「cap 越えていたのに natural exit 扱いになる」
+    # 状態が消える ("入らない設計", Codex 段 5 r1)。
+    observed_exit_rc: int | None = None  # supervisor A 観測時の rc
+    observed_timeout = False
+    needs_kill = False
     deadline = time.monotonic() + timeout_seconds
 
     while True:
         rc = process.poll()
         if rc is not None:
-            # 状態 1: natural exit。timed_out / cap_exceeded は False
-            # のまま確定。子が deadline 直前に exit したケースも
-            # ここに吸収される。
-            returncode = rc
+            observed_exit_rc = rc
             break
         if cap_state.is_set():
-            # 状態 2: cap exceeded。_CapExceededState.try_set が Lock
-            # 保護されているため、name は常に確定値 (None でない)。
-            cap_exceeded_stream = cap_state.name
+            needs_kill = True
             break
         if time.monotonic() >= deadline:
-            # 状態 3: timeout。子が生きている and 時間切れ、で確定。
-            timed_out = True
+            observed_timeout = True
+            needs_kill = True
             break
-        # まだ判定できるシグナルなし。短く sleep して再 poll。
-        # _CAP_POLL_INTERVAL_SECONDS は 100 ms 程度で、cap 検出 latency
-        # と CPU 使用率のバランスを取った値。
+        # 観測待ち sleep。_CAP_POLL_INTERVAL_SECONDS = 100 ms。
         time.sleep(_CAP_POLL_INTERVAL_SECONDS)
 
-    # Branch consolidation: if either timeout or cap fired we need to
-    # kill the tree and reap.
-    if timed_out or cap_exceeded_stream is not None:
+    # 観測 B / C の場合は kill が必要。observed_exit_rc は kill 後の
+    # wait で上書きされる (子は既に signal された状態)。
+    if needs_kill:
         _terminate_process(process, win_job=win_job)
-        # wait() again so the OS reaps the zombie and reader threads
-        # see EOF on the now-closed pipes. No timeout on the second
-        # wait because the child has been signalled to die.
-        returncode = process.wait()
+        observed_exit_rc = process.wait()
 
-    # Reader threads finish once Popen closes its pipe ends (natural
-    # exit OR kill). Join with a small grace period so even if a
-    # thread misses its EOF poll we don't leak.
+    # Reader threads は Popen が pipe を閉じるまで動き続ける (natural
+    # exit でも kill 後でも同じ)。join で完了を待ち、cap_state の
+    # 最終値を確定させる — これが「観測契機 ≠ 最終結果」の核心。
     out_thread.join(timeout=5)
     err_thread.join(timeout=5)
 
@@ -609,17 +617,25 @@ def _run_subprocess(
     stdout_text = bytes(stdout_sink).decode("utf-8", errors="replace")
     stderr_text = bytes(stderr_sink).decode("utf-8", errors="replace")
 
-    # Pick the structured reason. Cap overflow takes precedence over
-    # timeout: a cap was actually crossed even if the timeout also
-    # happens to be expired by the time we get here.
-    if cap_exceeded_stream == "stdout":
+    # 補修 #6: 最終結果は reader join 後に cap > timeout > natural exit
+    # の優先順で確定する。supervisor が natural exit を観測していても、
+    # reader thread が遅れて cap を確定させていれば cap が勝つ。
+    # cap_state.snapshot() を 1 回だけ取り出して使う (再呼び出しで Lock
+    # を無駄に取らない)。
+    final_cap_stream = cap_state.snapshot()
+    if final_cap_stream == "stdout":
         reason: str | None = _REASON_STDOUT_CAP_EXCEEDED
-    elif cap_exceeded_stream == "stderr":
+        timed_out = False
+    elif final_cap_stream == "stderr":
         reason = _REASON_STDERR_CAP_EXCEEDED
-    elif timed_out:
+        timed_out = False
+    elif observed_timeout:
         reason = _REASON_COMMAND_TIMEOUT
+        timed_out = True
     else:
         reason = None
+        timed_out = False
+    returncode = observed_exit_rc
 
     return _SubprocessResult(
         returncode=returncode,

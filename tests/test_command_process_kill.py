@@ -277,6 +277,63 @@ def test_stderr_cap_exceeded_kills_and_reports(tmp_path: Path) -> None:
     assert len(result.stderr.encode("utf-8", errors="replace")) >= _COMMAND_EXECUTION_CAP_BYTES
 
 
+def test_cap_exceeded_wins_over_quick_natural_exit(tmp_path: Path) -> None:
+    """補修 #6 回帰防止: cap 越え事実は natural exit より優先される.
+
+    旧 supervisor 設計 (補修 #1 のみ) は `poll → cap → deadline` を
+    観測契機としてそのまま最終結果に使っていた。これは Codex 段 5 r1
+    指摘の race を許す:
+
+        1. 子が cap を越えるだけ書いて即 exit
+        2. supervisor が次の iteration で poll() を観測 (natural exit)
+        3. その時点 reader thread はまだ cap を書き終えていない可能性
+        4. reader が遅れて cap_state.try_set() するが、もう supervisor は
+           natural exit で抜けている = reason=None で gate.json に
+           記録されてしまう (P7 「再現可能な証跡」違反)
+
+    補修 #6 は最終結果を reader join 後に再判定する: cap_state.snapshot()
+    が None でなければ「natural exit を観測していても cap_exceeded を
+    優先」する。
+
+    本テストは子に「16 MiB + α を一気に書いて即 exit」させる。reader
+    thread の drain 完了後に cap_state が確定するので、もし最終判定が
+    観測契機優先のままなら reason=None で fail する設計。
+    """
+    target = _COMMAND_EXECUTION_CAP_BYTES + 1 * 1024 * 1024  # 17 MiB
+    # 「書いて即 exit」スクリプト。time.sleep(60) は無し = 自然終了。
+    src = (
+        "import sys\n"
+        "stream = sys.stdout.buffer\n"
+        "chunk = b'x' * (1024 * 1024)\n"
+        f"remaining = {target}\n"
+        "while remaining > 0:\n"
+        "    write = chunk if remaining >= len(chunk) else chunk[:remaining]\n"
+        "    stream.write(write)\n"
+        "    remaining -= len(write)\n"
+        "# 明示的 flush なしで exit。Popen pipe close で reader は EOF を観測。\n"
+    )
+
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", src],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=30.0,
+    )
+
+    # 補修 #6 の核心 assert: cap が natural exit より優先される
+    assert result.reason == "stdout_cap_exceeded", (
+        f"reason should be stdout_cap_exceeded even if process exited "
+        f"quickly enough that supervisor observed natural exit first. "
+        f"Got reason={result.reason!r}, timed_out={result.timed_out}. "
+        "This is the Codex 段 5 r1 race signal."
+    )
+    assert result.timed_out is False
+    assert (
+        len(result.stdout.encode("utf-8", errors="replace"))
+        >= _COMMAND_EXECUTION_CAP_BYTES
+    )
+
+
 def test_no_false_positive_timeout_when_child_exits_near_deadline(
     tmp_path: Path,
 ) -> None:
@@ -381,29 +438,35 @@ def test_cap_state_initial_is_not_set() -> None:
     """補修 #5: 新規状態は未到達 (中間ステートが存在しない出発点)."""
     state = _CapExceededState()
     assert state.is_set() is False
-    assert state.name is None
+    assert state.snapshot() is None
 
 
 def test_cap_state_first_set_wins() -> None:
-    """補修 #5: first-wins セマンティクスを 1 オブジェクトで保証."""
+    """補修 #5: first-wins セマンティクスを 1 オブジェクトで保証.
+
+    補修 #6: name property を snapshot() に変更し、read も Lock 内で
+    完結させる契約に統一。
+    """
     state = _CapExceededState()
     assert state.try_set("stdout") is True
     assert state.is_set() is True
-    assert state.name == "stdout"
+    assert state.snapshot() == "stdout"
 
-    # 2 回目以降は False、name は変化しない
+    # 2 回目以降は False、snapshot は変化しない
     assert state.try_set("stderr") is False
-    assert state.name == "stdout"
+    assert state.snapshot() == "stdout"
 
 
 def test_cap_state_set_atomicity_under_threads() -> None:
-    """補修 #5: 並行 try_set でも name が必ず確定値、None ではない.
+    """補修 #5/#6: 並行 try_set でも snapshot が必ず確定値、None でない.
 
     旧設計 (cap_event + overflow_record[0]) はこの不変条件を GIL 依存
     で暗黙的に保っていた。_CapExceededState は Lock で明示的に保つ。
+    補修 #6 で read 側も Lock 内に揃え、Codex 段 5 r1 指摘の「同期
+    境界の内側で読み書きが完結する」契約を明示化。
 
     本テストは 100 スレッドが同時に try_set("stdout") / try_set("stderr")
-    を呼ぶシナリオで「is_set() が True なのに name が None」という
+    を呼ぶシナリオで「is_set() が True なのに snapshot が None」という
     中間ステートが観測されないことを assert する。
     """
     import threading as _th
@@ -424,8 +487,9 @@ def test_cap_state_set_atomicity_under_threads() -> None:
     for t in threads:
         t.join()
 
-    # is_set が True なら name は必ず stdout か stderr (None でない)
+    # is_set が True なら snapshot は必ず stdout か stderr (None でない)
     assert state.is_set() is True
-    assert state.name in ("stdout", "stderr"), (
-        f"intermediate state observed: is_set=True but name={state.name!r}"
+    assert state.snapshot() in ("stdout", "stderr"), (
+        f"intermediate state observed: is_set=True but "
+        f"snapshot={state.snapshot()!r}"
     )
