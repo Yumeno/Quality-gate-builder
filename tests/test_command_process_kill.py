@@ -277,6 +277,60 @@ def test_stderr_cap_exceeded_kills_and_reports(tmp_path: Path) -> None:
     assert len(result.stderr.encode("utf-8", errors="replace")) >= _COMMAND_EXECUTION_CAP_BYTES
 
 
+def test_reader_threads_terminate_without_timeout(tmp_path: Path) -> None:
+    """補修 #7: Popen.wait → pipe close → reader EOF の OS 契約を機械検証.
+
+    補修 #7 で reader thread の join から timeout を撤廃した。これは
+    「子が exit/kill → Popen pipe write 端 close → ``read1()`` が
+    b"" を返す → ``_drain_stream`` が return する」という OS + stdlib
+    の不易な契約を信頼する設計。Python 標準の ``subprocess.communicate()``
+    自体が同じ前提で動いている。
+
+    本テストはその契約を機械的に検証する: 大量出力 → kill → wait
+    を踏んだ後の `_run_subprocess` が **timeout に達することなく**
+    return することを assert。pytest の wall-clock で 30 秒以内に
+    完了すれば、reader join が timeout なしでも詰まらない不変条件
+    が成立している証拠。
+
+    旧 ``join(timeout=5)`` はこの契約を信頼しない fail-safe だったが、
+    補修 #6 で判明した race の遠因にもなっていたので撤廃。
+    """
+    # cap 越え + 即 exit (補修 #6 の test_cap_exceeded_wins_over_quick_natural_exit
+    # と同じ構造、こちらは「join が timeout なしでも詰まらない」が主眼)。
+    target = _COMMAND_EXECUTION_CAP_BYTES + 1 * 1024 * 1024  # 17 MiB
+    src = (
+        "import sys\n"
+        "stream = sys.stdout.buffer\n"
+        "chunk = b'x' * (1024 * 1024)\n"
+        f"remaining = {target}\n"
+        "while remaining > 0:\n"
+        "    write = chunk if remaining >= len(chunk) else chunk[:remaining]\n"
+        "    stream.write(write)\n"
+        "    remaining -= len(write)\n"
+    )
+
+    start = time.monotonic()
+    result = _run_subprocess(
+        argv=[sys.executable, "-c", src],
+        cwd=str(tmp_path),
+        env=os.environ.copy(),
+        timeout_seconds=30.0,
+    )
+    elapsed = time.monotonic() - start
+
+    # 不変条件: reader join 完了が wall-clock で十分速い
+    # (旧 timeout=5 だと 5 秒詰まる経路があったが、撤廃後は pipe close
+    # で即 return するので 5 秒どころか数秒で終わる)
+    assert elapsed < 10.0, (
+        f"_run_subprocess took {elapsed:.2f}s but pipe close should have "
+        "made reader.join() return promptly. Either Popen.wait did not "
+        "close the pipes or _drain_stream did not observe EOF — both "
+        "would break the OS + stdlib contract that補修 #7 relies on."
+    )
+    # cap も確定している
+    assert result.reason == "stdout_cap_exceeded"
+
+
 def test_cap_exceeded_wins_over_quick_natural_exit(tmp_path: Path) -> None:
     """補修 #6 回帰防止: cap 越え事実は natural exit より優先される.
 

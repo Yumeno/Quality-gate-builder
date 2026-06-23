@@ -603,11 +603,28 @@ def _run_subprocess(
         _terminate_process(process, win_job=win_job)
         observed_exit_rc = process.wait()
 
-    # Reader threads は Popen が pipe を閉じるまで動き続ける (natural
-    # exit でも kill 後でも同じ)。join で完了を待ち、cap_state の
-    # 最終値を確定させる — これが「観測契機 ≠ 最終結果」の核心。
-    out_thread.join(timeout=5)
-    err_thread.join(timeout=5)
+    # 補修 #7 (philosophy P4 不易と流行の分離、Codex 段 5 r2 + Claude
+    # メタレビュー):
+    #
+    # reader thread の join に timeout を **付けない**。これは
+    # 「子が exit/kill → Popen が pipe write 端を閉じる →
+    #  ``read1()`` が b"" を返す → ``_drain_stream`` が return する」
+    # という OS + stdlib の不易な契約を信頼する設計。Python 標準の
+    # ``subprocess.communicate()`` 自体が同じ前提で動いている。
+    #
+    # 旧 ``join(timeout=5)`` は「想定外の deadlock 検知」の fail-safe
+    # だったが、段 5 r2 で判明: timeout で抜けたあとに
+    # ``cap_state.snapshot()`` が遅れて立つ race が残り、結果として
+    # 「cap 越えていたのに reason=None で silent success」という
+    # P7 違反経路を作っていた。撤廃することで:
+    #   - silent success の race 経路自体が消える (補修 #6 の意図完成)
+    #   - 「reader が止まらない可能性」を qgb の責務として持たない
+    #     (それは OS / stdlib 異常レイヤであり、qgb はそれを取り繕う
+    #     責務ではない — P9 責務侵食回避)
+    #   - Phase 5 few-shot として「OS 契約を信頼して書く」正しい
+    #     subprocess 制御パターンを残す
+    out_thread.join()
+    err_thread.join()
 
     # Closing the job triggers KILL_ON_JOB_CLOSE for any straggler
     # processes; safe to call even after explicit TerminateJobObject.
