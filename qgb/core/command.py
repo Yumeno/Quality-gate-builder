@@ -17,6 +17,12 @@ Sub-step status:
   :class:`qgb.core._win_job.WindowsJob`. ``runner_warning`` field on
   :class:`_SubprocessResult` records Job Object setup failures so
   fallback to direct-child kill is auditable.
+* Step 3.1 補修 #2 (DONE, 2026-06-23) — WindowsJob に transactional
+  spawn (``spawn_suspended_and_resume``) を統合。command.py の
+  Windows 経路は WindowsJob を context manager として使い、
+  assign/resume のどこで失敗しても「suspended の子が外へ漏れる」
+  ステートに入らない構造に再設計。dead branch (``_handle_thread``
+  試行) と ``_resume_via_main_thread`` を削除。
 * Step 3.1c (this sub-step) — 16 MiB per-stream execution cap. Reader
   threads watch their sink size and signal :class:`threading.Event`
   on overflow; the supervisor in :func:`_run_subprocess` then runs
@@ -356,6 +362,17 @@ def _run_subprocess(
     runner_warning: str | None = None
     win_job = None
 
+    # Step 3.1d: Windows ``.bat`` / ``.cmd`` argument escaping
+    # (escape は Windows / POSIX どちらでも先に決定する。POSIX では
+    # needs_bat_escaping=False で no-op、Windows では .bat/.cmd の
+    # head + tail を均一に quote 化した command line string が返る)。
+    from qgb.core._win_bat_escape import build_command_line, needs_bat_escaping
+
+    if needs_bat_escaping(argv):
+        spawn_args: list[str] | str = build_command_line(argv)
+    else:
+        spawn_args = argv
+
     if _IS_POSIX:
         # ``preexec_fn=os.setsid`` runs in the child after ``fork()``
         # but before ``exec``, making the child the leader of a new
@@ -366,12 +383,20 @@ def _run_subprocess(
         # qgb here because reader threads are started **after** Popen
         # returns; at the fork instant the parent is single-threaded.
         popen_kwargs["preexec_fn"] = os.setsid  # type: ignore[assignment]
+        # Default buffered I/O (bufsize=-1) gives BufferedReader so
+        # _drain_stream can call read1.
+        process = subprocess.Popen(spawn_args, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603
     else:
-        # Windows path: try to create a Job Object and start the
-        # child suspended so we can assign it before any grandchild
-        # spawns. If the job can't be created, runner_warning is set
-        # and the child runs without the job — grandchildren may leak
-        # in that case but the visible behaviour stays consistent.
+        # Step 3.1 補修 #2 (philosophy P9 + 「入らない設計」):
+        # Windows 経路は WindowsJob.spawn_suspended_and_resume に統合。
+        # この context manager は「Popen + assign + resume」を transactional
+        # に実行する — 途中で失敗しても suspended の子は必ず kill+wait
+        # されてから例外が出るので、「suspended のまま動いていない子の
+        # Popen オブジェクトを呼び出し元が握る」状態が存在しない。
+        #
+        # job 作成自体に失敗した場合 (nested job 環境等) は runner_warning
+        # を立てて素の Popen 経路にフォールバック。grandchildren leak の
+        # 可能性は runner_warning として gate.json の audit に残る。
         from qgb.core._win_job import JobUnsupportedError, WindowsJob, is_supported
 
         if is_supported():
@@ -384,106 +409,51 @@ def _run_subprocess(
                     f"({exc})"
                 )
                 win_job = None
-            if win_job is not None:
-                # CREATE_SUSPENDED so the child doesn't execute any
-                # code (and therefore can't spawn grandchildren) until
-                # we have assigned it to the job.
-                _CREATE_SUSPENDED = 0x00000004
-                popen_kwargs["creationflags"] = _CREATE_SUSPENDED
         else:
             runner_warning = (
                 "windows job object api unavailable; "
                 "process tree kill degraded to direct-child only"
             )
 
-    # Step 3.1d: Windows ``.bat`` / ``.cmd`` argument escaping.
-    # ``subprocess.list2cmdline`` (used by Popen on Windows when args
-    # is a list) only quotes when whitespace or ``"`` is present;
-    # cmd.exe metacharacters (& | < > % ...) are left bare, so
-    # passing ``["a & b"]`` to a ``.bat`` would invoke a second
-    # command. For ``.bat`` / ``.cmd`` we build the command line
-    # ourselves (with metacharacter-aware quoting) and pass it to
-    # Popen as a single string — Popen on Windows then forwards the
-    # string verbatim to ``CreateProcessW`` instead of re-quoting it.
-    # For non-``.bat`` targets we keep the original argv-list path,
-    # which is correct for plain ``.exe`` / interpreter invocations.
-    from qgb.core._win_bat_escape import build_command_line, needs_bat_escaping
-
-    if needs_bat_escaping(argv):
-        spawn_args: list[str] | str = build_command_line(argv)
-    else:
-        spawn_args = argv
-
-    # Default buffered I/O (bufsize=-1) is what gives us ``BufferedReader``
-    # on stdout/stderr — its ``read1`` returns whatever bytes are
-    # available without waiting for a full buffer, which is what the
-    # reader threads need for prompt progress.
-    process = subprocess.Popen(spawn_args, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603 - argv list or pre-built cmdline, shell=False
-
-    # Windows: assign-then-resume. If assign fails we still need to
-    # resume the child or it will hang forever; degrade to a warning
-    # and fall through.
-    if win_job is not None:
-        from qgb.core._win_job import JobUnsupportedError
-
-        try:
-            win_job.assign(process.pid)
-        except JobUnsupportedError as exc:
-            new_warning = (
-                "windows job object assign failed; "
-                "process tree kill degraded to direct-child only "
-                f"({exc})"
-            )
-            runner_warning = (
-                new_warning if runner_warning is None
-                else f"{runner_warning}; {new_warning}"
-            )
-            # Close the unused job so its KILL_ON_JOB_CLOSE doesn't
-            # surprise anyone — it's empty anyway.
-            win_job.close()
-            win_job = None
-        # Resume the child's main thread now that the job is set up
-        # (or failed setup is logged). Popen on Windows stashes the
-        # primary-thread handle on a private attribute.
-        try:
-            import ctypes
-
-            kernel32 = ctypes.windll.kernel32
-            # ``_handle`` is a Popen private; on CPython for Windows
-            # it's a ``subprocess.Handle`` (an int subclass). We get
-            # the thread handle from ``process._handle`` via the
-            # documented Popen attribute ``_handle`` — but Popen also
-            # exposes the main thread handle as ``_handle`` is the
-            # process handle; the main thread handle is private under
-            # ``_thread_handle`` since 3.13 / ``_handle`` is the process.
-            # We use the value Popen captured for ResumeThread.
-            thread_handle = getattr(process, "_handle_thread", None)
-            if thread_handle is None:
-                # 3.11/3.12 expose the thread handle as
-                # ``process._handle`` is the *process* and the *main
-                # thread handle* is on the private subprocess.STARTUPINFO
-                # mechanism. The safest portable approach is to call
-                # OpenThread on process.pid → main thread, but Popen
-                # already kept the handle: ``process._handle`` is the
-                # process handle, not the thread handle, and stdlib
-                # closes the thread handle after CREATE_SUSPENDED only
-                # if we do not pass it. To resume reliably we instead
-                # use the well-known ``NtResumeProcess``-equivalent:
-                # call ResumeThread on every thread of the process. To
-                # avoid this complexity entirely we use OpenThread on
-                # the main thread id, which we get from the snapshot.
-                _resume_via_main_thread(kernel32, process.pid)
-            else:
-                kernel32.ResumeThread(thread_handle)
-        except Exception as exc:  # noqa: BLE001
-            new_warning = (
-                "windows resume thread failed; child may be stuck "
-                f"suspended ({exc})"
-            )
-            runner_warning = (
-                new_warning if runner_warning is None
-                else f"{runner_warning}; {new_warning}"
-            )
+        if win_job is not None:
+            try:
+                process = win_job.spawn_suspended_and_resume(
+                    spawn_args, **popen_kwargs
+                )
+            except JobUnsupportedError as exc:
+                # assign 失敗。spawn_suspended_and_resume は子を kill+wait
+                # 済なので、こちらは job を閉じてフォールバック経路へ。
+                new_warning = (
+                    "windows job object assign failed; "
+                    "process tree kill degraded to direct-child only "
+                    f"({exc})"
+                )
+                runner_warning = (
+                    new_warning if runner_warning is None
+                    else f"{runner_warning}; {new_warning}"
+                )
+                win_job.close()
+                win_job = None
+                process = subprocess.Popen(spawn_args, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603
+            except OSError as exc:
+                # resume 失敗 (toolhelp snapshot 異常等)。同様に
+                # spawn_suspended_and_resume が子を kill+wait 済。
+                new_warning = (
+                    "windows resume failed; "
+                    "process tree kill degraded to direct-child only "
+                    f"({exc})"
+                )
+                runner_warning = (
+                    new_warning if runner_warning is None
+                    else f"{runner_warning}; {new_warning}"
+                )
+                win_job.close()
+                win_job = None
+                process = subprocess.Popen(spawn_args, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603
+        else:
+            # Job Object 不採用パス。直接 Popen — 孫プロセスは leak しうる
+            # が runner_warning は既に立っている。
+            process = subprocess.Popen(spawn_args, **popen_kwargs)  # type: ignore[arg-type]  # noqa: S603
 
     stdout_sink = bytearray()
     stderr_sink = bytearray()
@@ -618,59 +588,6 @@ def _run_subprocess(
         reason=reason,
         runner_warning=runner_warning,
     )
-
-
-def _resume_via_main_thread(kernel32, pid: int) -> None:
-    """Open the main thread of ``pid`` and call ResumeThread on it.
-
-    Used as a fallback when Popen doesn't expose the main thread
-    handle (CPython 3.11+ behaviour). We walk the toolhelp snapshot
-    for the first thread belonging to the process and resume it.
-    Any error here is fatal to the suspended child; the caller
-    surfaces it via ``runner_warning``.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    _TH32CS_SNAPTHREAD = 0x00000004
-    _THREAD_SUSPEND_RESUME = 0x0002
-
-    class _THREADENTRY32(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ThreadID", wintypes.DWORD),
-            ("th32OwnerProcessID", wintypes.DWORD),
-            ("tpBasePri", wintypes.LONG),
-            ("tpDeltaPri", wintypes.LONG),
-            ("dwFlags", wintypes.DWORD),
-        ]
-
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPTHREAD, 0)
-    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
-        raise OSError("CreateToolhelp32Snapshot failed")
-
-    try:
-        entry = _THREADENTRY32()
-        entry.dwSize = ctypes.sizeof(_THREADENTRY32)
-        ok = kernel32.Thread32First(snapshot, ctypes.byref(entry))
-        while ok:
-            if entry.th32OwnerProcessID == pid:
-                kernel32.OpenThread.restype = wintypes.HANDLE
-                thread_handle = kernel32.OpenThread(
-                    _THREAD_SUSPEND_RESUME, False, entry.th32ThreadID
-                )
-                if thread_handle:
-                    try:
-                        kernel32.ResumeThread(thread_handle)
-                        return
-                    finally:
-                        kernel32.CloseHandle(thread_handle)
-            ok = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
-        raise OSError(f"no threads found for pid {pid}")
-    finally:
-        kernel32.CloseHandle(snapshot)
 
 
 def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
