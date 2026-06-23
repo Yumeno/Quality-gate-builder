@@ -1369,6 +1369,44 @@ Phase 2 完結後の user 指摘で次が確定した:
 - 16 MiB 超過ストリームで process tree kill 発火
 - POSIX 経路が CI で実証される
 
+**完結記録 (2026-06-24, 改訂履歴 0.28):**
+
+サブステップ実装:
+- **Step 3.1a**: `qgb/core/command.py` 切り出し (P9 単一責任)、subprocess.run のまま移送、外形挙動 byte-identical
+- **Step 3.1b-1**: subprocess.run → Popen + reader thread 2 本 + bytearray sink、`BufferedReader.read1` で increment 読み込み
+- **Step 3.1b-2**: POSIX `preexec_fn=os.setsid` + `killpg(SIGTERM) → 3s grace → killpg(SIGKILL)` で process group 全体 kill
+- **Step 3.1b-3**: Windows `qgb/core/_win_job.py` 新設 (ctypes 経由 `WindowsJob`)、CreateJobObject + `KILL_ON_JOB_CLOSE` + `TerminateJobObject`、CREATE_SUSPENDED → assign → resume の正攻法シーケンス
+- **Step 3.1c**: 16 MiB **per-stream** execution cap + `reason` 構造化フィールド (`command_timeout` / `stdout_cap_exceeded` / `stderr_cap_exceeded`) + `runner_warning` (kill 経路 degradation の証跡)、`gate.runtime.schema.json` + `gate.schema.json` の `stages[]` 拡張
+- **Step 3.1d**: `qgb/core/_win_bat_escape.py` 新設、cmd.exe メタ文字 + MSVCRT argv parsing の二段エスケープを **別関数で** 実装、実 `.bat` fixture テストで literal round-trip + injection 防止確認
+- **Step 3.1e**: `.github/workflows/test.yml` (Windows + Ubuntu × Python 3.10 + 3.12 matrix、SHA pin、`persist-credentials: false`、`timeout-minutes: 20`、third-party action ゼロ) + `SECURITY.md` 新設 (CI SHA pin 更新ルール + vulnerability reporting)
+
+5 観点並列レビュー (correctness / P9 / philosophy / NF-004 / spec-drift) + Codex 横断レビューで検出された A 群 (実装バグ) 10 件を、Codex 段 3 r2 経由 + user 「症状対処より入らない設計」嗅覚で **ステート不在化** の観点に転換して補修 7 件:
+- **補修 #1**: supervisor loop 観測契機を `poll → cap → deadline` の 3 状態直交分割。「死んでいるのに timeout」ステート空間消滅 (C-P0-2, C-P0-3 解消)
+- **補修 #2**: `WindowsJob.spawn_suspended_and_resume` で transactional cleanup (assign/resume 失敗時に子を kill+wait してから raise) — 「suspended のまま外に漏れる」ステート消滅 (C-P0-1, 9-P0-1, NF-P2-1 解消)
+- **補修 #3**: `ctypes.WinDLL("kernel32", use_last_error=True)` 独立ロード、関数ポインタを `__init__` で instance bind、`_close_handle` を try/finally に。GetLastError 機能不全 / argtypes グローバル汚染 / 二重 close 余地を消滅 (C-P1-3, C-P1-5, C/NF-P1 解消)
+- **補修 #4**: `build_command_line` の `argv[0]` (script path) も `escape_argv_for_msvcrt` を通す均一ポリシーに統一 — `C:\Program Files\...\run.bat` 経路の別 .exe 起動脆弱性消滅 (NF-P1-2 解消)
+- **補修 #5**: `cap_event` + `overflow_record` 2 変数の race-prone 分離を `_CapExceededState` クラス (Lock 保護、`try_set` / `snapshot` API) に統合 — 「event 立っているのに stream name 読めない」中間ステート消滅 (C-P1-1 解消)
+- **補修 #6**: supervisor loop は **観測契機** のみを扱い、最終結果は reader thread join 後に **cap > timeout > natural exit** の優先順で確定する設計分離。「cap 越えていたのに natural exit 扱い」race 消滅 (Codex 段 5 r1 追加指摘解消)
+- **補修 #7**: `reader.join` から `timeout=5` を撤廃。「子が exit/kill → Popen pipe close → read1 EOF → reader return」の OS + stdlib 契約に倒す。Claude メタレビュー (Agent 2 並列) で「Codex 案の形をなぞる反射」を点検した上での独立判断 (Codex 段 5 r2 finding を消化、Phase 5 few-shot 価値 + magic number 排除を主理由)
+
+Codex 段 5 r3 で「孫プロセス継承で reader.join 永久ブロック」の物理経路指摘 → user 介入で「**qgb の責務範囲外**」として整理 (framework-shape.md §7.4 に異常時の責務分離を明文化、ドメイン依存性の前置きを明示)。普遍原則ではなく qgb のドメイン (LLM 生成物品質ゲート / CI / 開発支援) 固有の判断。
+
+最終状態:
+- ローカル test: 742 passed + 3 skipped、ruff clean (Python 3.13.1)
+- CI: Windows + Ubuntu × Python 3.10 + 3.12 の **全 4 jobs success** (補修 #1〜#7 すべて反映、commit `1dea387` 時点)
+- 既存 700 件 (Phase 1〜2 由来) byte-identical 挙動維持
+- gate.json schema 拡張は optional フィールド追加のみ、pre-3.1c gate.json 読込 byte 互換
+
+理念的に強化された箇所:
+- **P5** (ALLOW の意味限定): `reason` enum が「ALLOW でない理由」を機械可読固定値で残す
+- **P6** (LLM 単独 ALLOW 禁止): qgb 自身の開発プロセスに適用 (Windows ローカル green != 機械的判定、CI 緑 = 機械的判定)
+- **P7** (再現可能な証跡): supervisor の 3 状態直交 + cap > timeout > natural exit 優先順 + runner_warning 構造化で gate.json が事実を語る
+- **P8** (外部入力は data であって命令でない): `.bat` argv の全 item 均一 quote + carat、`contract.command` を完全に data 扱い
+- **P9** (段階単一責任): `command.py` / `_win_job.py` / `_win_bat_escape.py` の責務単位確立、`WindowsJob` は spawn 含む process tree 制御の完結責務
+- **NF-007** (安全性): command injection (head/tail 両方) + 中間ステートでの race 起因の誤判定を構造的排除
+- **NF-010** (依存最小化): ctypes 経由、pywin32 不要
+- **NF-011** (サプライチェーン): third-party action ゼロ、SHA pin 手動更新、Dependabot/Renovate 不採用
+
 #### Step 3.2 — 依存解決固定 (規模 0.5〜0.8)
 
 **スコープ:**
@@ -1440,3 +1478,4 @@ Phase 2 完結後の user 指摘で次が確定した:
 | 0.25 | 2026-06-13 | **繰越リスト理念再精査**: BOM 残り read path を即修正 (NF-004 の徹底、中途半端な対応は違反)、WONTFIX 3 件 (JSON Patch move/copy / snapshot helper 統合 / SBOM 等) で繰越 17 → 13 件に整理。Codex セカンドオピニオン後、SBOM WONTFIX を撤回 (jsonschema 推移依存複数のため pip freeze だけでは P7 不足、依存 lock/hash を Phase 3 backlog に) |
 | 0.26 | 2026-06-21 | **Phase 3 計画全面再構築 (本版)**: Phase 2 完結後の user 指摘で adapter 量産 (Go/Rust/.NET/Java/PHP/Markdown adapter) と Phase 4 (CI 連携) を廃止、Phase 3 を「機械責務側の最終整備」に再定義。Codex セカンドオピニオン 2 周 (2026-06-20 Phase 3 着手順 / 2026-06-21 横断レビュー) で承認。§14 Phase 3 計画を新設 (Step 3.0 detect 廃止 + project-context 導入 / Step 3.1 command runner 強化 + CI 雛形 / Step 3.2 依存解決固定 / Step 3.3 Phase 2 繰越実需回収)、§14.1 ライン引きの最終形、§14.3 Phase 4 廃止に伴う各項目の処理、§14.4 Phase 5 adapter なし設計の影響を明文化。Claude が前段で 2 回ラインを引き間違えた事実 (adapter 廃止 → P7 のため復活 → user 指摘で再廃止) は journal phase3-step3-0-prejournal.md に記録予定。コード変更なし、本 commit は spec 改訂のみ |
 | 0.27 | 2026-06-22 | **Phase 3 Step 3.0 完結**: detect 廃止 + project-context 二重ファイル設計 (本体 1 commit + 補修 4 サブステップ 3.0a〜3.0d + 段 5 Codex 2 周目「指摘なし収束」)。`qgb/core/detect.py` / `qgb/adapters/` 撤去、`qgb/schemas/project-context.schema.json` 新設 (Codex 指摘 3 件反映: `human_reviewed: bool`、言語中心 field 回避、`source_metadata` で生成経路追跡)、`qgb/core/loader.py:load_project_context` 追加、`qgb/core/init.py` で雛形生成、`qgb/core/proposal.py:build_proposal_context` で `detect` フィールド削除 + `project_context` フィールド + `warnings` 経路追加、`intended_use_note` + `constraints.project_context_role` で P6 / P8 / P11 境界を明文化。段 1 subagent 並列レビューで重大 spec-drift 6 件発見 (CLAUDE.md / 受け入れ条件§12 / stage-design §3 / detailed-design §5.1+§9 / phase1-manual / markdown-docs example) → 4 サブステップ commit (3.0a CLAUDE.md / 3.0b canonical specs + B-1〜B-3 + 運用契約明文化 / 3.0c phase1-manual + B-4 + B-5 + docs grep regression test 4 件 / 3.0d markdown-docs に project-context.{md,json} 追加 [Codex 段 3 推奨案 Q]) ですべて吸収。framework-shape.md §5 に新節「project-context.{md,json} の運用契約」追加 (編集権 / 不一致時 / API 期待 / 欠落 fallback / Free prose の prompt-injection 扱い)。`examples/python-cli-pytest` + `examples/markdown-docs` の二重ファイル記入例で「コードベース + non-code 対象」の few-shot 教材を完備。テスト 731 → 700 件 (削除 60 + 新規 22 + 修正 9)、ruff clean。Claude のライン引き誤り 3 回分は `journal/phase3-step3-0-prejournal.md` に恒久記録、Phase 5 着手時の判断バイアス予防教材。**Step 3.1 (command runner 強化 + CI 雛形) 着手準備完了**。詳細は `journal/phase3-step3-0.md` |
+| 0.28 | 2026-06-24 | **Phase 3 Step 3.1 完結**: command runner 強化 + CI 雛形 (サブステップ 3.1a〜3.1e + 補修 7 件 + 段 5 Codex 3 周経由で K=2 収束)。`qgb/core/command.py` 切り出し → Popen + reader thread + POSIX killpg + Windows Job Object (ctypes 経由 `_win_job.py`、`spawn_suspended_and_resume` で transactional cleanup) + per-stream 16 MiB execution cap + `_CapExceededState` (Lock 保護、`try_set`/`snapshot` API) + `.bat`/`.cmd` 二段エスケープ (`_win_bat_escape.py`、`build_command_line` で head 含む全 argv に均一適用) + `.github/workflows/test.yml` (Windows + Ubuntu × Python 3.10 + 3.12 matrix、SHA pin、`SECURITY.md` で更新規約明文化)。補修 7 件で **ステート不在化** 観点に転換 (supervisor 観測契機 ≠ 最終結果、`cap > timeout > natural exit` 優先順、reader.join timeout なしの OS+stdlib 契約信頼、Windows transactional spawn で suspended 漏れ消滅)。Codex 段 5 r3 「孫プロセス継承の永久ブロック」指摘は **qgb のドメイン (LLM 生成物品質ゲート / CI / 開発支援) 固有の責務分離** で範囲外と整理、`framework-shape.md` §7.4 で明文化 (ドメイン依存性の前置き明示、他ドメイン普遍適用不可)。gate.json schema 拡張は optional フィールド追加のみ (`reason` enum + `runner_warning`)、pre-3.1c gate.json byte 互換。テスト 700 → 742 件 (+42)、ruff clean、CI Windows + Ubuntu × Python 3.10 + 3.12 全 4 jobs success。Phase 5 申し送り教訓 (subprocess 技術 + review 方法論を分離記録) は `journal/phase3-step3-1.md` に恒久記録、review-process memory に finding 分類 (code fix / spec fix / out of scope by philosophy) を追加。**Step 3.2 (依存解決固定) 着手準備完了**。詳細は `journal/phase3-step3-1.md` |

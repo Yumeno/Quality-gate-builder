@@ -49,9 +49,13 @@ qgb メンテナのみ。改訂は厳格に扱い、バージョン番号を上�
 ### 置くもの
 
 - `qgb/` Python パッケージ本体
-  - `core/` — runner, command (Phase 3 Step 3.1 で runner._run_command を切り出し), decision, evidence, schema, patch, patch_apply, knowledge, edit_commands, preflight, proposal, design_stages, init, scaffold, validate, loader, json_pointer, check
+  - `core/` — runner, command, _win_job, _win_bat_escape, decision, evidence, schema, patch, patch_apply, knowledge, edit_commands, preflight, proposal, design_stages, init, scaffold, validate, loader, json_pointer, check
+    - `command` — Phase 3 Step 3.1 で `runner._run_command` を切り出し、Step 3.1 補修群でステート空間の不在化を完了 (`_CapExceededState`、supervisor 観測契機 ≠ 最終結果、reader.join timeout なし)
+    - `_win_job` — Windows Job Object 経由の process tree kill。`spawn_suspended_and_resume` で transactional cleanup (Step 3.1 補修 #2/#3)
+    - `_win_bat_escape` — `.bat`/`.cmd` の cmd.exe メタ文字 + MSVCRT 二段エスケープ (Step 3.1d + 補修 #4 で argv[0] にも均一適用)
   - ~~`adapters/`~~ **Phase 3 Step 3.0 (2026-06-21) で廃止**。対象プロジェクトの分析は Phase 5 スキル (LLM) の責務、qgb 本体は機械的検査に徹する
   - `schemas/` — JSON Schema 群（gate, gate.runtime, policy, contract, knowledge, req-meta, config, patch, proposal, project-context）
+    - gate / gate.runtime には Step 3.1c 以降、`stages[].reason` (enum: command_timeout / stdout_cap_exceeded / stderr_cap_exceeded) と `stages[].runner_warning` (optional string) が追加されている
   - `templates/` — 生成テンプレート（REQ.md, contract.\*.json, summary.md, project-context.{md,json}, quality-gate.ps1）
 - `development/docs/` — 開発文書
   - 思想憲章、要件定義書、段階設計仕様、フレームワーク境界（本書）
@@ -79,6 +83,19 @@ qgb メンテナ。実装の追加・修正・テストの拡張。
 ### 利用者プロジェクトへの複製
 
 しない。利用者は git clone で qgb を取得し、`python -m qgb` 経由で実行する。Phase 2 以降で PyPI 配布を検討する場合も、配布物は本層に限定する。
+
+### command runner の動作契約 (Step 3.1 で確立)
+
+Layer 2 の `qgb.core.command.run_command` は、利用者が与えた foreground command を実行し、その正常な完了経路で観測できた機械的検査の事実を gate.json に記録する。具体的に **機械的に担保する** ものは:
+
+- **timeout**: `contract.timeout_seconds` (default 60s) を超えたコマンドは process tree ごと kill し、`stages[].reason = "command_timeout"` を gate.json に記録する
+- **per-stream execution cap**: stdout / stderr それぞれ 16 MiB を超えた時点で process tree ごと kill し、`stages[].reason = "stdout_cap_exceeded"` または `"stderr_cap_exceeded"` を記録する。最悪保持量は約 35 MiB (stdout 16 MiB + stderr 16 MiB + log 構築バッファ)
+- **process tree termination**: POSIX は `preexec_fn=os.setsid` + `killpg(SIGTERM)` → grace 3s → `killpg(SIGKILL)`、Windows は `WindowsJob` (CreateJobObject + KILL_ON_JOB_CLOSE) + `TerminateJobObject` + transactional spawn (assign/resume 失敗時は子を kill+wait してから raise)
+- **structured reason**: `stages[].reason` enum と `stages[].runner_warning` (kill 経路の degradation を構造化フィールドで残す) で gate.json の証跡が事実を語る (philosophy P7)
+- **.bat / .cmd argument escaping**: Windows の `.bat` / `.cmd` 起動では cmd.exe メタ文字 (`& | < > ( ) % ^`) と MSVCRT argv parsing の両層を、argv[0] (script path) を含む全 item に均一に適用する
+- **observation vs final result の分離**: supervisor loop は早期離脱契機を観測するだけで、最終結果 (cap > timeout > natural exit の優先順) は reader thread 完了後に確定する
+
+これらの契約は philosophy P5 (ALLOW の意味限定) / P7 (再現可能な証跡) / P9 (段階単一責任) の機械側担保。
 
 ## 5. Layer 3: スキル層（Phase 5、エージェント中立）
 
@@ -340,6 +357,27 @@ qgb 本体に開発履歴・引き継ぎ資料を残さない。例外として 
 
 qgb の Issue 議論、設計検討、ChatGPT/Claude/Codex とのやり取りは qgb 側に閉じる。利用者プロジェクトの `.quality-system/` には「確定したもの」だけを書く。
 
+### 7.4 異常時の責務分離 (Step 3.1 補修 #7 経由で確定)
+
+> **重要な前置き — ドメイン依存性**:
+> 本節の責務分離は qgb のドメイン (LLM 生成物の品質ゲート、CI / 開発支援文脈、異常時に人間が手で介入できる前提) に固有の判断である。リアルタイムハードウェア制御、医療機器、航空電子、金融決済等、「異常時に人間が介入する前にケガ / 損害が起きる」ドメインでは、本節と逆の責務 (システム自身が partial death を検知し能動的に safe state に倒す) が必要になる。qgb の責務分離を **普遍原則として他ドメインに適用しない** こと。
+
+qgb の command runner は、利用者が与えた foreground command を実行し、その正常な完了経路で観測できた機械的検査の事実を gate.json に記録する。
+
+下記は qgb の責務範囲外とする:
+
+- 利用者の `contract.command` が daemon / detached background process / 孫プロセスなどを生成し、直接子の終了後も stdout / stderr pipe の file descriptor を保持し続けることで、qgb が EOF を観測できない状態
+- OS 異常、ハードウェア異常、外部プロセス操作などにより、process tree の一部だけが想定外に生存または停止する状態
+- 上記の異常状態を qgb が検出・分類し、gate.json に reason 付きで記録すること
+
+この場合、利用者または実行環境は Ctrl+C、ジョブ停止、端末再起動、CI job timeout などの OS / 運用レイヤの手段で介入する。qgb は process supervisor ではなく、process tree の部分生存に対する hang recovery を保証しない。
+
+したがって、qgb 経由で評価する `contract.command` は、foreground で完結し、stdout / stderr pipe を不要に継承する background process を残さない形で設計する。daemon spawn や detached background process を含む command は、qgb の評価対象として適さない。
+
+異常時に **qgb が完了証跡を作らないことが正しい**。利用者は「`gate.json` の不在 / CI job の異常終了」を異常事態の指標として運用する。qgb 内部に hang detection + dummy reason を仕込んで「正常に異常を分類した」体裁を作るのは P7 (再現可能な証跡) 違反となる。
+
+この判断は philosophy P4 (不易と流行の分離) + P7 + P9 (段階単一責任) と整合する。Codex 段 5 r3 で指摘された「直接子の wait と pipe EOF は一致しない」という技術的事実は認めるが、それは qgb が補修する責務範囲ではなく、OS / 運用 / 利用者 command 設計のレイヤで扱う。
+
 ## 8. 配布形態
 
 ### Phase 1
@@ -400,6 +438,7 @@ Python は composer のような vendor 配置が標準でない。core の `com
 ### 改訂履歴 (大きな構造変更のみ)
 
 - **2026-06-21 Phase 3 計画確定**: adapter (`qgb/adapters/`) を Layer 2 から削除。対象プロジェクトの分析は Phase 5 スキル (LLM) の責務に統合。`.quality-system/project-context.{md,json}` の二重ファイル設計を Layer 4 に追加 (md = 人間正本、json = 機械正本、補佐 Agent が md→json 変換を担う運用想定)。Layer 3 スキル責務に「対象理解は LLM、ALLOW/DENY は qgb の contract 実行結果で決まる」を明文化
+- **2026-06-24 Phase 3 Step 3.1 完結**: Layer 2 §4 に command runner の動作契約節を追加 (timeout / per-stream cap / process tree termination / structured reason / .bat escape / observation vs final result 分離)。Layer 2 「置くもの」の `core/` 一覧に `command.py` / `_win_job.py` / `_win_bat_escape.py` を反映。§7.4 「異常時の責務分離」を新設 (process tree partial survivor の hang recovery は qgb 責務外、異常時は OS / user が介入する設計)。ドメイン依存性の前置きを明示 (qgb の責務分離は LLM 生成物品質ゲート / CI / 開発支援ドメイン固有、リアルタイム制御等の他ドメインへ普遍適用しない)
 
 ## 11. 関連文書
 

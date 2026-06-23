@@ -1147,13 +1147,32 @@ python -m qgb run REQ-APP-001
 
 qgb は、`config.json` や `policy.json` で定義された既知のコマンドのみを実行する。`contract.json` に任意コマンドを無制限に書ける設計は避ける。
 
-Phase 1 の最小制約：
+**基本制約 (Phase 1 で確立)**:
 
 - project root 外への書き込み禁止
 - command は shell 文字列ではなく argv 配列として宣言
 - working_dir を project root 配下に固定
-- 実行環境（環境変数の主要部分）を gate.json または artifacts ログに記録
+- 実行環境 (環境変数の主要部分) を gate.json または artifacts ログに記録
 - timeout を必須化
+
+**Step 3.1 で確立した command runner の機械的責務** (2026-06-24 反映):
+
+- **timeout**: `contract.timeout_seconds` (default 60s) 超過で process tree 全体を kill、`stages[].reason = "command_timeout"` を gate.json に記録
+- **per-stream execution cap**: stdout / stderr それぞれ 16 MiB 超過で process tree 全体を kill、`stages[].reason = "stdout_cap_exceeded"` または `"stderr_cap_exceeded"` を記録 (最悪保持量約 35 MiB)
+- **process tree termination**:
+  - POSIX: `preexec_fn=os.setsid` + `killpg(SIGTERM)` → grace 3s → `killpg(SIGKILL)` で process group 全体
+  - Windows: `WindowsJob` (ctypes 経由 CreateJobObject + `KILL_ON_JOB_CLOSE`) + `TerminateJobObject` + transactional spawn (assign/resume 失敗時は子を kill+wait してから raise する事後条件 = suspended 漏れ消滅)
+- **structured reason**: `stages[].reason` enum (3 種) + `stages[].runner_warning` (kill 経路 degradation の構造化フィールド、例: 「Job Object 不可で direct-child kill にフォールバック」)。pre-Step-3.1c gate.json と byte 互換 (どちらも optional フィールド追加のみ)
+- **.bat / .cmd argument escaping**: Windows の `.bat` / `.cmd` 起動時は cmd.exe メタ文字 (`& | < > ( ) % ^`) と MSVCRT argv parsing の二段エスケープを **argv[0] (script path) を含む全 item に均一適用**。`C:\Program Files\...` 等のスペース入りパスでも安全
+- **observation vs final result の分離**: supervisor loop は早期離脱契機 (poll / cap / deadline) を観測するだけで、最終結果は reader thread 完了後に `cap > timeout > natural exit` の優先順で確定
+
+**責務範囲外** (Step 3.1 補修 #7 + framework-shape.md §7.4 で確定):
+
+- 利用者 `contract.command` が daemon / detached background process / 孫プロセスを生成し、直接子の終了後も stdout/stderr pipe の fd を保持し続けることで qgb が EOF を観測できない状態
+- OS / ハード異常で process tree の一部だけが想定外に生存または停止する状態
+- 上記異常を qgb が検出・分類し gate.json に reason 付きで記録すること (qgb は process supervisor ではない)
+
+異常時は user が Ctrl+C / 端末再起動 / CI job timeout 等の OS / 運用レイヤで介入する。「`gate.json` の不在 / CI job の異常終了」自体が異常事態の指標であり、qgb が完了証跡を取り繕って残すのは P7 違反となる (philosophy P4 不易と流行の分離 + P7 再現可能な証跡 + P9 段階単一責任 と整合)。**この責務分離は qgb のドメイン (LLM 生成物品質ゲート / CI / 開発支援) 固有であり、リアルタイムハードウェア制御 / 医療機器 / 航空電子 / 金融決済等の他ドメインに普遍適用しないこと**。詳細は `framework-shape.md` §7.4。
 
 ### 9.3 証跡マスキング
 
@@ -1334,21 +1353,23 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 **サブステップ:**
 
-- **Step 3.0 detect 廃止 + project-context 導入** (規模 2.0〜2.5)
+- **Step 3.0 detect 廃止 + project-context 導入** (規模 2.0〜2.5) — **✅ 完結 2026-06-22** (詳細は `journal/phase3-step3-0.md` / detailed-design.md §15 改訂履歴 0.27)
   - `qgb detect` / `qgb/core/detect.py` / `qgb/adapters/` 削除
   - `.quality-system/project-context.json` 新設 (機械正本、schema 検証可能)
   - 既存 `.quality-system/knowledge/project-context.md` は人間正本として温存
   - `qgb design-stages propose-context` の出力から `detect` フィールド削除、`project_context` フィールド追加
   - 補佐 Agent (利用者環境の LLM) が md → json 変換、本番 LLM (Phase 5 スキル) が propose-context → proposal 生成、の二重 LLM 構造
   - `source_metadata.generated_by` で「人間 / agent-assisted」を区別、`human_reviewed: bool` で人間承認状態を表現
-- **Step 3.1 command runner 強化 + CI 雛形** (規模 1.5〜2.0)
+- **Step 3.1 command runner 強化 + CI 雛形** (規模 1.5〜2.0) — **✅ 完結 2026-06-24** (詳細は `journal/phase3-step3-1.md` / detailed-design.md §15 改訂履歴 0.28)
   - `qgb/core/runner.py` の `_run_command` を `qgb/core/command.py` に切り出し (P9)
-  - Popen + process tree kill (Windows: ctypes 経由 Job Objects + fallback / POSIX: setsid + killpg)
-  - `.bat` / `.cmd` argument escaping (cmd.exe メタ文字 + C++ argv parsing を別扱い)
-  - ストリーム読み取り 16 MiB 上限 (RSS cap は WONTFIX、出力ストリーム cap として処理)
-  - 実 temporary `.bat`/`.cmd` fixture で検証
-  - CI 雛形 (.github/workflows/test.yml): pytest only、windows-latest + ubuntu-latest matrix、actions/checkout + actions/setup-python の commit SHA pin、permissions: contents: read、third-party action ゼロ、secrets 不使用、Dependabot/Renovate なし
-- **Step 3.2 依存解決固定** (規模 0.5〜0.8)
+  - Popen + process tree kill (Windows: ctypes 経由 Job Objects + transactional spawn + fallback / POSIX: setsid + killpg)
+  - `.bat` / `.cmd` argument escaping (cmd.exe メタ文字 + MSVCRT argv parsing の二段、argv[0] を含む全 item に均一適用)
+  - stream **per-stream** 16 MiB execution cap + `reason` 構造化 + `runner_warning` (RSS cap は WONTFIX、stdout/stderr 個別 cap で処理、最悪保持量約 35 MiB)
+  - 実 temporary `.bat`/`.cmd` fixture で検証 + path-with-spaces fixture で head escape 検証
+  - CI 雛形 (`.github/workflows/test.yml`): pytest only、windows-latest + ubuntu-latest × Python 3.10 + 3.12 matrix、actions/checkout + actions/setup-python の commit SHA pin、permissions: contents: read、persist-credentials: false、timeout-minutes: 20、third-party action ゼロ、secrets 不使用、Dependabot/Renovate なし、`SECURITY.md` で SHA pin 更新規約明文化
+  - 補修 7 件で **ステート不在化** 観点に転換 (supervisor 観測契機 ≠ 最終結果、`_CapExceededState` Lock 保護、WindowsJob transactional cleanup、reader.join timeout なしの OS+stdlib 契約信頼)
+  - 異常時の責務分離を `framework-shape.md` §7.4 で明文化 (process tree partial survivor は qgb 責務外、ドメイン依存性の前置きを明示)
+- **Step 3.2 依存解決固定** (規模 0.5〜0.8) — 次の Step
   - `pip-tools` or 同等で lock/hash (Phase 5 スキル提供時の supply-chain 信頼)
   - CI で resolved deps 出力
   - 当初 Phase 4 の「依存 audit / SBOM」はここで吸収

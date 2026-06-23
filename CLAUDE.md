@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Phase 1 (Python CLI MVP) and Phase 2 ("編集を安全にする" / make editing safe) are complete. Phase 3 ("機械責務側の最終整備" / final consolidation of the machine-responsibility layer) is in progress as of 2026-06-21. See `development/docs/detailed-design.md` §14 for the Phase 3 plan, `development/docs/requirements_and_development.md` §13 for the phase overview, and `development/docs/journal/phase3-step3-0-prejournal.md` for the latest Step pre-commit notes.
+Phase 1 (Python CLI MVP) and Phase 2 ("編集を安全にする" / make editing safe) are complete. Phase 3 ("機械責務側の最終整備" / final consolidation of the machine-responsibility layer) is in progress as of 2026-06-24. Step 3.0 (`detect` 廃止 + project-context 二重ファイル設計) と Step 3.1 (command runner 強化 + CI 雛形 + 補修 1〜7) は完結。次は Step 3.2 (依存解決固定 / lock + hash)。See `development/docs/detailed-design.md` §14 for the Phase 3 plan, `development/docs/requirements_and_development.md` §13 for the phase overview, and `development/docs/journal/phase3-step3-1.md` for the latest completed Step's record.
 
 The authoritative documents in priority order:
 
 1. `development/docs/philosophy.md` — the 思想憲章 (philosophy charter, 11 不易). All other documents are subordinate.
 2. `development/docs/requirements_and_development.md` — 要件定義書・基本設計書 v0.3 (Phase 3 計画反映済み, §1.3 / §13 / §14).
-3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.26 as of 2026-06-21).
-4. `development/docs/framework-shape.md` — Layer 1〜4 境界 (Phase 3 Step 3.0 で Layer 3 スキル責務文言改訂).
+3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.28 as of 2026-06-24, Step 3.1 完結反映).
+4. `development/docs/framework-shape.md` — Layer 1〜4 境界 (Phase 3 Step 3.0 で Layer 3 スキル責務文言改訂、Step 3.1 で §4 command runner 動作契約節 + §7.4 異常時の責務分離を追加).
 5. `development/docs/stage-design.md` — 段階設計フェーズ仕様.
 
 ## What this project is
@@ -84,10 +84,15 @@ Phase 1 fixed the L1〜L6 hierarchy as an example but the spec (philosophy P10) 
 ```
 qgb/
   __main__.py  cli.py
-  core/        # runner, command (Phase 3 Step 3.1 で切り出し予定), decision, evidence,
+  core/        # runner, command, _win_job, _win_bat_escape, decision, evidence,
                # schema, patch, patch_apply, knowledge, edit_commands, preflight,
                # proposal, design_stages, init, scaffold, validate, loader,
                # json_pointer, check
+               #   - command: Phase 3 Step 3.1 で runner._run_command を切り出し +
+               #     補修群でステート不在化完了 (observation vs final result 分離、
+               #     _CapExceededState、reader.join timeout なし)
+               #   - _win_job: Windows Job Object + transactional spawn (補修 #2/#3)
+               #   - _win_bat_escape: .bat/.cmd の二段エスケープ (Step 3.1d + 補修 #4)
   schemas/     # *.schema.json: config, policy, contract, gate, gate.runtime,
                # knowledge, req-meta, patch, proposal, project-context
   templates/   # config.initial.json, policy.initial.json, project-context.initial.md
@@ -156,7 +161,8 @@ TDD mode is the only exception where DENY is an *expected* state: `gate.json.pha
 
 - **Windows PowerShell is a first-class environment** (NF-004). The install manual and `scripts/quality-gate.ps1` must work there. Cross-platform commands take precedence over Unix-only ones.
 - BOM tolerance (`encoding="utf-8-sig"` on every user-file read path) is mandatory; write paths use BOM-less `utf-8`.
-- POSIX must work too, but it is the second target. Phase 3 Step 3.1 introduces a minimal CI matrix (Windows + Ubuntu) so POSIX paths are mechanically verified rather than only argued.
+- POSIX must work too, but it is the second target. Phase 3 Step 3.1 で **CI matrix を導入** (`.github/workflows/test.yml`、Windows + Ubuntu × Python 3.10 + 3.12) し POSIX 経路を機械的に検証する状態にした。CI SHA pin の更新ルールは `SECURITY.md` で明文化。
+- **command runner の責務範囲** (Step 3.1 補修群で確定): 正常な foreground command の完了経路で gate.json を残すことに責務を限定する。利用者の `contract.command` が daemon spawn / 孫プロセスで stdout pipe を継承し続けるケース、OS / ハード異常で process tree の一部だけが生存するケース、それらの hang を qgb が検出して reason を取り繕うことは責務範囲外。異常時は user が Ctrl+C / 端末再起動で介入する設計。詳細は `framework-shape.md` §7.4。**この責務分離は qgb のドメイン (LLM 生成物品質ゲート / CI / 開発支援) 固有であり、リアルタイム制御等の他ドメインに普遍適用しないこと**。
 
 ## When working in this repo
 
@@ -164,6 +170,6 @@ TDD mode is the only exception where DENY is an *expected* state: `gate.json.pha
 - **Check `development/docs/journal/` for the latest Step's prejournal and completion record before changing core modules.** The journal tracks the "why" of design decisions that the spec alone does not capture.
 - Don't scaffold `qgb/` directories speculatively. Build the pieces a task actually needs, with their tests, end-to-end.
 - Section headers and tables in the spec are written in Japanese; preserve that language for user-facing Japanese docs and keep code/identifiers/CLI output in English unless a spec section says otherwise.
-- **Phase 5 skill perspective**: anything in this repository may be read by a Phase 5 skill as a few-shot example. Avoid leaving deprecated mechanisms (e.g., adapter scaffolding) in place "just in case" — they teach the wrong pattern.
+- **Phase 5 skill perspective**: anything in this repository may be read by a Phase 5 skill as a few-shot example. Avoid leaving deprecated mechanisms (e.g., adapter scaffolding) in place "just in case" — they teach the wrong pattern. Step 3.1 で確立した設計教訓 (subprocess 制御の foreground 前提、observation vs final result の分離、ステート空間の不在化、ドメイン依存の責務分離) は `development/docs/journal/phase3-step3-1.md` に subprocess 技術と review 方法論を分離して記録してあるので参照。
 - **Before building any Codex review context or concatenating multiple files into one** — read auto-memory `codex-context-files.md` first. `cat >> file` / heredoc / subshell-redirect always hit a permission prompt; the correct flow is Read + Write tool into `C:\Users\vz7a-\AppData\Local\Temp\codex_ctx_*.txt`. Forgetting this stalls work for several turns.
 - **Review process for non-trivial changes**: follow `review-process` memory — stage 1 (5 subagent parallel review by lens: correctness / P9 / philosophy / NF-004 / spec-drift) → stage 2 (Claude aggregation) → stage 3 (Codex cross-cutting via `/ask-codex-with-context`) → fix → re-review until K=2 rounds yield no new findings. Don't skip stages on the grounds that "this Step is small" — Step 6/7 once did and the integrated review caught material gaps afterward.

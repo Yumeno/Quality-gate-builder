@@ -1,5 +1,7 @@
 # quality-gate-builder
 
+[![test](https://github.com/Yumeno/Quality-gate-builder/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Yumeno/Quality-gate-builder/actions/workflows/test.yml)
+
 `quality-gate-builder` (`qgb`) generates trace-based quality gates for arbitrary target projects: REQ documents, machine-checkable contracts, layered verification stages, evidence, and ALLOW/DENY decisions.
 
 Stable behaviour is not yet guaranteed.
@@ -7,7 +9,12 @@ Stable behaviour is not yet guaranteed.
 ## Status
 
 - Phase 1 (Python CLI MVP) and Phase 2 (編集を安全にする) completed.
-- Phase 3 (機械責務側の最終整備) in progress; see `development/docs/journal/` for the latest Step.
+- Phase 3 (機械責務側の最終整備) in progress:
+  - Step 3.0 (`detect` 廃止 + project-context 二重ファイル設計): ✅ completed 2026-06-22
+  - Step 3.1 (command runner 強化 + CI 雛形): ✅ completed 2026-06-24
+  - Step 3.2 (依存解決固定 / lock + hash): next
+- See `development/docs/journal/` for the latest Step's record.
+- Windows PowerShell is a first-class environment (NF-004); CI verifies on `windows-latest` and `ubuntu-latest` with Python 3.10 and 3.12.
 
 ## Documentation
 
