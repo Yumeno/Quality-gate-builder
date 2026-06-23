@@ -651,10 +651,15 @@ class TestRecursionGuard:
     def test_deeply_nested_proposal_gives_schema_invalid(
         self, copy_generic_minimal, tmp_path
     ):
+        # 100 stages-of-stages is "obviously deeply nested" without
+        # blowing past Python's default recursionlimit (1000) during
+        # the json.dumps below. The original 500 happened to fit
+        # 3.13's C stack but failed on 3.10/3.12 in CI; Step 3.1e
+        # caught the cross-version drift.
         root = copy_generic_minimal()
         nested: dict = {"schema_version": "1.0", "proposal_type": "policy_stages", "stages": []}
         current = nested["stages"]
-        for _ in range(500):
+        for _ in range(100):
             inner: list = []
             current.append({"x": inner})
             current = inner
