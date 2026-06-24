@@ -95,7 +95,19 @@ jobs:
 
   lock-integrity:
     name: lock vs pyproject.toml integrity
-    runs-on: ubuntu-latest
+    # Lock files are generated on Windows + Python 3.10 by the maintainer
+    # and the integrity check must regenerate under the *same* environment
+    # to avoid spurious diffs. pip-compile's resolution is per-(OS, Python):
+    # - Python markers (python_version<"3.13") gate typing-extensions,
+    #   exceptiongroup, tomli;
+    # - OS markers (platform_system=="Windows", sys_platform=="win32") gate
+    #   colorama (pulled in by click + pytest on Windows only).
+    # A lock generated on Windows/3.10 contains the superset needed across
+    # the full (windows/ubuntu × 3.10/3.12) matrix, since unused entries
+    # are silently skipped by the install-time environment markers on
+    # other platforms. The reverse (Ubuntu lock) lacks the Windows-only
+    # transitives and breaks Windows installs.
+    runs-on: windows-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -103,12 +115,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Lock files are generated against the lowest supported Python in
-      # the matrix (3.10). pip-compile's resolution is per-Python (env
-      # markers like ``python_version<"3.13"`` change the transitive
-      # set), so to keep the committed lock diff-stable across the
-      # matrix, the integrity check must regenerate with the same
-      # Python the committer used.
       - name: Setup Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:

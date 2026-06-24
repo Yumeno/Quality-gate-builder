@@ -140,26 +140,33 @@ What is reproducible is:
 For Phase 5 packaging, separate decisions will determine what (if any)
 lock guarantees are extended to end users.
 
-### Python Version Used to Generate the Lock
+### Environment Used to Generate the Lock
 
-The committed locks are regenerated **on Python 3.10**, which is the
-lowest version in qgb's `requires-python` range. This matters because
-`pip-compile`'s resolution is per-Python: environment markers such as
-`python_version<"3.13"` or `python_version<"3.11"` change which
-transitive packages (typing-extensions, exceptiongroup, tomli, …)
-enter the lock.
+The committed locks are regenerated **on Windows × Python 3.10**.
+This matters because `pip-compile`'s resolution is per-(OS, Python),
+and we want the lock to be the *superset* needed across the full
+matrix (`windows-latest`/`ubuntu-latest` × Python 3.10/3.12):
 
-A lock generated on Python 3.12 is missing transitives that some
-packages require only on Python 3.10–3.11; installing such a lock on
-Python 3.10 fails with `--require-hashes` because the missing
-transitive cannot be resolved at install time. A lock generated on
-Python 3.10 contains the *superset* needed across the matrix and is
-safe for all supported Python versions.
+- **Python markers** (`python_version<"3.13"`, `python_version<"3.11"`)
+  gate transitives like `typing-extensions`, `exceptiongroup`, `tomli`.
+  Generating on the lowest matrix Python (3.10) captures all of them.
+- **OS markers** (`platform_system=="Windows"`,
+  `sys_platform=="win32"`) gate transitives like `colorama` (pulled in
+  by `click` + `pytest` on Windows only). Generating on Windows
+  captures these.
 
-The `lock-integrity` CI job uses `actions/setup-python@…
-python-version: "3.10"` for the same reason: it must regenerate
-under the same Python the committer used, otherwise the diff against
-the committed lock is spurious.
+A lock missing one of these transitives causes the corresponding
+matrix cell to fail under `--require-hashes` because the install-time
+resolver demands a pinned entry for every package the environment
+markers select. A lock that contains the *superset* is safe everywhere:
+unused entries are silently skipped by their environment markers on
+platforms that do not need them.
+
+The `lock-integrity` CI job runs on **`windows-latest` × Python 3.10**
+for the same reason — it must regenerate under the same environment
+the committer used, otherwise the diff against the committed lock is
+spurious. The price is one extra Windows runner minute per push; the
+benefit is that the integrity check is meaningful.
 
 ### Trust-Layer Boundary
 
@@ -224,15 +231,16 @@ non-zero so a compromised lock commit looks anomalous in `git log`.
 
 1. Update `pyproject.toml` if the trigger requires it (range bump,
    added/removed dependency, etc.).
-2. Regenerate **using Python 3.10** (see "Python Version Used to
-   Generate the Lock" above). On Windows: `py -3.10 -m piptools …`;
-   on POSIX: `python3.10 -m piptools …`. Regenerate the runtime lock
-   first, then the dev lock:
-   ```bash
-   python3.10 -m piptools compile --generate-hashes \
+2. Regenerate **on Windows × Python 3.10** (see "Environment Used to
+   Generate the Lock" above). Use `py -3.10 -m piptools …`.
+   Regenerating on POSIX is unsupported by this policy because the
+   resulting lock will lack Windows-only transitives (`colorama`).
+   Regenerate the runtime lock first, then the dev lock:
+   ```powershell
+   py -3.10 -m piptools compile --generate-hashes `
        --output-file=requirements.lock pyproject.toml
-   python3.10 -m piptools compile --generate-hashes --allow-unsafe \
-       --extra=dev --constraint=requirements.lock \
+   py -3.10 -m piptools compile --generate-hashes --allow-unsafe `
+       --extra=dev --constraint=requirements.lock `
        --output-file=requirements-dev.lock pyproject.toml
    ```
 3. Verify locally before pushing:
