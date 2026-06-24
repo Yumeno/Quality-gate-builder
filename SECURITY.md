@@ -181,6 +181,19 @@ sign the lock is overfit to one environment and the lock should be
 regenerated. See `.github/workflows/test.yml` and the `lock-integrity`
 job for the mechanical check.
 
+The `lock-integrity` job answers a specific question: **"is the
+committed lock consistent with the dependency ranges in the current
+`pyproject.toml`?"** It does NOT answer "did upstream PyPI release a
+newer compatible version since the lock was committed?" — the job
+seeds pip-compile with the committed lock so existing pins are kept
+unless `pyproject.toml` constraints force a change. Upstream releases
+are picked up by the **periodic regenerate** flow under
+"Update Triggers" below, not by this gate.
+
+Detection of paid-out upgrade candidates (without changing the
+committed lock) is intentionally out of scope; pin-bumping is a
+human decision per `Why no Dependabot / Renovate`.
+
 ### Update Triggers
 
 The maintainer regenerates locks on the following triggers, mirroring
