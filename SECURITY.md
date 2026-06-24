@@ -1,15 +1,19 @@
 # Security Policy
 
-This document covers two related but distinct topics:
+This document covers three related but distinct topics:
 
 1. **CI Action SHA pin policy** — how qgb's own CI workflow keeps its
    third-party-action surface small and pin-updated.
-2. **Reporting a vulnerability** — how to reach the maintainer with a
+2. **Dependency Lock Policy** — how qgb pins its Python dependencies
+   (jsonschema + transitives, plus dev tools) to specific versions
+   and content hashes (Phase 3 Step 3.2).
+3. **Reporting a vulnerability** — how to reach the maintainer with a
    security finding in qgb itself (the Python CLI / library).
 
 The policy is **forward-looking only**. It governs maintenance from
 Phase 3 Step 3.1 onward; pre-3.1 commits (which had no CI workflow)
-are not retroactively in scope.
+are not retroactively in scope. Step 3.2 (dependency lock) builds
+on the Step 3.1 SHA-pin discipline and uses the same update cadence.
 
 ## Action SHA Pin Policy
 
@@ -97,6 +101,178 @@ without human-initiated rationale. We intentionally keep the human
 review loop in the path. See
 `development/docs/journal/phase3-step3-1-prejournal.md`
 §"3. なぜ supply-chain 厳格化" for the longer reasoning.
+
+## Dependency Lock Policy
+
+qgb pins its Python dependencies to specific versions **and** content
+hashes via `pip-compile --generate-hashes` (Phase 3 Step 3.2). This
+section defines the rules.
+
+### Files and Layering
+
+| File | Generated from | Constraint | Purpose |
+|---|---|---|---|
+| `requirements.lock` | `pyproject.toml` dependencies | (none) | Runtime supply-chain |
+| `requirements-dev.lock` | `pyproject.toml` dev extras | `-c requirements.lock` | Development supply-chain |
+
+`requirements-dev.lock` is generated with `--constraint=requirements.lock`,
+so the dev resolution is forced to agree with the runtime resolution on
+shared packages (jsonschema, attrs, …). This prevents the dev install
+from silently upgrading or downgrading runtime pins.
+
+The dev lock is generated with `--allow-unsafe` so that `pip`, `setuptools`,
+and other build-time tooling pulled in by `pip-tools` are also pinned with
+hashes. Without this flag, `pip install --require-hashes` would fail at
+those packages.
+
+### What the Lock Does and Does Not Cover
+
+The lock is for **the qgb repository's own CI and contributor environments**.
+It does NOT make `pip install qgb` from PyPI deterministic for arbitrary
+users; that path resolves `jsonschema>=4.20,<5.0` afresh at install time.
+What is reproducible is:
+
+- The CI matrix install across Windows + Ubuntu × Python 3.10 + 3.12.
+- A contributor or auditor running
+  `pip install --require-hashes --only-binary :all: -r requirements.lock`
+  followed by `pip install --no-deps -e .`.
+
+For Phase 5 packaging, separate decisions will determine what (if any)
+lock guarantees are extended to end users.
+
+### Trust-Layer Boundary
+
+The lock pins the **Python package supply chain** that ends up in the
+qgb runtime / dev process. It does NOT control these adjacent layers,
+which are pinned separately or treated as external trust:
+
+| Layer | How it is controlled |
+|---|---|
+| GitHub Actions runners | `actions/checkout` + `actions/setup-python` SHA pins (see Action SHA Pin Policy above) |
+| `pip` / `setuptools` (CI environment) | Whatever `actions/setup-python` ships; later overwritten by the dev lock for the `lock-integrity` job |
+| PEP 517 build backend (`setuptools>=68`, `wheel`) | `pyproject.toml [build-system].requires` — range, not lock. A future step may revisit this; out of scope for Step 3.2 |
+| Python interpreter itself | `actions/setup-python` resolution; not pinned to a patch version |
+| PyPI artefact hashes | The lock pins this (the primary supply-chain control point for runtime / dev) |
+
+The CI matrix is part of how this lock is validated: a single lock that
+fails to install on any one of the four (OS, Python) combinations is a
+sign the lock is overfit to one environment and the lock should be
+regenerated. See `.github/workflows/test.yml` and the `lock-integrity`
+job for the mechanical check.
+
+### Update Triggers
+
+The maintainer regenerates locks on the following triggers, mirroring
+the SHA pin policy above:
+
+1. **Security advisory on a locked package.** GHSA / CVE on
+   `jsonschema`, `attrs`, `referencing`, `rpds-py`,
+   `jsonschema-specifications`, or any dev-side package. Updates may be
+   expedited (within 7 days) when the advisory is rated High or Critical.
+2. **`pyproject.toml` dependency change.** Adding, removing, or
+   re-ranging a dependency requires regenerating locks in the same
+   commit. The `lock-integrity` CI job enforces this mechanically.
+3. **Python version support requirement.** A new Python release crossing
+   qgb's `requires-python` range may move some transitive's resolution
+   if the range was tight.
+4. **Scheduled review.** Once per quarter, on the last working week of
+   January, April, July, and October — same cadence as SHA pin review.
+   Action: regenerate, diff, commit, or document "reviewed, no change."
+5. **Ad-hoc / opportunistic.** A maintainer may regenerate for any
+   documented reason. Pure "latest is better" is **not** sufficient;
+   the commit message must say what specifically improves.
+
+"Completely ad-hoc with no documented reason" is **not** acceptable
+under this policy — the goal is to keep human review of lock changes
+non-zero so a compromised lock commit looks anomalous in `git log`.
+
+### How to Update
+
+1. Update `pyproject.toml` if the trigger requires it (range bump,
+   added/removed dependency, etc.).
+2. Regenerate the runtime lock first, then the dev lock:
+   ```bash
+   python -m piptools compile --generate-hashes \
+       --output-file=requirements.lock pyproject.toml
+   python -m piptools compile --generate-hashes --allow-unsafe \
+       --extra=dev --constraint=requirements.lock \
+       --output-file=requirements-dev.lock pyproject.toml
+   ```
+3. Verify locally before pushing:
+   ```bash
+   python -m pip install --require-hashes --only-binary :all: \
+       -r requirements-dev.lock
+   python -m pip install --no-deps -e .
+   pytest -ra
+   ```
+4. Commit `pyproject.toml`, `requirements.lock`, `requirements-dev.lock`
+   together as a **single-purpose commit** with a subject like:
+   ```
+   deps: bump <package> from <old> to <new> (<reason>)
+   ```
+   Reason is one of: `security advisory <ID>`, `pyproject range change`,
+   `python <version> support`, `quarterly review`, or a short free-text
+   explanation for ad-hoc updates.
+5. Open a PR. The `lock-integrity` job will refuse to merge if the
+   committed locks disagree with what `pip-compile` regenerates from
+   the current `pyproject.toml`.
+
+### What This Policy Does NOT Manage (Out of Scope, User-Side Decision)
+
+The following are **deliberately not** part of qgb's own CI surface;
+they are decisions the downstream qgb operator makes per project. See
+`development/docs/ci-examples.md` for non-prescriptive sample
+configurations.
+
+- **Lock artefact retention beyond git history.** qgb's locks are
+  committed; `git show <sha>:requirements.lock` gives permanent access.
+  Whether to also upload locks as 90-day CI artefacts, attach them to
+  release tags, or push them to an external archive is the operator's
+  call (and may be required by SOC2 / internal audit policy).
+- **SBOM generation (CycloneDX / SPDX).** Same rationale: the lock plus
+  `pip-tools`'s own metadata are enough for qgb's immediate supply-chain
+  needs. SBOM tooling is for inventory / vulnerability workflows that
+  belong to the operator.
+- **Vulnerability scanning (pip-audit, safety, snyk, …).** Adding such
+  a scan introduces a new external trust dependency (the vulnerability
+  database) and a new failure mode (false positive blocks merges). The
+  Phase 3 line is to keep qgb's CI a closed loop; vulnerability scans
+  belong upstream of the qgb operator.
+- **Private PyPI mirrors / proxies.** The lock is content-hash-pinned,
+  so a mirror that serves the same bytes is acceptable; configuring
+  one is operational, not qgb-side.
+
+This non-coverage is intentional, not an oversight, and mirrors the
+Phase 4 (CI 連携) withdrawal in `detailed-design.md` §14.3.
+
+### Why pip-tools, Not uv / Poetry / pdm
+
+`pip-tools` (Jazzband-maintained, not PyPA-official) was chosen because:
+
+- It produces requirements files that the stock `pip` consumes natively;
+  there is no separate resolver running inside `pip` at install time.
+- It is dev-only; no runtime overhead, no new packaging style imposed
+  on `pyproject.toml`.
+- It is mature and narrowly scoped (compile + sync), so the surface
+  added under NF-010 is small.
+- `pip lock` is currently experimental and has platform-scope caveats
+  that make it unsuitable for this step.
+- `uv` (Rust, 2024+) is a strong contender but enlarges the toolchain
+  beyond stdlib + pip. Revisitable in a future phase if the qgb-side
+  trade-offs change.
+- `poetry` / `pdm` would replace the build backend and the
+  `pyproject.toml` schema; the cost of regression is not justified
+  for one runtime dependency.
+
+### SBOM History
+
+An earlier review (Phase 2 close, 2026-06-13) initially marked SBOM as
+WONTFIX, then reversed that judgement after a Codex second opinion
+pointing out that `pip freeze` alone does not bind content hashes. The
+current Step 3.2 landing — committed `requirements.lock` with
+`--generate-hashes` + `--require-hashes` in CI — is the cheaper
+substitute for the supply-chain control SBOM tools are usually adopted
+to provide. SBOM proper remains out of scope.
 
 ## Reporting a Vulnerability
 
