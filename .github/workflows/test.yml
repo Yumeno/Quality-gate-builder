@@ -76,7 +76,7 @@ jobs:
       # dev lock is layered on top of runtime lock via -c (constraint),
       # so dev install cannot override runtime pins.
       - name: Install dev dependencies (hash-verified, binary-only)
-        run: python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock
+        run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
 
       # qgb itself: editable install without re-resolving deps. The lock
       # files above already supplied jsonschema + transitives at fixed
@@ -113,7 +113,7 @@ jobs:
       # us a hash-verified pip-compile invocation that mirrors what a
       # human maintainer runs locally.
       - name: Install dev lock (for pip-tools)
-        run: python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock
+        run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
 
       # Regenerate locks into tmp/ and diff against committed lock files.
       # If pyproject.toml dependencies changed and locks were not refreshed,
