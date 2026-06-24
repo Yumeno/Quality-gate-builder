@@ -103,10 +103,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Python 3.12
+      # Lock files are generated against the lowest supported Python in
+      # the matrix (3.10). pip-compile's resolution is per-Python (env
+      # markers like ``python_version<"3.13"`` change the transitive
+      # set), so to keep the committed lock diff-stable across the
+      # matrix, the integrity check must regenerate with the same
+      # Python the committer used.
+      - name: Setup Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
-          python-version: "3.12"
+          python-version: "3.10"
 
       # The dev lock contains pip-tools itself + its deps (pip / setuptools
       # / build / etc) under --allow-unsafe, so installing it here gives

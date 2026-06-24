@@ -140,6 +140,27 @@ What is reproducible is:
 For Phase 5 packaging, separate decisions will determine what (if any)
 lock guarantees are extended to end users.
 
+### Python Version Used to Generate the Lock
+
+The committed locks are regenerated **on Python 3.10**, which is the
+lowest version in qgb's `requires-python` range. This matters because
+`pip-compile`'s resolution is per-Python: environment markers such as
+`python_version<"3.13"` or `python_version<"3.11"` change which
+transitive packages (typing-extensions, exceptiongroup, tomli, …)
+enter the lock.
+
+A lock generated on Python 3.12 is missing transitives that some
+packages require only on Python 3.10–3.11; installing such a lock on
+Python 3.10 fails with `--require-hashes` because the missing
+transitive cannot be resolved at install time. A lock generated on
+Python 3.10 contains the *superset* needed across the matrix and is
+safe for all supported Python versions.
+
+The `lock-integrity` CI job uses `actions/setup-python@…
+python-version: "3.10"` for the same reason: it must regenerate
+under the same Python the committer used, otherwise the diff against
+the committed lock is spurious.
+
 ### Trust-Layer Boundary
 
 The lock pins the **Python package supply chain** that ends up in the
@@ -190,11 +211,14 @@ non-zero so a compromised lock commit looks anomalous in `git log`.
 
 1. Update `pyproject.toml` if the trigger requires it (range bump,
    added/removed dependency, etc.).
-2. Regenerate the runtime lock first, then the dev lock:
+2. Regenerate **using Python 3.10** (see "Python Version Used to
+   Generate the Lock" above). On Windows: `py -3.10 -m piptools …`;
+   on POSIX: `python3.10 -m piptools …`. Regenerate the runtime lock
+   first, then the dev lock:
    ```bash
-   python -m piptools compile --generate-hashes \
+   python3.10 -m piptools compile --generate-hashes \
        --output-file=requirements.lock pyproject.toml
-   python -m piptools compile --generate-hashes --allow-unsafe \
+   python3.10 -m piptools compile --generate-hashes --allow-unsafe \
        --extra=dev --constraint=requirements.lock \
        --output-file=requirements-dev.lock pyproject.toml
    ```
