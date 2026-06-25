@@ -225,3 +225,41 @@ def test_lock_does_not_contain_editable_or_git_refs(lock_path: Path) -> None:
         f"{lock_path.name} contains forbidden install markers: {found}. "
         "These bypass --require-hashes."
     )
+
+
+def test_pin_line_regex_parses_inline_env_marker(tmp_path: Path) -> None:
+    """Guard against regression of M3 (Codex 段 3 r1 code fix follow-up).
+
+    Phase 3 Step 3.2 補修 M3 extended ``_PIN_LINE`` to optionally match
+    PEP 508-style inline environment markers (``; python_version < "3.13"``)
+    that some pip-compile versions or alternative lock tools emit. The
+    committed locks in this repo don't currently exercise that path —
+    pip-tools 7.5.3 keeps markers in the ``# via`` comment block — so we
+    pin the behaviour with a tiny synthetic lock fixture. If a future
+    refactor narrows ``_PIN_LINE`` again the test catches it before
+    a pip-tools bump silently breaks parsing of real locks.
+    """
+    fake_lock = tmp_path / "fake.lock"
+    fake_lock.write_text(
+        "#\n"
+        "# Synthetic test fixture, not a real pip-compile output.\n"
+        "#\n"
+        "marker-pkg==1.2.3 ; python_version < \"3.13\" \\\n"
+        "    --hash=sha256:" + "a" * 64 + "\n"
+        "plain-pkg==4.5.6 \\\n"
+        "    --hash=sha256:" + "b" * 64 + "\n",
+        encoding="utf-8",
+    )
+    parsed = _parse_lock(fake_lock)
+    assert "marker-pkg" in parsed, (
+        "_PIN_LINE failed to match a name==version line that carries an "
+        "inline PEP 508 environment marker. M3 補修 was meant to handle "
+        "this; the regex regressed."
+    )
+    assert len(parsed["marker-pkg"]) == 1, (
+        "Hash line after a marker-bearing pin should still be attributed "
+        "to the marker-bearing package."
+    )
+    versions = _parse_versions(fake_lock)
+    assert versions["marker-pkg"] == "1.2.3"
+    assert versions["plain-pkg"] == "4.5.6"
