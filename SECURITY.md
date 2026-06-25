@@ -134,8 +134,15 @@ What is reproducible is:
 
 - The CI matrix install across Windows + Ubuntu × Python 3.10 + 3.12.
 - A contributor or auditor running
-  `pip install --require-hashes --only-binary :all: -r requirements.lock`
-  followed by `pip install --no-deps -e .`.
+  ```bash
+  pip install --require-hashes --only-binary :all: -r requirements-dev.lock
+  pip install --no-deps --no-build-isolation -e .
+  ```
+  The `--no-build-isolation` flag on the editable install is essential:
+  without it, `pip` would spin up a fresh build venv and re-fetch
+  `setuptools` / `wheel` from PyPI bypassing `--require-hashes`. With
+  the dev lock already installed in the active env, build can reuse the
+  hash-pinned `setuptools` / `wheel` instead.
 
 For Phase 5 packaging, separate decisions will determine what (if any)
 lock guarantees are extended to end users.
@@ -177,8 +184,8 @@ which are pinned separately or treated as external trust:
 | Layer | How it is controlled |
 |---|---|
 | GitHub Actions runners | `actions/checkout` + `actions/setup-python` SHA pins (see Action SHA Pin Policy above) |
-| `pip` / `setuptools` (CI environment) | Whatever `actions/setup-python` ships; later overwritten by the dev lock for the `lock-integrity` job |
-| PEP 517 build backend (`setuptools>=68`, `wheel`) | `pyproject.toml [build-system].requires` — range, not lock. A future step may revisit this; out of scope for Step 3.2 |
+| `pip` / `setuptools` / `wheel` (CI environment) | Whatever `actions/setup-python` ships, then overwritten by the dev lock install. The editable install runs with `--no-build-isolation` so that the build step reuses these hash-pinned versions instead of fetching fresh copies into an isolated build venv (which would bypass `--require-hashes`). |
+| PEP 517 build backend (`setuptools>=68`, `wheel`) | `pyproject.toml [build-system].requires` — range, not lock at the package metadata level. But because we install with `--no-build-isolation`, the actual build invocation uses the hash-pinned `setuptools` / `wheel` from the dev lock. A future step may revisit pinning the metadata range itself. |
 | Python interpreter itself | `actions/setup-python` resolution; not pinned to a patch version |
 | PyPI artefact hashes | The lock pins this (the primary supply-chain control point for runtime / dev) |
 

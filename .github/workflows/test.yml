@@ -78,11 +78,14 @@ jobs:
       - name: Install dev dependencies (hash-verified, binary-only)
         run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
 
-      # qgb itself: editable install without re-resolving deps. The lock
-      # files above already supplied jsonschema + transitives at fixed
-      # versions / hashes.
-      - name: Install qgb (editable, no deps)
-        run: python -m pip install --no-deps -e .
+      # qgb itself: editable install without re-resolving deps and
+      # without PEP 517 build isolation. The dev lock above already
+      # installed setuptools / wheel at hash-pinned versions; with
+      # build isolation, pip would otherwise spin up an isolated venv
+      # and re-fetch setuptools / wheel from PyPI bypassing
+      # --require-hashes (NF-011 / Step 3.2 review finding M1).
+      - name: Install qgb (editable, no deps, no build isolation)
+        run: python -m pip install --no-deps --no-build-isolation -e .
 
       - name: Show resolved environment
         run: |
