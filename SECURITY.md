@@ -254,9 +254,12 @@ non-zero so a compromised lock commit looks anomalous in `git log`.
    ```bash
    python -m pip install --require-hashes --only-binary :all: \
        -r requirements-dev.lock
-   python -m pip install --no-deps -e .
+   python -m pip install --no-deps --no-build-isolation -e .
    pytest -ra
    ```
+   The `--no-build-isolation` flag mirrors what the `test` CI job does:
+   without it, pip would bypass the hash-verified `setuptools` / `wheel`
+   already in the env and re-fetch fresh copies into a build venv.
 4. Commit `pyproject.toml`, `requirements.lock`, `requirements-dev.lock`
    together as a **single-purpose commit** with a subject like:
    ```
