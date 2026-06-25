@@ -31,9 +31,14 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 RUNTIME_LOCK = REPO_ROOT / "requirements.lock"
 DEV_LOCK = REPO_ROOT / "requirements-dev.lock"
 
-# Lines that pin a package: ``name==version \\`` followed by hash lines.
+# Lines that pin a package: ``name==version[ ; env_marker] \\`` followed by hash lines.
 # Package names follow PEP 503: letters, digits, ``.``, ``-``, ``_``.
-_PIN_LINE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\]+)\s*\\?\s*$")
+# pip-tools 7.5.x emits markers in the ``# via`` comment block rather than
+# inline, but a future version (or a different lock tool) may emit them
+# inline; the ``(?:\s*;[^\\]*?)?`` makes the parse robust to that.
+_PIN_LINE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+?)(?:\s*;[^\\]*?)?\s*\\?\s*$"
+)
 _HASH_LINE = re.compile(r"^\s+--hash=sha256:[0-9a-f]{64}\s*\\?\s*$")
 
 
