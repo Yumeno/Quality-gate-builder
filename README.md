@@ -9,12 +9,14 @@ Stable behaviour is not yet guaranteed.
 ## Status
 
 - Phase 1 (Python CLI MVP) and Phase 2 (編集を安全にする) completed.
-- Phase 3 (機械責務側の最終整備) in progress:
+- **Phase 3 (機械責務側の最終整備) completed 2026-06-26**:
   - Step 3.0 (`detect` 廃止 + project-context 二重ファイル設計): ✅ completed 2026-06-22
   - Step 3.1 (command runner 強化 + CI 雛形): ✅ completed 2026-06-24
-  - Step 3.2 (依存解決固定 / lock + hash): next
+  - Step 3.2 (依存解決固定 / lock + hash + lock-integrity CI): ✅ completed 2026-06-26
+  - Step 3.3 (Phase 2 繰越実需回収): optional, deferred to Phase 5 实需待ち
+- Next: Phase 5 (Skill Creator 化).
 - See `development/docs/journal/` for the latest Step's record.
-- Windows PowerShell is a first-class environment (NF-004); CI verifies on `windows-latest` and `ubuntu-latest` with Python 3.10 and 3.12.
+- Windows PowerShell is a first-class environment (NF-004); CI verifies on `windows-latest` and `ubuntu-latest` with Python 3.10 and 3.12, plus a `lock-integrity` job validating that committed `requirements.lock` / `requirements-dev.lock` stay consistent with `pyproject.toml`.
 
 ## Documentation
 
@@ -22,12 +24,15 @@ Stable behaviour is not yet guaranteed.
 - [`development/docs/requirements_and_development.md`](development/docs/requirements_and_development.md) — Requirements and design (v0.3).
 - [`development/docs/stage-design.md`](development/docs/stage-design.md) — Stage design phase specification.
 - [`development/docs/framework-shape.md`](development/docs/framework-shape.md) — Framework / user-project boundary.
+- [`development/docs/ci-examples.md`](development/docs/ci-examples.md) — Sample CI patterns for downstream qgb operators (non-prescriptive; artefact retention, SBOM, vuln scan, etc.).
 - [`development/docs/project-background.md`](development/docs/project-background.md) — Project background.
 - [`development/docs/wakaba-talk-summary.md`](development/docs/wakaba-talk-summary.md) — Summary of the originating talk.
 - [`development/docs/yaoyorozu-system-references.md`](development/docs/yaoyorozu-system-references.md) — Reference implementation notes.
-- [`SECURITY.md`](SECURITY.md) — CI action SHA pin policy + vulnerability reporting.
+- [`SECURITY.md`](SECURITY.md) — Action SHA pin policy + dependency lock policy + vulnerability reporting.
 
 ## Installation (development)
+
+The convenient path uses `pyproject.toml` ranges (matches what most contributors run day-to-day):
 
 ```powershell
 py -3 -m venv .venv
@@ -46,6 +51,21 @@ python -m pip install -U pip
 python -m pip install -e ".[dev]"
 python -m qgb --help
 ```
+
+### Reproducible (hash-verified) install
+
+The hash-pinned path matches CI exactly — every dependency comes from the committed lock files and `--no-build-isolation` keeps the build step within the hash-verified env (the dev lock pins `setuptools` / `wheel` too):
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock
+python -m pip install --no-deps --no-build-isolation -e .
+python -m qgb --help
+```
+
+Use this path for security-sensitive contributor environments or to reproduce CI conditions locally. The lock policy (when it is regenerated, what the trust boundary is) is documented in [`SECURITY.md`](SECURITY.md) "Dependency Lock Policy".
 
 ## Development
 

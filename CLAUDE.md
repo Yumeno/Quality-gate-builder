@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Phase 1 (Python CLI MVP) and Phase 2 ("編集を安全にする" / make editing safe) are complete. Phase 3 ("機械責務側の最終整備" / final consolidation of the machine-responsibility layer) is in progress as of 2026-06-24. Step 3.0 (`detect` 廃止 + project-context 二重ファイル設計) と Step 3.1 (command runner 強化 + CI 雛形 + 補修 1〜7) は完結。次は Step 3.2 (依存解決固定 / lock + hash)。See `development/docs/detailed-design.md` §14 for the Phase 3 plan, `development/docs/requirements_and_development.md` §13 for the phase overview, and `development/docs/journal/phase3-step3-1.md` for the latest completed Step's record.
+Phase 1 (Python CLI MVP) と Phase 2 ("編集を安全にする") は完結。**Phase 3 ("機械責務側の最終整備") も 2026-06-26 に完結**。Step 3.0 (`detect` 廃止 + project-context 二重ファイル設計、2026-06-22) / Step 3.1 (command runner 強化 + CI 雛形 + 補修 1〜7、2026-06-24) / Step 3.2 (依存解決固定 / lock + hash + CI lock-integrity job + 利用者運用との境界整理、2026-06-26) すべて完結。Step 3.3 (Phase 2 繰越実需回収) は任意で Phase 5 実需待ち。次は Phase 5 (Skill Creator 化)。See `development/docs/detailed-design.md` §14 for the Phase 3 plan, `development/docs/requirements_and_development.md` §13 for the phase overview, and `development/docs/journal/phase3-step3-2.md` for the latest completed Step's record.
 
 The authoritative documents in priority order:
 
 1. `development/docs/philosophy.md` — the 思想憲章 (philosophy charter, 11 不易). All other documents are subordinate.
-2. `development/docs/requirements_and_development.md` — 要件定義書・基本設計書 v0.3 (Phase 3 計画反映済み, §1.3 / §13 / §14).
-3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.28 as of 2026-06-24, Step 3.1 完結反映).
+2. `development/docs/requirements_and_development.md` — 要件定義書・基本設計書 v0.3 (Phase 3 完結反映済み, §1.3 / §13 / §14).
+3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.29 as of 2026-06-26, Step 3.2 完結 + Phase 3 全体完結反映).
 4. `development/docs/framework-shape.md` — Layer 1〜4 境界 (Phase 3 Step 3.0 で Layer 3 スキル責務文言改訂、Step 3.1 で §4 command runner 動作契約節 + §7.4 異常時の責務分離を追加).
 5. `development/docs/stage-design.md` — 段階設計フェーズ仕様.
 
@@ -46,7 +46,7 @@ These are load-bearing decisions. Diverging from them silently will break the de
 
 - **LLM review can never produce ALLOW alone** (philosophy P6, F-015, C-001). LLM output is an advisory signal only. This applies to both qgb's own development (CI / merge gates) and to user projects.
 
-- **Minimum dependencies, supply-chain-aware.** Prefer the Python stdlib. Currently only `jsonschema` is a runtime dependency. Any external dependency requires the §6.9.2 checklist. PyPI itself is treated as untrusted infrastructure (NF-011). Phase 3 Step 3.2 will add `pip-compile --generate-hashes` lock files for supply-chain hardening.
+- **Minimum dependencies, supply-chain-aware.** Prefer the Python stdlib. Currently only `jsonschema` is a runtime dependency. Any external dependency requires the §6.6.2 checklist of `requirements_and_development.md`. PyPI itself is treated as untrusted infrastructure (NF-011). Phase 3 Step 3.2 で `requirements.lock` + `requirements-dev.lock` (`pip-compile --generate-hashes`, Windows × Python 3.10 生成、layered + `--allow-unsafe`) を repo commit、CI で `--require-hashes --only-binary :all:` install + `--no-build-isolation` editable install + `lock-integrity` job (committed lock seed + `tools/diff_locks.py` で header strip body 比較) を確立済。SBOM 生成 / vulnerability scan / lock artifact 保管は qgb 本体 CI 責務外 (利用者運用、`development/docs/ci-examples.md` 参考)。詳細運用契約は `SECURITY.md` "Dependency Lock Policy"。
 
 - **No arbitrary command execution from contracts.** `qgb` only runs commands declared in `contract.json` (verification_type=command) via the `command` runner. Don't add a feature that lets `contract.json` shell out freely (§9.2).
 
@@ -98,7 +98,7 @@ qgb/
   templates/   # config.initial.json, policy.initial.json, project-context.initial.md
 development/
   docs/        # philosophy.md, requirements_and_development.md, detailed-design.md,
-               # framework-shape.md, stage-design.md, phase1-manual.md,
+               # framework-shape.md, stage-design.md, ci-examples.md, phase1-manual.md,
                # security-dependency-policy.md, migration-phase1-to-phase2.md,
                # project-background.md, wakaba-talk-summary.md,
                # yaoyorozu-{entry-points-investigation,system-references}.md
@@ -107,7 +107,15 @@ examples/      # generic-minimal, python-cli-pytest, markdown-docs,
                # python-fastapi-pytest, go-cli, node-cli-vitest (6 examples)
 skills/source/ # Phase 5 中間表現 (現在は README.md だけ予約)
 tests/
+tools/         # CI 補助 script (qgb package 外、Phase 5 で skills builder も)
+               #   - diff_locks.py: pip-compile lock の header strip + 改行正規化 + body 比較
+                 #                   (Phase 3 Step 3.2 で `lock-integrity` CI job 用に新設)
 pyproject.toml
+requirements.lock      # runtime 依存 + 推移依存 (Phase 3 Step 3.2、Windows × Python 3.10 生成)
+requirements-dev.lock  # dev 依存 (layered `-c requirements.lock` + `--allow-unsafe`)
+.gitattributes         # requirements*.lock を LF 固定 (Phase 3 Step 3.2)
+.github/workflows/test.yml  # CI: pytest 4 matrix + lock-integrity job (Phase 3 Step 3.1+3.2)
+SECURITY.md            # Action SHA Pin Policy + Dependency Lock Policy + Vulnerability Reporting
 ```
 
 There is **no `qgb/adapters/`** — withdrawn 2026-06-21 (Phase 3 Step 3.0). Target understanding is Phase 5 skill responsibility.
@@ -162,6 +170,7 @@ TDD mode is the only exception where DENY is an *expected* state: `gate.json.pha
 - **Windows PowerShell is a first-class environment** (NF-004). The install manual and `scripts/quality-gate.ps1` must work there. Cross-platform commands take precedence over Unix-only ones.
 - BOM tolerance (`encoding="utf-8-sig"` on every user-file read path) is mandatory; write paths use BOM-less `utf-8`.
 - POSIX must work too, but it is the second target. Phase 3 Step 3.1 で **CI matrix を導入** (`.github/workflows/test.yml`、Windows + Ubuntu × Python 3.10 + 3.12) し POSIX 経路を機械的に検証する状態にした。CI SHA pin の更新ルールは `SECURITY.md` で明文化。
+- Phase 3 Step 3.2 で **依存解決を機械固定** (`requirements.lock` / `requirements-dev.lock`、Windows × Python 3.10 生成、layered + `--allow-unsafe`)。CI 4 matrix で `--require-hashes --only-binary :all:` + `--no-build-isolation` install が緑になることを毎 push 機械検証、加えて `lock-integrity` job (Windows × Python 3.10) で committed lock を seed に regen + `tools/diff_locks.py` で body 比較する整合性検証も入れた。lock 生成は Windows × Python 3.10 固定 (matrix 最小 Python + Windows-only colorama を含む superset)。詳細は `SECURITY.md` "Dependency Lock Policy" / "Environment Used to Generate the Lock"。
 - **command runner の責務範囲** (Step 3.1 補修群で確定): 正常な foreground command の完了経路で gate.json を残すことに責務を限定する。利用者の `contract.command` が daemon spawn / 孫プロセスで stdout pipe を継承し続けるケース、OS / ハード異常で process tree の一部だけが生存するケース、それらの hang を qgb が検出して reason を取り繕うことは責務範囲外。異常時は user が Ctrl+C / 端末再起動で介入する設計。詳細は `framework-shape.md` §7.4。**この責務分離は qgb のドメイン (LLM 生成物品質ゲート / CI / 開発支援) 固有であり、リアルタイム制御等の他ドメインに普遍適用しないこと**。
 
 ## When working in this repo

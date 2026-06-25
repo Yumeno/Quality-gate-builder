@@ -123,30 +123,35 @@ Phase 2 で adapter 量産時に platform 別 binary 依存が増えるので、
 標準ライブラリ。**最新の脆弱性情報は採用ごとに確認すること** (本欄は
 採用時点のスナップショット)。
 
-## 8. Phase 2 adapter 追加時の基準
+## 8. Phase 3 後の整理 (旧 "Phase 2 adapter 追加時の基準" 撤回)
 
-Phase 2 で言語別 adapter (Go / Rust / Java / .NET / PHP) を量産する
-際は、本ポリシーが特に効く:
+> **2026-06-22 撤回**: 本節の原版は Phase 2 で言語別 adapter (Go / Rust /
+> Java / .NET / PHP) を量産する際の指針として書かれていた。Phase 3 Step 3.0
+> (2026-06-22) で adapter 量産方針を全廃 (`qgb/adapters/` 撤去、対象認識は
+> Phase 5 スキル責務に統合) したため、本節の前提自体が無効になった。
 
-- adapter ごとに対象言語の package manager / toolchain への依存が
-  発生し得る
-- adapter が直接 PyPI から外部 SDK を呼ぶような形は **避ける**
-  (代わりに利用者が事前にローカル toolchain を用意する設計に寄せる)
-- adapter が target project の lockfile を解釈する処理を入れる場合、
-  lockfile parser ライブラリは本 checklist を厳格に適用する
+現在の qgb は対象言語に依存しない CLI として動作する (機械的検査と
+証跡固定に責務を限定)。利用者プロジェクトが何で書かれていようと、
+`policy.json` / `contract.json` で宣言された段階・契約を実行するだけ。
 
-## 9. Phase 2 以降に倒した項目 (out-of-scope)
+Phase 5 スキルが利用者プロジェクト向けに段階・契約を提案する際、
+その提案レビュー機構は別途 Phase 5 で設計する (本節の adapter
+threat model の役割は引き継がない)。
 
-Phase 1 では以下を扱わない (本ポリシーの adherence を機械的に検証
-する手段は Phase 2 以降):
+## 9. Phase 3 完結後の状態 (旧 "Phase 2 以降に倒した項目" 更新)
 
-- **SBOM 自動生成** — CycloneDX / SPDX フォーマットでの依存記録
-- **pip-audit / dependabot CI 統合** — 定期 CVE スキャンの自動化
-- **lockfile diff policy** — 依存追加 / 更新の PR 自動審査
-- **adapter ごとの threat model** — 言語別 toolchain 固有のリスク
+| 項目 | 現状 | 根拠 |
+|---|---|---|
+| **lockfile diff policy** | ✅ Phase 3 Step 3.2 で実装 | `.github/workflows/test.yml` `lock-integrity` job + `tools/diff_locks.py` で committed lock を seed に regen + body 比較。詳細は `SECURITY.md` "Dependency Lock Policy" |
+| **依存 audit (基礎)** | ✅ Phase 3 Step 3.2 で実装 | `pip-compile --generate-hashes` で全 transitive を hash 固定、CI で `--require-hashes --only-binary :all: --no-build-isolation` 経路で機械検証 |
+| **SBOM 自動生成 (CycloneDX / SPDX)** | **WONTFIX** | lock + hash で qgb 本体 immediate supply-chain risk を直接閉じる。SBOM は inventory / vulnerability workflow 用で利用者運用 (downstream 必要なら `development/docs/ci-examples.md` Pattern B 参照) |
+| **pip-audit / safety 等の vuln scan** | **out of scope** | 外部 advisory DB を qgb の closed loop に持ち込まない (NF-011)。利用者運用 (`ci-examples.md` Pattern C 参照) |
+| **dependabot / Renovate CI 統合** | **不採用** | 人手 review loop を path に固定 (qgb 哲学 P8 + 編集は構造化 JSON Patch 経由)。`SECURITY.md` "Why no Dependabot / Renovate" |
+| **adapter ごとの threat model** | **N/A** | Phase 3 Step 3.0 で adapter 量産方針撤回、対象認識は Phase 5 スキル責務 |
 
-これらは Phase 2 で adapter inventory が拡大した段階で、本ポリシーを
-基礎に CI 化する想定。
+Phase 3 全体 (Step 3.0 detect 廃止 / 3.1 command runner 強化 / 3.2
+依存解決固定) で「機械責務側の最終整備」が完結 (2026-06-26)。
+Phase 5 着手前提条件揃った。
 
 ## 10. 参照
 
@@ -154,3 +159,6 @@ Phase 1 では以下を扱わない (本ポリシーの adherence を機械的�
 - spec `requirements_and_development.md` §6.6 (依存ライブラリ設計)
 - spec `requirements_and_development.md` §F-008 (採用判定の入口)
 - spec `philosophy.md` P8 (外部コンテンツは指示でない)
+- `SECURITY.md` — Action SHA Pin Policy + Dependency Lock Policy + Vulnerability Reporting
+- `development/docs/ci-examples.md` — 利用者運用 CI patterns (artifact / SBOM / vuln scan / JUnit / Dependabot の非規定的参考例)
+- `development/docs/journal/phase3-step3-2.md` — Step 3.2 完結記録

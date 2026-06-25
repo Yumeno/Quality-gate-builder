@@ -1369,19 +1369,22 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
   - CI 雛形 (`.github/workflows/test.yml`): pytest only、windows-latest + ubuntu-latest × Python 3.10 + 3.12 matrix、actions/checkout + actions/setup-python の commit SHA pin、permissions: contents: read、persist-credentials: false、timeout-minutes: 20、third-party action ゼロ、secrets 不使用、Dependabot/Renovate なし、`SECURITY.md` で SHA pin 更新規約明文化
   - 補修 7 件で **ステート不在化** 観点に転換 (supervisor 観測契機 ≠ 最終結果、`_CapExceededState` Lock 保護、WindowsJob transactional cleanup、reader.join timeout なしの OS+stdlib 契約信頼)
   - 異常時の責務分離を `framework-shape.md` §7.4 で明文化 (process tree partial survivor は qgb 責務外、ドメイン依存性の前置きを明示)
-- **Step 3.2 依存解決固定** (規模 0.5〜0.8) — 次の Step
-  - `pip-tools` or 同等で lock/hash (Phase 5 スキル提供時の supply-chain 信頼)
-  - CI で resolved deps 出力
-  - 当初 Phase 4 の「依存 audit / SBOM」はここで吸収
+- **Step 3.2 依存解決固定** (規模 0.9〜1.5 上方修正、実績 1.6 弱) — **✅ 完結 2026-06-26** (詳細は `journal/phase3-step3-2.md` / detailed-design.md §15 改訂履歴 0.29)
+  - `pip-tools` (`pip-compile`) で `requirements.lock` (runtime 149 行) + `requirements-dev.lock` (dev 298 行、`-c requirements.lock` で layered + `--allow-unsafe` で pip/setuptools/wheel 含む) を Windows × Python 3.10 生成
+  - CI に `--require-hashes --only-binary :all:` install (sdist 任意コード実行面排除) + `--no-build-isolation` editable install (build path も hash 経路に閉じる) + `lock-integrity` job (Windows × Python 3.10 で committed lock を seed に regen + `tools/diff_locks.py` で header strip + 改行正規化 body 比較) を統合
+  - `tests/test_lock_integrity.py` 11 件で lock 静的構造検証、`.gitattributes` で `requirements*.lock` LF 固定の二重防御
+  - **ライン引き再点検**: qgb 本体 CI = 配布物としての qgb 機械品質保証のみ、利用者運用 (artifact 化 / SBOM / vuln scan / JUnit / Dependabot) は明確に分離 (`development/docs/ci-examples.md` に参考 5 patterns)
+  - `SECURITY.md` に Dependency Lock Policy + Trust-Layer Boundary + Environment Used to Generate the Lock + How to Update を新設、SBOM は WONTFIX (lock + hash で qgb 本体 immediate risk を直接閉じる、SBOM は inventory / vulnerability workflow 用で過剰)
+  - CI 補修 5 連 + 段 1〜5 補修 5 連 (M1〜M3 + M1'/M3') を経て全 5 jobs success、テスト 742 → 753 件 (+11)
 - **Step 3.3 Phase 2 繰越の実需回収 (任意)** (規模 0.5〜1.0)
   - Phase 5 で必要が判明したものに限定: `--strict` 実体実装 / waiver 削除 (revoke/supersede) / JSON Patch `move`/`copy` / multi-doc transaction (one-shot rename) / `qgb dev` の changed-files 絞り込み / 全 REQ 一括 check
   - 先回りで全部やらず、Phase 5 着手中に必要が出たものから
 
 **Phase 3 完結条件:**
 
-- Step 3.0 / 3.1 / 3.2 が完結し、CI 緑
-- Step 3.3 は実需に応じた取捨選択を user と合意して決着
-- Phase 5 (Skill Creator 化) 着手前提が揃う
+- ✅ Step 3.0 / 3.1 / 3.2 が完結 (2026-06-22 / 2026-06-24 / 2026-06-26)、CI 緑
+- Step 3.3 は実需に応じた取捨選択を user と合意して決着 (Phase 5 着手中に必要が出たもの限定)
+- ✅ Phase 5 (Skill Creator 化) 着手前提条件揃った (= **Phase 3 全体完結 2026-06-26**)
 
 ### Phase 4: 廃止 (2026-06-21)
 
@@ -1391,7 +1394,7 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 - **JUnit XML 出力**: WONTFIX。P11 (ALLOW の比較不可能性) と緊張。qgb の gate.json を CI ツール間で比較可能なふりをする方向はマーケティング目的の qgb 認証化に道を開く
 - **PR コメント用 summary**: WONTFIX。利用者運用、qgb 責務外。summary.md は既に Phase 1 で生成済み
 - **採用判定のレビュー連動**: WONTFIX。利用者の運用設定 (branch protection 等) で実現
-- **CI による依存 audit / SBOM 生成**: Phase 3 Step 3.2 (依存解決固定) で吸収
+- **CI による依存 audit / SBOM 生成**: 依存 audit は Phase 3 Step 3.2 で吸収 (lock + hash 機械検証で代替)。SBOM は **WONTFIX** (qgb 本体 immediate risk は lock + hash で直接閉じる、SBOM は利用者運用)
 - **qgb 自身の CI**: Phase 3 Step 3.1 で最小構成 (qgb の P6 を qgb 自身に適用、POSIX 経路を論証だけで済ませず機械的判定する装置)
 
 ### Phase 5: Skill Creator 化（エージェント中立、adapter なしで設計）

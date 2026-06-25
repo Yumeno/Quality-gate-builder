@@ -1407,15 +1407,46 @@ Codex 段 5 r3 で「孫プロセス継承で reader.join 永久ブロック」�
 - **NF-010** (依存最小化): ctypes 経由、pywin32 不要
 - **NF-011** (サプライチェーン): third-party action ゼロ、SHA pin 手動更新、Dependabot/Renovate 不採用
 
-#### Step 3.2 — 依存解決固定 (規模 0.5〜0.8)
+#### Step 3.2 — 依存解決固定 (規模 0.9〜1.5 上方修正、実績 1.6 弱) — **✅ 完結 2026-06-26**
 
-**スコープ:**
+詳細は `journal/phase3-step3-2.md` / §15 改訂履歴 0.29 を参照。
 
-- `pip-tools` (`pip-compile`) 等で lock/hash
-- CI で `pip-compile --generate-hashes` の出力を artifact として残す
-- 当初 Phase 4 の「依存 audit / SBOM」をここで吸収
+**確立した境界:**
 
-**理由:** Phase 5 スキル提供時に「ユーザーが pip install qgb した結果が再現可能」であることが supply-chain 信頼の前提。jsonschema の推移依存が複数あり pip freeze だけでは P7 不足 (Codex 指摘 2026-06-13 で WONTFIX 撤回した経緯)
+- **qgb 本体 CI の責務範囲**: 配布物としての qgb の機械的品質保証 (pytest 緑 + lock 経由 hash 検証 install 緑 + lock と pyproject.toml の整合性検証)
+- **qgb 本体責務範囲外 (利用者運用)**: lock の artifact 化 / 長期保管形式 / SBOM 生成 / vulnerability scan / JUnit XML / PR コメント / Dependabot/Renovate
+- **信頼層境界**: pip / setuptools / wheel は dev lock 経由で hash 固定 + `--no-build-isolation` で build invocation もその pin を使う (build isolation 経由の hash bypass を構造的に閉じる)、Python interpreter 自体は `actions/setup-python` 解決 (patch level pin なし)
+- **lock 生成環境の規約**: Windows × Python 3.10 で生成 (matrix 最小 Python + OS / Python env marker の superset を確保)
+
+**機械責務として担保したもの:**
+
+- `requirements.lock` (runtime 依存 + 推移依存) と `requirements-dev.lock` (dev 依存、`--constraint=requirements.lock` で layered + `--allow-unsafe` で pip/setuptools/wheel 含む) を repo commit
+- CI 4 matrix で `pip install --require-hashes --only-binary :all: -r requirements-dev.lock` 通過 (sdist 任意コード実行面を構造的に閉じる、`--only-binary :all:` で wheel 経路に固定)
+- CI `lock-integrity` job (Windows × Python 3.10) で committed lock を seed に regen + `tools/diff_locks.py` で header strip + 改行正規化 body 比較
+- `tests/test_lock_integrity.py` 11 件で lock の静的構造検証 (hash 行 / 集合一致 / layered constraint / 同 version / 禁止 marker 不在 / 将来 inline env marker 退行防止)
+- `.gitattributes` で `requirements*.lock` を LF 固定、`tools/diff_locks.py` で改行正規化 (二重防御)
+
+**スコープ外 (整理済):**
+
+- **SBOM (CycloneDX/SPDX)**: WONTFIX。lock + hash で qgb 本体の immediate supply-chain risk は直接的に閉じる、SBOM は inventory / vulnerability workflow 用で本 Step では過剰 (2026-06-13 撤回 → Step 3.2 着地)。Phase 5 で利用者要求があれば別議論
+- **vulnerability scan (pip-audit / safety)**: 利用者運用、外部信頼層 (advisory DB) を qgb の closed loop に持ち込まない
+- **lock artifact retention 等の CI 出力経路**: 利用者運用 (社内コンプライアンス / SOC2 / 監査要件で必要期間が異なる)、qgb は git 環境外でも使う想定なので CI 自体が前提でない。参考例は `development/docs/ci-examples.md`
+
+**理由:** Phase 5 スキル提供時に「qgb の repo / CI / contributor 環境で依存解決が再現可能」が supply-chain 信頼の前提。jsonschema の推移依存が複数あり pip freeze だけでは P7 不足 (2026-06-13 Codex セカンドオピニオン経由で WONTFIX 撤回した経緯)。
+
+Step 3.2 と Step 3.1 の関係 = 「機械責務側の整備」二段:
+- Step 3.1 は **command 実行の機械的信頼性** (process tree / cap / escape / CI matrix)
+- Step 3.2 は **依存解決の機械的信頼性** (lock + hash + 整合性検証)
+
+両者揃って Phase 5 着手前提条件が完成。
+
+理念的に強化された箇所:
+- **P5** (ALLOW の意味限定): `lock-integrity` job が答える設問を「lock と pyproject.toml の整合性」に限定明文化 (= 「PyPI 新 release との diff」「lock 内の脆弱性」は別問題)
+- **P6** (LLM 単独 ALLOW 禁止): qgb 自身の開発プロセスに適用 (lock + hash + CI 緑 = 機械的判定、「論証で再現性 OK」を許さない)
+- **P7** (再現可能な証跡): lock を git commit して git show で永続取得可能、CI artifact 化は不要
+- **P11** (ALLOW の比較不可能性): 利用者プロジェクトに lock 規律を強制しない (Phase 5 で再判断)、qgb 本体 CI 緑 = 「他プロジェクトでも同じ」ではない
+- **NF-010** (依存最小化): pip-tools / tomli は dev-only、runtime 依存は jsonschema 1 件で不変
+- **NF-011** (サプライチェーン): hash 固定 + `--require-hashes` + `--only-binary :all:` + `--no-build-isolation` の 4 層防御、Dependabot/Renovate 不採用 (人手 review loop を path に固定)
 
 #### Step 3.3 — Phase 2 繰越の実需回収 (任意、規模 0.5〜1.0)
 
@@ -1436,8 +1467,9 @@ Codex 段 5 r3 で「孫プロセス継承で reader.join 永久ブロック」�
 | JUnit XML 出力 | **WONTFIX** (P11 ALLOW 比較不可能性違反リスク) |
 | PR コメント連動 | **WONTFIX** (利用者運用、qgb 責務外) |
 | 採用判定のレビュー連動 | **WONTFIX** (利用者運用、branch protection で実現) |
-| 依存 audit / SBOM | Step 3.2 で吸収 |
-| qgb 自身の CI | Step 3.1 で最小構成 |
+| 依存 audit | Step 3.2 で吸収 (lock + hash の機械検証で代替、SBOM は WONTFIX) |
+| SBOM 生成 | **WONTFIX** (lock + hash で qgb 本体 immediate risk を直接閉じる、SBOM は利用者運用) |
+| qgb 自身の CI | Step 3.1 で最小構成 + Step 3.2 で lock-integrity job 拡張 |
 
 ### 14.4 Phase 5 への影響 (adapter なし設計)
 
@@ -1479,3 +1511,4 @@ Codex 段 5 r3 で「孫プロセス継承で reader.join 永久ブロック」�
 | 0.26 | 2026-06-21 | **Phase 3 計画全面再構築 (本版)**: Phase 2 完結後の user 指摘で adapter 量産 (Go/Rust/.NET/Java/PHP/Markdown adapter) と Phase 4 (CI 連携) を廃止、Phase 3 を「機械責務側の最終整備」に再定義。Codex セカンドオピニオン 2 周 (2026-06-20 Phase 3 着手順 / 2026-06-21 横断レビュー) で承認。§14 Phase 3 計画を新設 (Step 3.0 detect 廃止 + project-context 導入 / Step 3.1 command runner 強化 + CI 雛形 / Step 3.2 依存解決固定 / Step 3.3 Phase 2 繰越実需回収)、§14.1 ライン引きの最終形、§14.3 Phase 4 廃止に伴う各項目の処理、§14.4 Phase 5 adapter なし設計の影響を明文化。Claude が前段で 2 回ラインを引き間違えた事実 (adapter 廃止 → P7 のため復活 → user 指摘で再廃止) は journal phase3-step3-0-prejournal.md に記録予定。コード変更なし、本 commit は spec 改訂のみ |
 | 0.27 | 2026-06-22 | **Phase 3 Step 3.0 完結**: detect 廃止 + project-context 二重ファイル設計 (本体 1 commit + 補修 4 サブステップ 3.0a〜3.0d + 段 5 Codex 2 周目「指摘なし収束」)。`qgb/core/detect.py` / `qgb/adapters/` 撤去、`qgb/schemas/project-context.schema.json` 新設 (Codex 指摘 3 件反映: `human_reviewed: bool`、言語中心 field 回避、`source_metadata` で生成経路追跡)、`qgb/core/loader.py:load_project_context` 追加、`qgb/core/init.py` で雛形生成、`qgb/core/proposal.py:build_proposal_context` で `detect` フィールド削除 + `project_context` フィールド + `warnings` 経路追加、`intended_use_note` + `constraints.project_context_role` で P6 / P8 / P11 境界を明文化。段 1 subagent 並列レビューで重大 spec-drift 6 件発見 (CLAUDE.md / 受け入れ条件§12 / stage-design §3 / detailed-design §5.1+§9 / phase1-manual / markdown-docs example) → 4 サブステップ commit (3.0a CLAUDE.md / 3.0b canonical specs + B-1〜B-3 + 運用契約明文化 / 3.0c phase1-manual + B-4 + B-5 + docs grep regression test 4 件 / 3.0d markdown-docs に project-context.{md,json} 追加 [Codex 段 3 推奨案 Q]) ですべて吸収。framework-shape.md §5 に新節「project-context.{md,json} の運用契約」追加 (編集権 / 不一致時 / API 期待 / 欠落 fallback / Free prose の prompt-injection 扱い)。`examples/python-cli-pytest` + `examples/markdown-docs` の二重ファイル記入例で「コードベース + non-code 対象」の few-shot 教材を完備。テスト 731 → 700 件 (削除 60 + 新規 22 + 修正 9)、ruff clean。Claude のライン引き誤り 3 回分は `journal/phase3-step3-0-prejournal.md` に恒久記録、Phase 5 着手時の判断バイアス予防教材。**Step 3.1 (command runner 強化 + CI 雛形) 着手準備完了**。詳細は `journal/phase3-step3-0.md` |
 | 0.28 | 2026-06-24 | **Phase 3 Step 3.1 完結**: command runner 強化 + CI 雛形 (サブステップ 3.1a〜3.1e + 補修 7 件 + 段 5 Codex 3 周経由で K=2 収束)。`qgb/core/command.py` 切り出し → Popen + reader thread + POSIX killpg + Windows Job Object (ctypes 経由 `_win_job.py`、`spawn_suspended_and_resume` で transactional cleanup) + per-stream 16 MiB execution cap + `_CapExceededState` (Lock 保護、`try_set`/`snapshot` API) + `.bat`/`.cmd` 二段エスケープ (`_win_bat_escape.py`、`build_command_line` で head 含む全 argv に均一適用) + `.github/workflows/test.yml` (Windows + Ubuntu × Python 3.10 + 3.12 matrix、SHA pin、`SECURITY.md` で更新規約明文化)。補修 7 件で **ステート不在化** 観点に転換 (supervisor 観測契機 ≠ 最終結果、`cap > timeout > natural exit` 優先順、reader.join timeout なしの OS+stdlib 契約信頼、Windows transactional spawn で suspended 漏れ消滅)。Codex 段 5 r3 「孫プロセス継承の永久ブロック」指摘は **qgb のドメイン (LLM 生成物品質ゲート / CI / 開発支援) 固有の責務分離** で範囲外と整理、`framework-shape.md` §7.4 で明文化 (ドメイン依存性の前置き明示、他ドメイン普遍適用不可)。gate.json schema 拡張は optional フィールド追加のみ (`reason` enum + `runner_warning`)、pre-3.1c gate.json byte 互換。テスト 700 → 742 件 (+42)、ruff clean、CI Windows + Ubuntu × Python 3.10 + 3.12 全 4 jobs success。Phase 5 申し送り教訓 (subprocess 技術 + review 方法論を分離記録) は `journal/phase3-step3-1.md` に恒久記録、review-process memory に finding 分類 (code fix / spec fix / out of scope by philosophy) を追加。**Step 3.2 (依存解決固定) 着手準備完了**。詳細は `journal/phase3-step3-1.md` |
+| 0.29 | 2026-06-26 | **Phase 3 Step 3.2 完結 + Phase 3 全体完結**: 依存解決固定 (lock + hash、サブステップ 3.2a〜3.2f + CI 補修 chain 5 連 + 段 5 Codex 3 周経由で K=2 収束)。`pip-tools` を dev extras に追加 (+ Python 3.10 fallback で `tomli`)、`requirements.lock` (149 行 / runtime + 推移依存) と `requirements-dev.lock` (298 行 / layered `-c requirements.lock` + `--allow-unsafe` で pip/setuptools/wheel 含む) を Windows × Python 3.10 で生成、CI に `--require-hashes --only-binary :all:` install + `--no-build-isolation` editable install + `lock-integrity` job (Windows × Python 3.10 で committed lock を seed に regen + `tools/diff_locks.py` で header strip + 改行正規化 body 比較) を統合。`tests/test_lock_integrity.py` 11 件で lock 静的構造検証 (hash 行 / 集合一致 / layered constraint / 同 version / 禁止 marker 不在 / 将来 inline env marker 退行防止)、`.gitattributes` で `requirements*.lock` LF 固定 + `tools/diff_locks.py` 改行正規化の二重防御。`SECURITY.md` に Dependency Lock Policy + Trust-Layer Boundary + Environment Used to Generate the Lock + How to Update を新設、利用者運用 (artifact / SBOM / vuln scan) を Out of Scope に明示、参考例を `development/docs/ci-examples.md` (5 patterns) に切り出し。**ライン引き再点検** (artifact 化撤回 / qgb 本体 CI = 配布物としての qgb 機械品質保証のみ、利用者運用との明確な分離)。CI 補修 5 連 (yaml `:all:` quote / Python 3.10 lock 生成 / committed lock seed + diff_locks.py / Windows runner / shell: bash) + 段 1〜5 補修 5 連 (M1〜M3 P1 build isolation 回避 / 改行正規化 / regex 拡張、M1'/M3' Codex r1 P2 SECURITY.md How to Update 漏れ / inline env marker test) を経て全 5 jobs success。テスト 742 → 753 件 (+11)、ruff clean。**Phase 3 完結条件 (Step 3.0 / 3.1 / 3.2 完結 + CI 緑) 達成、Phase 5 着手前提条件揃った**。Step 3.3 (Phase 2 繰越実需回収) は任意で Phase 5 実需に応じて判断。Phase 5 申し送り教訓 (supply-chain 4 層防御 / lock 文化と利用者運用の境界 / 信頼層境界明示) は `journal/phase3-step3-2.md` に恒久記録、memory に `lock-hash-domain-scope` 新規候補。詳細は `journal/phase3-step3-2.md` |
