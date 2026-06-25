@@ -1,19 +1,29 @@
 # Phase 5 着手前判断: Skill Creator 化
 
-着手前判断確定: 2026-06-26
-位置: Phase 3 全体完結後の Phase 5 着手前
+着手前判断確定: 2026-06-26 (v1)
+Codex セカンドオピニオン反映 + ライン引き再点検: 2026-06-26 (v2)
+
+## v2 改訂サマリ (v1 → v2)
+
+v1 commit (`dc6c9a7`) を Codex 計画レビュー r1 にかけ、code fix 4 件 + spec fix 8 件 + out of scope 3 件 + 各判断点推奨回答を受領。以下を確定:
+
+- **5.a を 3 段階に分割**: 5.a-0 (agent contract probe + acceptance 固定) / 5.a-1 (metadata.yaml schema + minimal source tree) / 5.a-2 (body.md + workflow.md + references.md + prompts)
+- **5.b と 5.c を切り離す**: 5.b で `build_skill.py` + ローカル build 確認、5.c はリリース直前 (dogfood 後) に再配置
+- **dogfooding を 2 段階化**: 5.b 後に canary dogfood (Step 5.d-canary) + 5.d 後に利用者目線 dogfood (5.e)
+- **`tools/build_skill.py` の依存方針確定**: `pyyaml` を dev/build 限定で追加 (runtime には入れない、lock+hash で管理)、template engine は不要 (f-string で十分)
+- **`metadata.yaml` schema を JSON Schema で固定**: F-019/C-008 整合、converter の曖昧さを閉じる
+- **3 agent acceptance を限定**: 生成物構造 / install guide / static syntax / golden output / manual smoke checklist まで、実 agent の完全同等挙動保証は機械検証対象外
+- **5.g (CI テンプレ生成) を optional 降格で確定**: 要件書 §13 Phase 5 の「スキルに含める」記述との矛盾を v2 で整理 (Codex 推奨: optional)
+- **規模見積もり 5.0〜9.0 → 7.0〜12.0 へ上方修正**: agent contract probe / golden fixture / context budget / release packaging / dogfood 補修分
 
 ## 1. 経緯
 
 Phase 1 (Python CLI MVP, 2026-05) / Phase 2 (編集を安全にする, 2026-06-13 完結) / Phase 3 (機械責務側の最終整備, 2026-06-26 完結) を経て、qgb 本体は機械責務側の整備を完了した。残る Phase 4 (CI 連携) は 2026-06-21 に **廃止**、Phase 5 (Skill Creator 化) が次の主軸:
 
-1. ✅ Phase 1: Python CLI MVP (3 例 examples、verification_type 4 種)
-2. ✅ Phase 2: 編集を安全にする (JSON Patch / waiver / check / Pattern B external-LLM)
-3. ✅ Phase 3: 機械責務側の最終整備
-   - Step 3.0: detect 廃止 + project-context 二重ファイル設計
-   - Step 3.1: command runner 強化 + CI 雛形 + 異常時責務分離
-   - Step 3.2: 依存解決固定 (lock + hash) + 利用者運用との境界
-4. 🚫 Phase 4: 廃止 (Step 3.1 + Step 3.2 + Phase 5 で吸収)
+1. ✅ Phase 1: Python CLI MVP
+2. ✅ Phase 2: 編集を安全にする
+3. ✅ Phase 3: 機械責務側の最終整備 (Step 3.0 detect 廃止 / 3.1 command runner / 3.2 lock + hash)
+4. 🚫 Phase 4: 廃止
 5. **Phase 5 (本書)**: Skill Creator 化 — エージェント中立スキル提供
 
 Phase 5 で qgb は **「Python CLI として動く」だけ** から **「Claude Code / Codex CLI / Gemini CLI のいずれにも投入可能なスキルとして配布される」** 状態に進化する。
@@ -22,44 +32,37 @@ Phase 5 で qgb は **「Python CLI として動く」だけ** から **「Claud
 
 ### 2.1 何を解決するか
 
-Phase 1〜3 で qgb 本体は完成したが、**「LLM 環境からどう qgb を呼び出すか」** という運用層が未整備。利用者は qgb CLI を直接叩くか、自前で Claude Code / Codex CLI 用のスキル定義を書く必要がある。Phase 5 はこれを:
+Phase 1〜3 で qgb 本体は完成したが、**「LLM 環境からどう qgb を呼び出すか」** という運用層が未整備。利用者は qgb CLI を直接叩くか、自前で各エージェント用のスキル定義を書く必要がある。Phase 5 はこれを:
 
 - スキル本体 (qgb の使い方 + philosophy + 段階設計手順 + プロンプト) を **エージェント中立な中間表現** として 1 つだけ書く
 - コンバータ `tools/build_skill.py` が 3 エージェント (Claude Code / Codex CLI / Gemini CLI) 向け成果物を機械的に生成する
 - 利用者は自分のエージェント用 1 セットだけを取得して入れる
 
-### 2.2 ライン引きの維持
+### 2.2 ライン引きの維持 (Phase 1〜3 で確立した境界の継承)
 
-Phase 5 で **Phase 3 で確立した境界を一切緩めない**:
+Phase 5 で **Phase 1〜3 で確立した境界を一切緩めない**:
 
 - **Step 3.0 ライン引き (対象認識)**: スキルは対象を Read で読んで理解する (LLM 責務)、qgb 本体は contract で宣言されたコマンドを実行するだけ (機械責務)
 - **Step 3.1 ライン引き (異常時責務分離 + ドメイン依存性)**: スキルは利用者プロジェクトに responsibility 分離を提案するが、リアルタイム制御等の他ドメインには qgb 流を普遍適用しない注意喚起を含める
-- **Step 3.2 ライン引き (lock 文化 vs 利用者運用)**: スキルは利用者プロジェクトに `--require-hashes` を**提案**できるが**強制しない**、利用者の package manager / コンプライアンス要件に応じて判断
+- **Step 3.2 ライン引き (lock 文化 vs 利用者運用)**: スキルは利用者プロジェクトに `--require-hashes` を**提案**できるが**強制しない**
 
-### 2.3 Phase 6 以降との関係 (Phase 5 が終わってからの話)
+### 2.3 Phase 6 以降との関係
 
-Phase 5 完結後、qgb は「フレームワーク + LLM 向けスキル」のセット配布物となる。Phase 6 以降は実需に応じて:
-
-- Step 3.3 残務 (Phase 2 繰越実需回収)
-- 新 verification_type (Phase 5 で利用者から要望が出たもの)
-- adapter 復活の検討 (Phase 3 で撤回したが、利用者プロジェクトの偏りが見えてから判断)
-
-これらはすべて Phase 5 が advance しないと判断不能なので、本 prejournal では扱わない。
+Phase 5 完結後、qgb は「フレームワーク + LLM 向けスキル」のセット配布物となる。Phase 6 以降は実需に応じて Step 3.3 残務 / 新 verification_type / adapter 復活検討。これらはすべて Phase 5 が advance しないと判断不能。
 
 ## 3. Phase 5 スコープ
 
-### 3.1 中核: F-019 エージェント中立スキル提供
-
-`requirements_and_development.md` §F-019 と `framework-shape.md` §5 で確定済の構造を本実装する:
+### 3.1 中核: F-019 エージェント中立スキル提供 (構造再確認)
 
 ```text
 skills/source/                   # 中間表現 (正本、repo で保守、Phase 5 で本実装)
   metadata.yaml                  # skill id, version, agent_bindings
+  metadata.schema.json           # v2 追加: metadata.yaml の JSON Schema (Codex code fix #3)
   body.md                        # スキル本体 (中立 Markdown)
   workflow.md                    # 作業手順 (.quality-system/ を作るまで)
   references.md                  # philosophy / stage-design 等への参照集
   prompts/
-    design-stages.md             # 段階設計プロンプト (パターン B/C)
+    design-stages.md             # 段階設計プロンプト (パターン B/C 統合、章分離)
     review-policy.md             # レビュー観点プロンプト
 
 tools/build_skill.py             # コンバータ (Phase 5 で新設、Phase 3 Step 3.2 で tools/ 階層を確立済)
@@ -80,114 +83,143 @@ dist/skills/                     # ビルド成果物 (.gitignore 対象、CI �
 
 ### 3.3 スコープ内 (Phase 5 で必ずやる)
 
-- 中間表現 (`skills/source/`) の本実装 (各ファイルを埋める、Phase 1 で予約した README.md は撤去または更新)
-- `tools/build_skill.py` 実装 (3 エージェント成果物の機械的生成)
-- 3 エージェント向け成果物 (`dist/skills/{claude,codex,gemini}/`) の生成と検証
-- CI ビルド + GitHub Releases 添付の自動化 (Phase 3 Step 3.1/3.2 で確立した SHA pin policy + Dependabot/Renovate 不採用 + `shell: bash` 明示等の規律を踏襲)
+- 中間表現 (`skills/source/`) の本実装 (各ファイルを埋める、Phase 1 で予約した README.md は内容更新)
+- `metadata.yaml` schema (JSON Schema で固定、Codex code fix #3)
+- `tools/build_skill.py` 実装 (決定的ビルド契約: clean build / LF 正規化 / generator header / converter version / source commit hash 埋め込み / dirty tree 検出 / golden fixture 比較、Codex code fix #1)
+- 3 エージェント向け成果物 (`dist/skills/{claude,codex,gemini}/`) の生成と検証 (構造 / install guide / static syntax / golden output / manual smoke checklist、Codex spec fix #7)
+- CI build check (5.b 直後、`dist/` を生成 + golden fixture と diff)
 - 3 エージェント向け運用ガイド (インストール / 更新 / トラブルシューティング)
-- スキル自身を Claude Code で dogfooding (Phase 5 開発後半で、qgb メンテナンス作業の中で実使用)
+- canary dogfooding (5.b 後) + 利用者目線 dogfooding (5.d 後)
+- CI からの GitHub Releases 添付 (dogfooding 完了後、`gh release upload` で third-party action 不要)
 
-### 3.4 スコープ内 (任意、Phase 5 で必要が見えたらやる)
+### 3.4 スコープ内 (任意、Codex spec fix #8 で optional 降格確定)
 
-- **利用者プロジェクト向け CI テンプレ生成機能** (旧 Phase 4 吸収項目): `ci-examples.md` Pattern A〜E が出発点、Phase 5 スキルが対象プロジェクトに応じて選択する形
-- **言語非依存ドメインの examples 追加** (prompt-collection / sql-schemas / legal-templates 等): 既存 6 例で出発、利用者からの要望が出てから追加
+- **利用者プロジェクト向け CI テンプレ生成機能** (旧 Phase 4 吸収項目、5.g): `ci-examples.md` Pattern A〜E が出発点、Phase 5 スキルが対象プロジェクトに応じて選択する形。**Phase 5 では optional、必要が見えてから着手**
+- **言語非依存ドメインの examples 追加** (prompt-collection / sql-schemas / legal-templates 等、5.h): 既存 6 例で出発、利用者からの要望が出てから追加
 
-### 3.5 スコープ外 (Phase 5 でやらない)
+### 3.5 スコープ外 (Phase 5 でやらない、Codex 確認済)
 
-- **Phase 2 繰越実需回収 (Step 3.3)**: 並走可能だが先回りしない、Phase 5 中に判明した実需だけ拾う原則
-- **新 verification_type 追加**: Phase 5 進行中に LLM 側から要望が出てから判断
-- **adapter 復活**: Phase 3 Step 3.0 で撤回した方針を Phase 5 で覆さない (対象認識は LLM 責務)
-- **AI Agent 評価フレームワーク**: スキルの「良さ」を機械評価する装置は philosophy P6 (LLM 単独 ALLOW 禁止) と緊張、Phase 5 では人間判断 + dogfooding で代替
-- **SBOM 自動生成 / vuln scan**: Phase 3 Step 3.2 で out of scope 整理済、Phase 5 でも持ち込まない
+- **Phase 2 繰越実需回収 (Step 3.3)**: blocker になったものだけ例外的に拾う、即時並走は Phase 5 の主目的を濁す (Codex out of scope #1)
+- **AI Agent 評価フレームワーク**: P6 と緊張 (Codex out of scope #2)。**ただし dogfooding checklist と人間 review rubric は別 (P6 違反でない)、Phase 5 内で作る**
+- **新 verification_type 追加**: 実需が出てから判断
+- **adapter 復活**: Phase 3 Step 3.0 で撤回した方針を維持
+- **SBOM 自動生成 / vuln scan**: Phase 3 Step 3.2 で整理済
+- **3 agent 完全同等挙動保証**: 実 agent の挙動差は流行側、converter の変換規則と生成物 snapshot を固定するに留める (Codex spec fix #7)
 
-## 4. サブステップ構成 (案)
+## 4. サブステップ構成 (v2 で再分割、Codex spec fix #1 + #5 + #6 反映)
 
-Phase 1〜3 の経験から、**6 サブステップ + 任意 2 個** に圧縮する案。各サブステップは Step 3.1 / 3.2 同様の規模感 (1.0〜2.5)。
+v1 の 6 サブステップを Codex 推奨に従って分割・順序調整:
 
 | Step | 内容 | 規模 | 自走可否 |
 |---|---|---|---|
-| **5.a** | スキル中間表現の本実装 (`skills/source/` 配下、`metadata.yaml` schema 確定 + `body.md` + `workflow.md` + `references.md` + `prompts/`) | 1.5〜2.5 | 部分自走 (ライン引き判断点あり) |
-| **5.b** | `tools/build_skill.py` 実装 + 3 エージェント成果物生成 + ビルド検証 | 1.5〜2.5 | 自走 (5.a 確定後) |
-| **5.c** | CI ビルド + GitHub Releases 添付 (SHA pin / Dependabot 不採用 / shell:bash 規律踏襲) | 0.5〜1.0 | 自走 (Step 3.1/3.2 パターン) |
-| **5.d** | 3 エージェント向け運用ガイド (インストール / 更新 / トラブルシューティング) | 0.5〜1.0 | 自走 (template ベース) |
-| **5.e** | dogfooding (Claude Code でこのスキルを使って qgb 自身を 1 サイクル改善できることを実証) | 0.5〜1.0 | 部分自走 (実使用で判断点出る) |
+| **5.a-0** | Agent contract probe + 各エージェント最新仕様確認 + 成果物 acceptance 固定 | 0.5〜1.0 | 自走 (調査 + acceptance 文書) |
+| **5.a-1** | `metadata.yaml` schema (JSON Schema) + minimal `skills/source/` tree (空ファイル + schema 検証だけ通る状態) | 0.5〜1.0 | 自走 (schema 設計) |
+| **5.a-2** | `body.md` + `workflow.md` + `references.md` + `prompts/` 本文の本実装 | 1.5〜2.5 | 部分自走 (分量判断点あり) |
+| **5.b** | `tools/build_skill.py` 実装 (決定的ビルド契約) + 3 エージェント成果物生成 + golden fixture 化 + ローカル build 検証 | 2.0〜3.0 | 自走 (5.a 確定後) |
+| **5.b-ci** | CI に build check job 追加 (Phase 3 Step 3.1/3.2 と同じ SHA pin 規律) | 0.3〜0.5 | 自走 |
+| **5.d-canary** | canary dogfooding (Claude Code でこのスキルを使って小さな改善を 1 回試す) | 0.5〜1.0 | 部分自走 (使用感判断点あり) |
+| **5.d** | 3 エージェント向け運用ガイド (インストール / 更新 / トラブルシューティング) + dogfooding checklist + 人間 review rubric | 0.5〜1.0 | 自走 (template ベース) |
+| **5.e** | 利用者目線 dogfooding (5.d の運用ガイドに従ってインストールから 1 サイクル) + 補修 | 0.5〜1.0 | 部分自走 |
+| **5.c** | CI からの GitHub Releases 添付自動化 (dogfooding 後、`gh release upload` で third-party action 不要) | 0.3〜0.5 | 自走 (Phase 3 Step 3.1/3.2 パターン) |
 | **5.f** | 完結ドキュメント + journal + memory (Phase 3 Step 3.1/3.2 同型の Task 22/46 相当) | 0.5〜1.0 | 自走 (パターン確立) |
-| 任意 5.g | 利用者プロジェクト向け CI テンプレ生成 (旧 Phase 4 吸収、`ci-examples.md` ベース) | 0.5〜1.0 | スコープ判断点 |
+| 任意 5.g | 利用者プロジェクト向け CI テンプレ生成 (旧 Phase 4 吸収、optional) | 0.5〜1.0 | スコープ判断点 |
 | 任意 5.h | 言語非依存 examples 追加 | 0.3〜0.8 | 実需待ち |
 
-**合計規模見積もり**: 5.0〜9.0 (Phase 1〜2 全体相当、Phase 3 の 1.5〜2 倍)
+**合計規模見積もり**: **7.0〜12.0** (Codex 推奨、v1 の 5.0〜9.0 から上方修正)
+**上振れリスク線**: 15〜18 (agent contract probe で予想外、3 agent 挙動差吸収で複雑化、dogfood 補修連鎖)
 
-### 4.1 各 Step の自走可否 (重要)
+### 4.1 順序調整 (Codex spec fix #6 反映)
 
-- **完全自走可能**: 5.b / 5.c / 5.d / 5.f (パターン確立済、Codex r1 で承認されれば連続実行可)
-- **部分自走 (ライン引き判断点で user 確認が必要)**: 5.a (metadata.yaml schema / プロンプト分量 / dogfooding 範囲) / 5.e (実使用で見える判断点)
-- **スコープ判断**: 5.g / 5.h (実需見極めが必要)
+v1 の `5.c (CI ビルド + GitHub Releases 添付)` を 2 つに分割:
+- **5.b-ci**: CI build check (5.b 直後、検証のため)
+- **5.c**: GitHub Releases 添付 (dogfooding 完了後、検証済 artifact のみ release する構造)
 
-### 4.2 Step 順序の理由
+これにより「検証前 artifact が release される」リスクを構造的に閉じる。
 
-- 5.a → 5.b: 中間表現が確定しないとコンバータが書けない (依存)
-- 5.b → 5.c: ローカルでビルドが通らないと CI に乗らない (依存)
-- 5.c → 5.d: CI が回らないと「リリース成果物の入手方法」を書けない (依存)
-- 5.d → 5.e: ガイドが整わないと dogfooding で利用者目線に立てない (推奨依存、緩い)
-- 5.e → 5.f: dogfooding の知見を完結 journal に反映 (依存)
+### 4.2 dogfooding の 2 段階化 (Codex spec fix #5 反映)
 
-## 5. ライン引き判断点 (user 判断が必要、prejournal v2 提示時に問う)
+- **5.d-canary**: 5.b 完了直後、Claude Code でスキルを使って qgb 自身の小さな改善 (例: docstring 1 つ追加) を試す。「絶対に動く範囲」を確認
+- **5.e**: 5.d (運用ガイド完成) 後、利用者目線でゼロから運用ガイドだけ見てインストール → 1 REQ 設計 → gate.json 生成までを通す
 
-Phase 5 の構造的判断で、私が独走するべきでない箇所:
+早期 dogfood で「致命的に動かない」を発見、後期 dogfood で「ガイドが正しいか」を検証。
 
-### 判断点 1: `metadata.yaml` schema の確定範囲
+## 5. ライン引き判断点 (user 判断が必要、本 v2 提示時に問う)
 
-`framework-shape.md` §5 に例があるが、本実装段階では:
-- どのフィールドを **必須** にし、どこから **オプション** にするか
-- 各エージェント固有設定 (Claude の `allowed-tools`、Codex の `placement`、Gemini の `command_name` 等) をどこまで `metadata.yaml` で吸収するか、コンバータのデフォルト判断に任せる範囲
-- スキーマ自身を JSON Schema で固定するか (qgb の他 schema と同じ規律、NF-010 整合性)
+Codex r1 で各判断点に推奨回答を受領済。**user が最終確認**するのは以下:
 
-**選択肢**:
-- (a) 最大主義: 全エージェント固有設定を `metadata.yaml` に書く → コンバータが薄くなるが maintainer の編集負担増
-- (b) 最小主義: 中立部分のみ `metadata.yaml`、エージェント固有はコンバータがデフォルト → maintainer 編集楽だがコンバータの責務が膨らむ
-- (c) ハイブリッド: `metadata.yaml` で「skill_id, version, helper_files, agent_bindings の存在のみ」を宣言、各 agent_bindings の中身はそのエージェント側で必要最小限
+### 判断点 1: `metadata.yaml` schema 確定範囲
 
-### 判断点 2: スキル本体 (`body.md`) の分量と詳細度
+**Codex 推奨**: typed hybrid (薄い、必須キーは型付きで強制)
+- 必須: `skill_id`, `version`, `description`, `entry_body`, `helper_files`, `agent_bindings`
+- `agent_bindings.{claude,codex,gemini}` の中身は **known keys を型付きで許可、未知 key は error**
+- v1 案の (c) ハイブリッドより一段厳しい (未知 key を許さない)、converter 側に仕様が逃げる余地を閉じる
 
-`body.md` は LLM の context に毎回乗る。分量が大きいと context を食い、小さいと指示不足:
-- 思想憲章 (philosophy.md, 11 不易) を全文埋めるか、参照だけにするか
-- 段階設計フェーズの具体例 (パターン B/C) を `body.md` に含めるか `prompts/design-stages.md` に分離するか
-- examples/ 6 例の構造説明をどこまで詳しく書くか
+**user 確認事項**: Codex 推奨で進めるか、別案 (より緩い / より厳しい) があるか
 
-**選択肢**:
-- (a) `body.md` を充実 (2-3 千語): 1 回読めば自走可能、context 重い
-- (b) `body.md` を骨子のみ (500-1000 語): context 軽い、補助ファイルを都度参照する設計
-- (c) スキルの起動段階で `body.md` を読み、必要に応じて補助を読む設計 (LLM の自律判断にゆだねる)
+### 判断点 2: スキル本体 (`body.md`) の分量
 
-### 判断点 3: 段階設計プロンプト (`prompts/design-stages.md`) のスコープ
+**Codex 推奨**: (b) + (c) の明文化 = 500〜1000 語の骨子 + trigger 明記
+- `body.md` 自身は骨子 (500〜1000 語)
+- 「この依頼なら `workflow.md` を読む」「段階設計なら `prompts/design-stages.md` を読む」の **trigger を本文に固定**
+- 純粋な (c) の自律判断任せは agent ごとの context 読み漏れ差が出る
 
-`stage-design.md` のパターン B / C を:
-- スキル起動時に必ず読むか (`helper_files` で必須化)
-- ユーザーが「段階設計やって」と言ったときだけ読むか (オンデマンド)
-- パターン B (Pattern B external-LLM) と パターン C (自律実行) で別ファイルにするか統合するか
+**user 確認事項**: Codex 推奨で進めるか、分量を変えるか (例: 1000-2000 語まで許容)
 
-### 判断点 4: dogfooding の範囲
+### 判断点 3: 段階設計プロンプト (`prompts/design-stages.md`) スコープ
 
-Phase 5 開発中の Claude Code 自身がこのスキルを使うか:
-- (a) dogfooding は最後 (5.e) で初めて: skill 開発中の bootstrap 問題を避ける
-- (b) dogfooding を 5.b 完了後に始める: 早期に問題を発見できるが、開発が混乱する可能性
-- (c) dogfooding はしない、利用者向けの release 後にコミュニティ feedback 待ち: Phase 5 完結が早いが品質確信が薄い
+**Codex 推奨**: オンデマンド + パターン B/C 統合 (章を分けて、肥大化したら split)
+- 起動時必読にしない (`body.md` 軽量化の意味が消える)
+- パターン B と C は最初は同ファイルで章分離
+- ファイルが肥大化したらリファクタ split
 
-### 判断点 5: CI ビルド時の third-party action 追加範囲
+**user 確認事項**: Codex 推奨で進めるか、最初から B/C を別ファイルにするか
 
-GitHub Releases 添付には `actions/upload-release-asset` 系の third-party action が必要になる可能性:
-- (a) 純正 `gh release upload` CLI を `run:` ステップで使う (SHA pin 不要、Step 3.1 NF-011 と整合)
-- (b) `actions/upload-release-asset` を SHA pin で追加 (Step 3.1 で確立した SHA pin policy 拡張)
-- (c) リリースのみ手動運用にする (Phase 5 規模を抑える)
+### 判断点 4: dogfooding 順序
+
+**Codex 推奨**: (b) の 2 段階化 = 5.b 後 canary + 5.d 後 利用者目線
+- v1 の (a) 最後 5.e で初めて は発見が遅い
+- 開発中ずっと self-use する必要もない (2 段階で十分)
+
+**user 確認事項**: Codex 推奨で進めるか、3 段階以上にするか
+
+### 判断点 5: CI ビルドの third-party action 追加
+
+**Codex 推奨**: (a) `gh release upload` で third-party action 不要
+- release workflow だけ `permissions: contents: write`
+- 通常 test workflow は現状通り最小権限
+- Phase 3 Step 3.1 SHA pin policy 規律を維持
+
+**user 確認事項**: Codex 推奨で進めるか、別案 (action 追加 / 手動運用) があるか
 
 ### 判断点 6: Step 3.3 (Phase 2 繰越実需回収) の並走判断
 
-Phase 5 中に繰越項目の実需が判明したとき:
-- (a) 即座に並走拾う (Phase 5 が長期化するが個別実需に応える)
-- (b) Phase 5 後にまとめて 3.3 を回収 (Phase 5 集中)
-- (c) Phase 5 と 3.3 を交互に切る (細かい振り分け)
+**Codex 推奨**: (b) Phase 5 後 + blocker のみ例外
+- 即時並走 (a) は Phase 5 の主目的を濁す
+- 交互切り替え (c) は管理コスト高
 
-## 6. 規模実績の参考
+**user 確認事項**: Codex 推奨で進めるか、blocker の定義を確認しておくか
+
+## 6. Codex r1 finding 反映トレース (v2 確定)
+
+| Codex finding | 種別 | 反映先 |
+|---|---|---|
+| code fix #1 (決定的ビルド契約) | code fix | §3.3 / §4 Step 5.b に「決定的ビルド契約」を必須 acceptance に組み込み |
+| code fix #2 (`pyyaml` dev/build 限定) | code fix | §3.3 / 関連ファイル §8 で `pyyaml` を dev extras 追加、template engine 不採用 |
+| code fix #3 (`metadata.yaml` を JSON Schema 化) | code fix | §3.1 で `metadata.schema.json` を中間表現に追加、§4 Step 5.a-1 で schema 本実装 |
+| code fix #4 (`gh release upload` 推奨) | code fix | §3.3 / §4 Step 5.c で確定 |
+| spec fix #1 (5.a を 5.a-0/-1/-2 に分割) | spec fix | §4 で 3 分割確定 |
+| spec fix #2 (typed hybrid) | spec fix | §5 判断点 1 で Codex 推奨採用 |
+| spec fix #3 (`body.md` を (b)+(c) で明文化) | spec fix | §5 判断点 2 で Codex 推奨採用 |
+| spec fix #4 (オンデマンド + B/C 統合) | spec fix | §5 判断点 3 で Codex 推奨採用 |
+| spec fix #5 (dogfooding 2 段階) | spec fix | §4 で 5.d-canary + 5.e に分離、§5 判断点 4 で確定 |
+| spec fix #6 (5.c を分割: build check と release 添付) | spec fix | §4 で 5.b-ci と 5.c に分離 |
+| spec fix #7 (3 agent acceptance 限定) | spec fix | §3.3 / §3.5 で「実 agent の完全同等挙動保証は機械検証対象外」を明示 |
+| spec fix #8 (5.g を optional 降格) | spec fix | §3.4 で確定、§ §7 で要件書 §13 Phase 5 との整合性を Task 46 同型で整理 |
+| out of scope #1 (Step 3.3 = (b) Phase 5 後) | out of scope | §5 判断点 6 で Codex 推奨採用 |
+| out of scope #2 (AI Agent 評価 NG、dogfooding checklist は OK) | out of scope | §3.5 で「dogfooding checklist と人間 review rubric は別、Phase 5 内で作る」を明示 |
+| out of scope #3 (adapter / 新 verification / SBOM / 自動 installer / 完全互換) | out of scope | §3.5 維持 |
+
+## 7. 規模実績の参考 (v2 で上方修正)
 
 Phase 3 の各 Step 規模実績:
 
@@ -197,9 +229,40 @@ Phase 3 の各 Step 規模実績:
 | 3.1 | 1.5〜2.0 | 約 3.5〜4.0 | ステート不在化への補修方針転換 + 5 観点並列 48 件 |
 | 3.2 | 0.9〜1.5 | 約 1.6 | CI 補修 chain 5 連 (環境固有問題) |
 
-**Phase 5 見積もり 5.0〜9.0 も同様に 1.5〜2 倍の上振れ可能性あり** (7.5〜18.0 まで膨らむシナリオ)。特に 5.a (中間表現) でライン引き判断が多発する可能性が高い。
+**Phase 5 v2 見積もり 7.0〜12.0** (Codex 上方修正、agent contract probe / golden fixture / context budget / release packaging / dogfood 補修分)、**上振れリスク線 15〜18** (Codex 推奨)。
 
-## 7. レビュープロセス (Phase 1〜3 と同じ運用)
+特に 5.a-2 (中間表現本文) と 5.b (コンバータ + 決定的ビルド) で判断点が多発する可能性が高い。
+
+## 8. 関連ファイル (本 Phase で触る予定、v2 で拡張)
+
+- `skills/source/` 配下全ファイル (本実装)
+  - `metadata.yaml` (新規) + `metadata.schema.json` (v2 追加、JSON Schema)
+  - `body.md` / `workflow.md` / `references.md` / `prompts/design-stages.md` / `prompts/review-policy.md`
+- `tools/build_skill.py` (新設) + golden fixtures (`tools/_golden/` 等)
+- `pyproject.toml` (dev extras に `pyyaml>=6,<7` 追加、NF-010 慎重判断 + Phase 3 Step 3.2 で確立した lock 更新規律)
+- `requirements.lock` / `requirements-dev.lock` (`pyyaml` 追加で再生成、Windows × Python 3.10 規律維持)
+- `.github/workflows/test.yml` (build check job 追加) + `.github/workflows/release.yml` (新設、release タグ trigger で `gh release upload`)
+- `dist/` 配下 (`.gitignore` で除外、CI で生成)
+- `.gitignore` (`dist/` 追加)
+- `SECURITY.md` (Phase 5 で `pyyaml` lock policy + release workflow 説明追加)
+- `development/docs/journal/phase5-step5-*.md` (各 Step の prejournal + 完結 journal)
+- `development/docs/detailed-design.md` §16 新設 (Phase 5 詳細)
+- `development/docs/requirements_and_development.md` §13 (Phase 5 進捗反映)
+- `README.md` (利用者向けインストール経路 = リリースから 1 セット入れる)
+- `CLAUDE.md` (Phase 5 完結反映 + Phase 6 以降の方針)
+- `tools/diff_locks.py` (既存、Phase 3 Step 3.2 で確立) はそのまま使い回し
+
+## 9. 不確実性 (Step 単位の判断で扱う)
+
+v1 で Codex 計画レビューに問うた点は r1 で消化済。本 Phase 5 着手後、Step 単位で再点検する:
+
+1. **`metadata.yaml` schema の細部**: typed hybrid の具体的 key 定義 (5.a-1 で確定)
+2. **`body.md` trigger 設計**: 「この依頼なら X を読む」の文言と網羅性 (5.a-2 で確定)
+3. **`tools/build_skill.py` のテスト戦略**: golden fixture の作り方、3 agent 成果物の差分検出 (5.b で確定)
+4. **CI release workflow の権限境界**: `permissions: contents: write` の最小化 (5.c で確定)
+5. **3 agent 挙動差吸収の限界**: どこまで converter で吸収、どこから「これは各 agent の責任」と線引きするか (5.b〜5.e で都度判断)
+
+## 10. レビュープロセス (Phase 1〜3 と同じ運用)
 
 各 Step ごとに:
 
@@ -209,38 +272,27 @@ Phase 3 の各 Step 規模実績:
 4. **段 3 Codex 横断レビュー**
 5. **補修 + 段 5 K=2 収束**
 
-「small だから省略禁止」を Phase 3 Step 3.2 で再証明済。Phase 5 も同様の厳格運用。
+「small だから省略禁止」を Phase 3 Step 3.2 で再証明済。Phase 5 も同様の厳格運用。各 Step 内で発生する補修は Phase 3 Step 3.1 の 7 件 / Step 3.2 の 5 件 + 5 件パターンを参考。
 
-## 8. 関連ファイル (本 Phase で触る予定)
+## 11. v2 着手準備状況
 
-- `skills/source/` 配下全ファイル (本実装)
-- `tools/build_skill.py` (新設)
-- `.github/workflows/test.yml` (Phase 5 用 build job 追加) または `.github/workflows/release.yml` (新設)
-- `dist/` 配下 (.gitignore で除外、CI で生成)
-- `pyproject.toml` (dev extras に `tools/build_skill.py` 必要な依存追加、NF-010 慎重判断)
-- `SECURITY.md` (Phase 5 で新 third-party action 追加するなら SHA Pin Policy 拡張)
-- `development/docs/journal/phase5-step5-*.md` (各 Step の prejournal + 完結 journal)
-- `development/docs/detailed-design.md` §16 新設想定 (Phase 5 詳細)
-- `development/docs/requirements_and_development.md` §13 (Phase 5 進捗反映)
-- `README.md` (利用者向けインストール経路 = リリースから 1 セット入れる)
-- `CLAUDE.md` (Phase 5 完結反映)
+- ✅ prejournal v1 commit (`dc6c9a7`)
+- ✅ Codex 計画レビュー r1 (code fix 4 + spec fix 8 + out of scope 3、判断点推奨回答 6 件)
+- ✅ 本書 v2 起草 (Codex r1 全件反映)
+- ⏳ **user による判断点 6 件最終確認** (Codex 推奨をそのまま採用するか、別案で進めるか)
+- ⏳ user 判断後、**Step 5.a-0 (agent contract probe + acceptance 固定) から着手**
 
-## 9. 不確実性 (Codex 計画レビューで問いたい点)
+## 12. user 提示用判断点まとめ (再掲)
 
-1. **6 サブステップ案 (5.a〜5.f) の分割粒度は適切か**: Phase 1〜3 経験から 1 ステップ 1.5〜2.5 規模で揃えたが、5.a が肥大化リスクあり (中間表現 6 ファイルを 1 ステップに集約) — 5.a-1 (metadata.yaml + body.md) / 5.a-2 (workflow + references + prompts) に分割すべきか
-2. **`metadata.yaml` schema 確定戦略**: 案 (a)(b)(c) のどれを推奨するか、別案はあるか
-3. **`body.md` 分量**: 案 (a)(b)(c) のどれを推奨するか、Phase 1〜3 で蓄積した spec / journal を frame に LLM context cost と instruction quality の trade-off をどう判断するか
-4. **dogfooding 順序**: 案 (a)(b)(c) のどれを推奨するか
-5. **CI ビルドの third-party action**: 案 (a)(b)(c) のどれを推奨するか、`gh release upload` で済むなら NF-011 整合
-6. **規模見積もり 5.0〜9.0 の妥当性**: Phase 3 実績ベースで 1.5〜2 倍の上振れリスクを織り込んでいるが、Phase 5 特有の見落とし要素 (LLM context cost 検証 / 3 エージェント挙動差吸収 / スキル品質評価の人間判断比重) はないか
-7. **Step 順序 (5.a → 5.b → 5.c → 5.d → 5.e → 5.f)**: 依存関係は正しく整理されているか、並走可能な箇所はあるか
-8. **`tools/build_skill.py` の依存**: 新 dev 依存追加 (YAML パーサー、template engine 等) と NF-010 (stdlib 中心) のバランス — `pyyaml` 等を追加するか、stdlib で済ませるか
+Codex 推奨をそのまま採用する場合の最終確認:
 
-## 10. レビュープロセス (本書 v1 → v2)
+| # | 判断点 | Codex 推奨 |
+|---|---|---|
+| 1 | `metadata.yaml` schema | typed hybrid (必須キー型付き、未知 key error) |
+| 2 | `body.md` 分量 | 500〜1000 語骨子 + trigger 明文化 |
+| 3 | `design-stages.md` スコープ | オンデマンド + パターン B/C 統合 (章分離) |
+| 4 | dogfooding 順序 | 2 段階 (5.b 後 canary + 5.d 後 利用者目線) |
+| 5 | CI ビルド third-party action | `gh release upload` のみ (third-party action 不要) |
+| 6 | Step 3.3 並走判断 | Phase 5 後 + blocker のみ例外 |
 
-1. ✅ 本 prejournal v1 commit
-2. **Codex 計画レビュー r1** (`/ask-codex-with-context` 経由、本 prejournal を context として渡す)
-3. r1 finding を反映、ライン引き判断点 6 件を整理して **user 提示用 v2** を作成
-4. user 判断確定後、Step 5.a 着手
-
-Phase 1〜3 で確立した「prejournal v1 → Codex r1 → v2 → 着手」パターンに従う。
+別案の検討が必要なものがあれば user 介入で確定、すべて Codex 推奨でよければ Step 5.a-0 着手。
