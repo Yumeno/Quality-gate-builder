@@ -1,11 +1,9 @@
-# qgb 参照文書 (Phase 5 Step 5.a-2 で本実装予定)
+# qgb 参照文書 (split モード helper、正本は body.md §7)
 
-このファイルは Phase 5 Step 5.a-1 で作成した stub。Step 5.a-2 で philosophy.md / stage-design.md / framework-shape.md 等への pointer 集として実装する。
+このファイルは Phase 5 Step 5.a-2-2 (A1' 6 段階手順) の **中間状態**。
 
-参照リスト案:
+A1' (skills/source/ は body.md 単一正本、helper はすべて include marker 経由) への移行過渡。最終的にはこのファイル自体は削除され、`dist/skills/split/{claude,codex}/references.md` は body.md §7 の include marker (`<!-- split:helper_start references.md -->` ... `<!-- split:helper_end -->`) から converter (`tools/build_skill.py`、5.b で実装) が生成する。
 
-- `development/docs/philosophy.md` 11 不易 (P1〜P11)
-- `development/docs/stage-design.md` 段階設計パターン
-- `development/docs/framework-shape.md` Layer 構造
-- `examples/` 6 例 (generic-minimal / python-cli-pytest / markdown-docs / python-fastapi-pytest / go-cli / node-cli-vitest)
-- `development/docs/ci-examples.md` 利用者運用 CI 5 patterns
+**内容の正本は `skills/source/body.md` §7 (参照集) を参照すること**。本ファイルは段階 5 で物理削除予定。
+
+参照: `development/docs/journal/phase5-step5-a-2-progress.md` §7 (A1' 6 段階手順)

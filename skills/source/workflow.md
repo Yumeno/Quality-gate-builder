@@ -1,5 +1,9 @@
-# qgb 作業手順 (Phase 5 Step 5.a-2 で本実装予定)
+# qgb 作業手順 (split モード helper、正本は body.md §6)
 
-このファイルは Phase 5 Step 5.a-1 で作成した stub。Step 5.a-2 で利用者プロジェクトに `.quality-system/` を作る手順 (init → REQ 追加 → contract 設計 → validate-policy → run → 補修) を実装する。
+このファイルは Phase 5 Step 5.a-2-2 (A1' 6 段階手順) の **中間状態**。
 
-参照: `development/docs/phase1-manual.md` (Phase 1 で確立した利用者向けマニュアル)、`development/docs/journal/phase5-prejournal.md` v4
+A1' (skills/source/ は body.md 単一正本、helper はすべて include marker 経由) への移行過渡。最終的にはこのファイル自体は削除され、`dist/skills/split/{claude,codex}/workflow.md` は body.md §6 の include marker (`<!-- split:helper_start workflow.md -->` ... `<!-- split:helper_end -->`) から converter (`tools/build_skill.py`、5.b で実装) が生成する。
+
+**内容の正本は `skills/source/body.md` §6 (作業手順) を参照すること**。本ファイルは段階 5 で物理削除予定。
+
+参照: `development/docs/journal/phase5-step5-a-2-progress.md` §7 (A1' 6 段階手順)

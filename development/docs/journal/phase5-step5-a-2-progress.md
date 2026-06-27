@@ -287,4 +287,8 @@ LLM 開発主体の特性 (削除と再作成の間に compact 走るリスク) 
 
 ## 8. 段階別進捗ログ (各段階完了後に追記)
 
-(着手後、各段階完了時に「段階 N 完了 (commit XXX)、次は段階 N+1」を追記)
+- **段階 1 完了** (commit `755d696`, 2026-06-28):
+  - `skills/source/prompts/design-stages.md` (278 行, 14,347 chars) Pattern B/C 統合
+  - `skills/source/prompts/review-policy.md` (210 行, 12,292 chars) LLM レビュー境界
+  - pytest 753 passed + 3 skipped、ruff clean
+  - **次: 段階 2** (workflow.md / references.md stub を「正本は body.md §6 / §7」に置換)
