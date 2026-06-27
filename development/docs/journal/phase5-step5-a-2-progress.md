@@ -229,3 +229,62 @@ Step 5.b (build_skill.py 実装) で必要になる前提:
 - converter design journal: `development/docs/skill-converter/`
   - `README.md` / `agent-claude.md` / `agent-codex.md` / `acceptance-matrix.md`
 - 関連 issue: <https://github.com/Yumeno/quality-gate-builder/issues/25> Antigravity TODO
+
+## 7. 5.a-2-2 着手前の最終確定 (2026-06-28、Codex r1 横断レビュー後)
+
+### 7.1 user 確定事項 (Q1 / Q2 / Q2-pre / Q5)
+
+- **Q1 確定**: 解釈案 A 採用 (body.md 単一正本、include marker から helper を converter が split 時に生成)
+- **Q2-pre 確定 (user 提起)**: full モード = **SKILL.md 1 ファイルに prompts/* も含めて全部のせ**。理由: 「LLM が手抜きして SKILL.md しか読まない」リスクへの保険。これは prejournal v4 §3.4 「full モード = 初心者、頻度低、token cost 許容」と整合
+- **Q2 確定 (A1' へ昇格)**: skills/source/ から `workflow.md` / `references.md` / `prompts/design-stages.md` / `prompts/review-policy.md` を **すべて削除**。body.md が単一正本、helper はすべて include marker 経由
+- **Q5 確定**: body.md §2 trigger 表は両モード共用 (split モード時は別ファイル path、full モード時は同ファイル内章への navigation)
+
+### 7.2 Codex r1 横断レビュー受領 (`codex_ctx_p5_step5a-2-2_review_20260628-012308.txt`)
+
+総合判定: **A1+ (A1 採用 + 契約強化)** = user の A1' と同じ方向。重要な指摘:
+
+- **spec fix #5 (発見)**: prejournal v4 §3.4 表「helper_files: 空」と Q2 説明「full でも prompts copy」の矛盾。user 解釈で **prompts も embed = (b) パターン** に確定 → A1' 採用で一気に解消
+- **code fix #1**: `source_files` と marker name を別集合として扱う (converter で集合分離契約)
+- **code fix #3**: 正常 golden と異常系 parser fixture を分離 (`tests/fixtures/build-skill/`)
+- **spec fix #3**: prejournal §3.1 tree 図 / §3.4 表は **silent edit せず訂正理由を journal に書く** + tree 自体訂正
+- **spec fix #4**: dogfooding に **保守シナリオ** を含める (workflow 一文変更 → 両モード反映確認、新 marker 追加、collision fail-closed 確認)
+- **spec fix #6**: prejournal の「full 4-6 KB」は実測 11,474 chars / 5,583-6,887 tokens で不整合 → 同時訂正対象
+- **A3 系 (yaml に generated_helpers 重複宣言 / reserved-names.json / marker 論理 ID + path mapping) は全て却下**
+
+### 7.3 安全な作業手順 (6 段階に分割、削除は最終段階)
+
+LLM 開発主体の特性 (削除と再作成の間に compact 走るリスク) を踏まえ、A1' を「**追加 first、削除 last**」の順序で実施:
+
+| 段階 | 内容 | A1'/A2 | 失敗時回復 | compact 耐性 |
+|---|---|---|---|---|
+| 1 | prompts/design-stages.md + review-policy.md を本実装 (stub→本文) | A2 + prompts 実体 | 中身書き直し | ✅ stop 可 |
+| 2 | workflow.md / references.md stub を A1 中間状態へ (「正本は body.md §6/§7」と書く) | A2 過渡 | stub 書き直し | ✅ stop 可 |
+| 3 | body.md に §12/§13 として prompts/* を include marker embed (skills/source/prompts/ も残す、二重化過渡) | A2 + 重複 | §12/§13 削除で段階 2 状態へ | ✅ stop 可 |
+| **Codex r1** | **段階 3 完了後の横断レビュー (A1' で正しい方向か確認)** | — | — | — |
+| 4 | metadata.schema.json description を A1' 移行明示に更新 (削除はしない) | A2 + A1' 移行明示 | description 元に戻す | ✅ stop 可 |
+| **Codex r2** | **段階 5 着手前の最終確認 (削除の不可逆化前)** | — | — | — |
+| 5 | helper 4 ファイルを git rm + metadata.yaml source_files を [body.md] に縮小 | A1' 完成 | git revert | ✅ stop 可 |
+| 6 | 5.a-2 完結 journal で prejournal v4 §3.1 / §3.4 訂正方針を明文化 (silent edit せず) | — | — | — |
+
+各段階で:
+- 個別 commit + push (まとめ commit にしない)
+- pytest 緑確認
+- 本書 (`phase5-step5-a-2-progress.md`) に「段階 N 完了、次は段階 N+1」を 1 行追記
+
+### 7.4 test_step9_docs.py 確認結果 (段階 1 着手前事前把握)
+
+`tests/test_step9_docs.py` を Read した結果:
+
+- `test_skills_source_readme_mentions_phase5_plan` (line 25-41) は **README.md のキーワード assert のみ** (`workflow.md` / `references.md` / `prompts/` 等)
+- **物理ファイル存在は assert していない** → 段階 5 で skills/source/workflow.md / references.md を物理削除しても test は通る
+- README.md は「split モード時に converter が生成する helper file 名」として workflow.md / references.md / prompts/ の言及を保つ (段階 5 で README.md 更新が必要)
+- `metadata.yaml` の存在 / `source_files` 列挙は test 依存なし → 段階 5 で `source_files: [body.md]` に縮小しても test 影響なし
+
+### 7.5 関連 commit (本 §7 反映時点)
+
+- 本書 §7 追記 commit (段階 1 着手前の最終確定記録)
+- 段階 1-6 各個別 commit (各段階完了後)
+
+## 8. 段階別進捗ログ (各段階完了後に追記)
+
+(着手後、各段階完了時に「段階 N 完了 (commit XXX)、次は段階 N+1」を追記)
