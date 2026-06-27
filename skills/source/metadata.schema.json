@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Yumeno/Quality-gate-builder/skills/source/metadata.schema.json",
+  "title": "qgb skill metadata",
+  "description": "Phase 5 で確立した thin typed manifest。skills/source/ の build matrix を宣言する。agent 別の変換規則は tools/build_skill.py が持ち、agent 状態 (status / last_verified / hook_support 等) は development/docs/skill-converter/agent-*.md の front matter で管理する。本 schema は build matrix の機械検証だけを責務とする。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "skill_id",
+    "version",
+    "description",
+    "converter_min_version",
+    "source_files",
+    "build_modes",
+    "target_agents"
+  ],
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "description": "スキル識別子。各 agent の skill ディレクトリ名と一致させる (例: 'qgb' → ~/.claude/skills/qgb/, ~/.agents/skills/qgb/)",
+      "pattern": "^[a-z][a-z0-9-]{0,62}$"
+    },
+    "version": {
+      "type": "string",
+      "description": "skill 自身の semver。converter のバージョンとは別 (converter_min_version で converter 互換性は別途宣言)",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?$"
+    },
+    "description": {
+      "type": "string",
+      "description": "skill の役割の短い説明 (1-2 文)。各 agent 向け生成物の本文や frontmatter の description ともとに使う前提なので、agent 中立で書く",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "converter_min_version": {
+      "type": "string",
+      "description": "本 skill を build できる最小の tools/build_skill.py のバージョン。build_skill.py が古いと build を refuse する閾値",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "source_files": {
+      "type": "array",
+      "description": "skills/source/ 配下の source 文書一覧。converter はここに列挙されたファイルだけを読む。順序は body (entry) を先頭に、helper はその後の慣習",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*\\.md$"
+      }
+    },
+    "build_modes": {
+      "type": "array",
+      "description": "生成する build mode の集合。'full' = 大盛り (helper を body に埋め込み)、'split' = 補助分割 (helper を別ファイルとして配置)",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["full", "split"]
+      }
+    },
+    "target_agents": {
+      "type": "array",
+      "description": "対象 agent の集合。各 agent について development/docs/skill-converter/agent-{name}.md が存在し、front matter の status が 'supported' であることを build_skill.py が実行時に検証する",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["claude", "codex"]
+      }
+    }
+  }
+}

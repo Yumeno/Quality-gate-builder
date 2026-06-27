@@ -1,0 +1,32 @@
+# qgb skill metadata (Phase 5 thin typed manifest)
+#
+# 本 yaml は build matrix の宣言のみを責務とする (Phase 5 v4 case C)。
+# - 各 agent への変換規則は tools/build_skill.py が持つ
+# - agent 状態 (status / last_verified / hook_support) は
+#   development/docs/skill-converter/agent-{name}.md の front matter で 1 か所だけ管理
+# - build_skill.py が実行時に target_agents の各 agent について
+#   journal agent-{name}.md の status: supported を機械検証する
+#
+# スキーマ: skills/source/metadata.schema.json
+
+skill_id: qgb
+version: 0.1.0
+description: |
+  qgb (quality-gate-builder) を使って任意のプロジェクトに証跡ゲート
+  (REQ → contract → 機械検査 → ALLOW/DENY) を構築するスキル。
+converter_min_version: 0.1.0
+
+source_files:
+  - body.md
+  - workflow.md
+  - references.md
+  - prompts/design-stages.md
+  - prompts/review-policy.md
+
+build_modes:
+  - full
+  - split
+
+target_agents:
+  - claude
+  - codex
