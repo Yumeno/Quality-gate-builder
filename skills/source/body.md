@@ -619,6 +619,102 @@ python -m qgb design-stages --json
 
 例: REQ-DOC-001 (ドキュメント REQ) は `command` 段階を含まず、`file_exists` + `substring_match` + `link_integrity` だけを宣言、等。
 
+### 5.5 capability-based dispatch checklist (verification_type=command 選択時の runtime checklist)
+
+> 本節は **作成物性質 (= script file の拡張子 / runtime 種別) で分岐する checklist**。自然言語キーワードでなく capability で adapter を切り替える設計 (Phase 5 Step 5.a-2-4 で確立、Codex 推奨 ι)。
+>
+> body.md §6.5 「command authoring protocol」の step 5 runtime-specific preflight で参照される。
+
+#### 共通前提
+
+`verification_type=command` を選んだ時点で:
+
+1. 利用者環境の runtime を 1 つに **確定** する (PowerShell 5 vs 7、bash vs zsh 等の曖昧さを残さない)
+2. 確定した runtime に対応する下記 checklist の **全項目を proposal `basis[]` で言及** する (人間が承認するときの確認点)
+3. checklist に該当しない新 runtime (例: Ruby / Perl / 独自 binary 等) を採用する場合、design-notes.md に **新 runtime checklist** を追記して proposal に含める
+
+#### PowerShell 5 / 7 (Windows native)
+
+| 観点 | checklist |
+|---|---|
+| script 保存 encoding | PS 5: **UTF-8 BOM 付き** 必須 / PS 7: UTF-8 BOM なしも可、ただし PS 5 と互換にするなら BOM 付き default |
+| script 改行コード | LF (`.gitattributes` で `*.ps1 text eol=lf` 強制済) |
+| 冒頭設定 | `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` + `$ErrorActionPreference = 'Stop'` |
+| `$OutputEncoding` | 必要なら `$OutputEncoding = [System.Text.Encoding]::UTF8` (child process 渡し encoding) |
+| argv | PS 5: `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script.ps1>` / PS 7: `pwsh -NoLogo -NoProfile -NonInteractive -File <script.ps1>` 完全明示 |
+| profile load | `-NoProfile` で利用者 profile を読まない (確定動作) |
+| execution policy | `-ExecutionPolicy Bypass` (利用者の policy 設定に依存しない、CI 環境で重要) |
+| 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep (κ mojibake sentinel) |
+| 日本語コメント / string | BOM 付きなら直接書ける / BOM なしを維持したいなら `[char]0x<codepoint>` で Unicode escape 構築 (pure ASCII script化、`skills/source/hooks/{claude-code,codex}/scripts/check-relevance.ps1` の手法) |
+
+#### bash / sh (POSIX, Linux / macOS / WSL / Git Bash)
+
+| 観点 | checklist |
+|---|---|
+| script 保存 encoding | UTF-8 BOM なし (BOM 付きだと shebang が parse 失敗する) |
+| script 改行コード | LF 必須 (CRLF は shebang が壊れる) |
+| shebang | `#!/usr/bin/env bash` (POSIX portable) |
+| executable bit | `chmod +x <script.sh>` (.gitattributes では設定不可、利用者環境 / CI で適用) |
+| 冒頭設定 | `set -euo pipefail` (error / undefined var / pipe 失敗で即終了) |
+| locale | `export LC_ALL=C.UTF-8` (script 冒頭で固定、利用者 locale に依存しない) |
+| argv | `bash <script.sh>` (shebang + executable bit に依存しない portable 形) または `./script.sh` (executable bit 必要) |
+| 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep |
+
+#### Python (CPython 3.7+)
+
+| 観点 | checklist |
+|---|---|
+| script 保存 encoding | UTF-8 (BOM なし、Python 3 default、PEP 3120) |
+| script 改行コード | LF |
+| 冒頭 | `# -*- coding: utf-8 -*-` は Python 3 では不要、書かない (Python 2 互換のためだけのレガシー) |
+| UTF-8 mode | `python -X utf8 <script.py>` (Python 3.7+) または `PYTHONUTF8=1` 環境変数 (Windows 日本語環境で必須、Linux でも安全) |
+| stdout reconfigure | script 冒頭で `import sys; sys.stdout.reconfigure(encoding='utf-8', errors='strict')` (Python 3.7+、errors='strict' で誤 encode を fail-fast) |
+| argv | `python -X utf8 <script.py>` (UTF-8 mode 明示) |
+| exit code | `sys.exit(0)` / `sys.exit(1)` を明示 |
+| 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep + `sys.stdout.reconfigure(errors='strict')` で encode 失敗を捕捉 |
+
+#### Node.js (LTS 18+)
+
+| 観点 | checklist |
+|---|---|
+| script 保存 encoding | UTF-8 BOM なし |
+| script 改行コード | LF |
+| module system | `--input-type=module` (ESM 明示) または `.mjs` 拡張子 (CommonJS でも可だが ESM 推奨) |
+| stdout encoding | Node 18+ では default UTF-8、`process.stdout.write` で確認 |
+| locale | 環境依存最小 (Node は locale 影響少) |
+| argv | `node <script.mjs>` (Node version は package.json `engines` で固定推奨) |
+| exit code | `process.exit(0)` / `process.exit(1)` |
+| 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep |
+
+#### Go binary / Rust binary / 他 compiled (利用者プロジェクトが事前ビルド済 binary を契約に使う場合)
+
+| 観点 | checklist |
+|---|---|
+| binary 配置 | `.quality-system/bin/` or 利用者プロジェクト指定 path、絶対 path で contract.command 宣言 |
+| 改行コード | binary 出力次第 (script でないので encoding 規律は binary 側の責任) |
+| stdout encoding | binary 側が UTF-8 で出力していることを確認 (`U+FFFD` 検出で監視) |
+| argv | `<absolute_path_to_binary> <args>` 完全明示 |
+| exit code | binary の exit code 規約に従う |
+| version 管理 | binary version を `project-context.json#technologies` に記録、再現性を担保 |
+
+#### Markdown lint / link checker / 他 文書系 tool
+
+| 観点 | checklist |
+|---|---|
+| tool 選択 | `markdownlint-cli2` (Node), `lychee` (Rust binary), `vale` (Go binary) 等 |
+| 配置 | npm / cargo / brew で利用者 install、または .quality-system/bin/ に同梱 |
+| 上記の runtime 規律に従う (Node なら Node section、binary なら binary section) |
+
+#### lint helper script の自動適用
+
+skill が `verification_type=command` の contract を起草した直後、`skills/source/lint/check-command-contract.{ps1,py}` (Step 5.a-2-4 段階 4 で実装) を実行:
+
+1. 確定 runtime と script 拡張子の整合 (例: PowerShell 5 確定なのに `.sh` を指定していたら error)
+2. 上記 checklist の必須項目 (BOM / shebang / encoding / argv / exit code) のうち、機械検査可能な項目を chcek
+3. `qgb check` 実行後の stage log で `U+FFFD` を grep
+
+これは **proposal adopt 前の skill 内部 lint**、qgb 本体機能ではない (philosophy P9 + framework-shape §5 境界遵守、qgb 本体は contract に書かれたものを実行するだけ)。
+
 ## 6. 設計後の見直しフロー (`--revise` 相当)
 
 段階を増やしたい / 減らしたい / 名称を変えたいとき:
