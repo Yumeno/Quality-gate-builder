@@ -281,9 +281,11 @@ Codex r1 code fix #3 反映:
 
 `pyyaml>=6,<7` を dev extras に追加、Phase 3 Step 3.2 規律で `requirements-dev.lock` の再生成が必要。
 
-### 6.6 dogfooding の保守シナリオ (Codex r1 spec fix #4)
+### 6.6 dogfooding の保守シナリオ (Codex r1 spec fix #4 + Step 5.a-2-4 追加)
 
 Step 5.d / 5.e の dogfooding に「保守シナリオ」を含める:
+
+#### A1' 構造の保守シナリオ (Codex r1 spec fix #4)
 
 1. workflow の一文を変更する
 2. full と split の双方へ一度だけ反映されることを確認
@@ -291,6 +293,18 @@ Step 5.d / 5.e の dogfooding に「保守シナリオ」を含める:
 4. collision / malformed marker が fail-closed になることを確認
 
 これは A1' (body.md 単一正本) が保守視点で正しく機能していることを検証する。
+
+#### Windows + PowerShell 5 + 日本語 .ps1 シナリオ (Step 5.a-2-4 で追加)
+
+`examples/japanese-docs-pwsh/` を fixture として、Windows + 日本語 + PowerShell 5 環境での dogfooding を実施:
+
+5. `examples/japanese-docs-pwsh/` を一時 dir にコピーして `python -m qgb check REQ-DOC-001` を実行
+6. stage log (`artifacts/REQ-DOC-001/checks/<ts>/stages/*.log`) を Read し **`U+FFFD` (replacement character) が含まれていない**ことを確認 (= κ mojibake sentinel)
+7. 意図的に `[Console]::OutputEncoding = UTF8` 設定を削除した `.ps1` で `qgb check` を再実行 → stage log に `U+FFFD` が出現することを確認 (= κ が機能していること)
+8. skill 内 lint (`skills/source/lint/check-command-contract.{ps1,py}`) を contract に対して実行し、想定通りの finding (C2 BOM / C3 argv / C4 OutputEncoding 等) を出すことを確認
+9. body.md §6.5 command authoring protocol の 7 step が、利用者プロジェクト (japanese-docs-pwsh) で実際に機能することを確認
+
+これは θ command authoring protocol + ι capability-based dispatch + κ mojibake sentinel が「実際のプロジェクトとして動かしたときに運用上問題ない」基準で機能することを検証する。
 
 ## 7. 関連ファイル
 

@@ -850,6 +850,56 @@ LLM レビューの結果は **「このプロジェクトでこう見えた」*
 
 → `qgb patch` 経路で構造化編集、直接ファイル書き換えはしない (Phase 2 規律)。
 
+### 3.5 command 契約の runtime 規律検証 (補助確認、Step 5.a-2-4 で確立、γ-lite + κ)
+
+advisory review の一環として、`verification_type=command` 契約の **runtime 規律** が body.md §6.5 command authoring protocol + §12.5.5 capability-based dispatch checklist に従っているかを補助的に確認する。
+
+**主防御ではない** (主防御は契約起草時の workflow + design-stages 段階)。本観点はレビュー時に **見落とされていた違反を捕捉する補強策**。
+
+#### κ mojibake sentinel: stage log の U+FFFD 検出
+
+`qgb check` / `qgb run` 実行後、stage log (`evidence/REQ-XXX/latest/stages/*.log` または `artifacts/REQ-XXX/checks/<ts>/stages/*.log`) に **U+FFFD (replacement character, `�`)** が含まれているかを確認:
+
+```powershell
+Select-String -Pattern "[\u{FFFD}]" -Path "evidence/REQ-XXX/latest/stages/*.log"
+```
+
+または:
+
+```bash
+grep -l '\xef\xbf\xbd' evidence/REQ-XXX/latest/stages/*.log
+```
+
+`U+FFFD` が見つかった場合、command の stdout / stderr が UTF-8 として復号できなかった (cp932 や別 encoding で出力されていた可能性)。対処:
+
+1. 該当 contract の `runtime` を確認、capability checklist (§12.5.5) を再適用
+2. PowerShell なら `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` 設定漏れ、Python なら `PYTHONUTF8=1` 設定漏れ、bash なら `LC_ALL=C.UTF-8` 設定漏れ等を疑う
+3. `skills/source/lint/check-command-contract.{ps1,py}` の C6 check を実行して機械検査
+
+advisory として `knowledge.jsonl` に `entry_type: spec_violation_warning` + `source_type: llm_advisory` で記録 (利用者承認後に修正)。ALLOW 判定の根拠にはしない (philosophy P6)。
+
+#### θ / ι 適用確認: contract.runtime field の存在
+
+`verification_type=command` 契約に `runtime` field が **存在しない / 未確定 / 「any」等の曖昧表現**の場合、§6.5 + §12.5.5 が適用不能。proposal adopt 前に runtime を 1 つに確定すべき。
+
+#### lint helper script 実行
+
+skill agent が proposal adopt 前に `skills/source/lint/check-command-contract.{ps1,py}` を自動実行:
+
+```powershell
+# Windows native PowerShell (skill install 後)
+powershell -ExecutionPolicy Bypass -NoProfile -File <skill_install>/lint/check-command-contract.ps1 `
+  -Contract <contract.json> -Script <script path> [-Evidence <stage log>]
+```
+
+```bash
+# Cross-platform
+python <skill_install>/lint/check-command-contract.py <contract.json> \
+  [--script <script path>] [--evidence <stage log>]
+```
+
+exit 0 (全 check pass) なら adopt 推奨、exit 1 (1 件以上の finding) なら proposal を修正してから adopt。lint 結果は **advisory** として利用者に提示、ALLOW 判定の根拠ではない。
+
 ## 4. やってはいけない LLM レビュー (禁止リスト)
 
 ### 4.1 ❌ LLM が ALLOW 判定の根拠を提供する
