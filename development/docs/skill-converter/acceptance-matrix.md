@@ -9,7 +9,7 @@ Step 5.a-0 で確定する成果物受け入れ条件。5.b 実装 + 5.b-ci CI +
 | **生成ファイル** | `SKILL.md` 単独 (本文に philosophy/stage-design/examples 全て埋め込み) | `SKILL.md` + `workflow.md` + `references.md` + `prompts/design-stages.md` + `prompts/review-policy.md` | `SKILL.md` 単独 (構造は Claude full と同等の本文、frontmatter 差分のみ) | `SKILL.md` + helper files (Claude split と同型) |
 | **frontmatter** | `name: qgb` + `description` + `allowed-tools` + 他 (`agent-claude.md` 参照) | 同 (full / split で frontmatter 同一) | `name: qgb` + `description` (Codex CLI で確認済キーのみ) | 同 |
 | **構文検証** | YAML frontmatter parse 成功 + Markdown parse 成功 | 同 + helper files も Markdown parse 成功 | 同 (Codex 側で `name`/`description` が読める) | 同 + helper files Markdown parse |
-| **生成物 header** | 全成果物先頭に generator comment (converter version + build input digest + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時 / source commit hash は埋め込まない** (下記「deterministic build 契約」参照、commit hash は golden 自己参照問題を構造的に回避) | 同 | 同 | 同 |
+| **生成物 header** | 全成果物先頭に generator comment (converter version + build input digest + 「これは生成物。`skills/source/body.md` を編集すること」)。**source commit hash は埋め込まない** (golden 自己参照問題を構造的に回避)。**生成日時は `SOURCE_DATE_EPOCH` 設定時のみ埋め込み**、未設定時は埋め込まない (下記「deterministic build 契約」参照) | 同 | 同 | 同 |
 | **install ガイド** | `dist/skills/full/claude/INSTALL.md` 同梱、`~/.claude/skills/qgb/` への配置手順 | `dist/skills/split/claude/INSTALL.md`、配置手順 + helper files の関係説明 | `dist/skills/full/codex/INSTALL.md`、`~/.agents/skills/qgb/` への配置手順 | 同 (split 用) |
 | **golden fixture** | `tools/_golden/claude/full/` 配下に期待生成物全件、`tools/build_skill.py` 出力と byte 一致 | `tools/_golden/claude/split/` 配下、同 | `tools/_golden/codex/full/` 配下、同 | `tools/_golden/codex/split/` 配下、同 |
 | **manual smoke** | 配置 → 利用者 prompt 「qgb 入れて」で skill 起動確認 → SKILL.md 内容が Claude に読まれている確認 (深 dogfood で完全な対話を実施) | 同 + helper files が必要な依頼 (例: 「契約段階の設計やって」) で `workflow.md` / `prompts/design-stages.md` が参照される確認 (深 dogfood) | 配置 → smoke (`/skills` で qgb が一覧に出る + 起動成功) のみ。深 dogfood は不要 (案 ii) | 同 (smoke のみ) |
@@ -83,10 +83,11 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 
 #### 設計上の主張
 
-- **同一 build 入力 → 同一 digest**: metadata / source / hook / agent docs / converter version のいずれが変わっても digest が変化、それ以外 (環境変数 / HEAD / build 時刻等) では変化しない
+- **同一 build 入力 → 同一 digest**: 7 カテゴリの input (metadata / schema / source_files / 同梱 hook / agent docs / converter 実装 / `SOURCE_DATE_EPOCH` 値) のいずれが変わっても digest が変化、**それ以外** (HEAD / build 時刻 / それ以外の環境変数等) では変化しない
 - **build 入力 1 byte 変更 → digest 完全変化** (binary diffuse な hash の特性)
-- **golden fixture は build 入力同期で更新**: 上記いずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
+- **golden fixture は build 入力同期で更新**: 上記 7 カテゴリのいずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
 - **build 入力外の変化は digest を変えない**: 例えば `development/docs/journal/` の追記、利用者プロジェクト側の変更、CI 設定の変更等は digest に影響しない (= golden 比較も影響しない)
+- **`SOURCE_DATE_EPOCH` 設定時の挙動**: 環境変数値が digest カテゴリ 7 に含まれるため、設定値が異なれば digest も異なる。通常 build (未設定) と release build (epoch 値設定) は別 digest 系統で扱う (golden fixture も 2 系統 — 通常 build 系統が standard、release CI 系統は release artifact 検証用、運用は 5.b / 5.c で具体化)
 
 #### 旧 source_content_digest との違い
 
