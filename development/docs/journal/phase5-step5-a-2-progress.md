@@ -291,4 +291,13 @@ LLM 開発主体の特性 (削除と再作成の間に compact 走るリスク) 
   - `skills/source/prompts/design-stages.md` (278 行, 14,347 chars) Pattern B/C 統合
   - `skills/source/prompts/review-policy.md` (210 行, 12,292 chars) LLM レビュー境界
   - pytest 753 passed + 3 skipped、ruff clean
-  - **次: 段階 2** (workflow.md / references.md stub を「正本は body.md §6 / §7」に置換)
+- **段階 2 完了** (commit `6f4e96a`, 2026-06-28):
+  - `skills/source/workflow.md` (9 行): 「正本は body.md §6」と書く 1 行 stub
+  - `skills/source/references.md` (9 行): 「正本は body.md §7」と書く 1 行 stub
+  - pytest test_step9_docs.py 15 passed
+- **段階 3 完了** (commit `c8e3809`, 2026-06-28):
+  - body.md に §12 (prompts/design-stages.md) + §13 (prompts/review-policy.md) を include marker embed
+  - body.md 新サイズ: 798 行, 27,990 chars, cl100k 17,094 tokens, o200k 13,834 tokens
+  - skills/source/prompts/ 原本は段階 5 まで残す (二重化過渡、fail-safe)
+  - pytest test_step9_docs.py 15 passed
+  - **次: Codex 横断レビュー 1 回目** (A1' で正しい方向か / Q2-pre 解釈 (b) と整合か確認)
