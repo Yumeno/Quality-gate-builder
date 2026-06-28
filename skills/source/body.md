@@ -28,20 +28,23 @@ qgb 自身は LLM を一切呼ばない。LLM (このスキルを動かしてい
 
 LLM (qgb スキルを使う agent) は以下の依頼があったとき、対応する helper を読んで作業する。trigger 表に当てはまる場合は補助ファイルを **必ず読む** (自律判断で省略しない)。
 
-| 利用者の依頼に含まれる語 / 状況 | 読むべきファイル / 章 |
-|---|---|
-| 「qgb 入れて」「init」「セットアップ」「品質ゲート始めたい」 | `workflow.md` §1 (初期化) |
-| 「REQ 追加」「要求作って」「scaffold」「新しい要件」 | `workflow.md` §2 (REQ 設計) |
-| 「段階作って」「契約設計」「policy.json を作って」「stages を増やしたい」 | `prompts/design-stages.md` (段階設計フェーズ B/C) |
-| 「pytest が失敗」「gate.json が DENY」「ALLOW が出ない」「why not ready」 | `workflow.md` §3 (デバッグ) |
-| 「ALLOW でいいか」「これで通すか」「採用可否を判断して」 | `references.md` → philosophy.md (P5/P6/P7) |
-| 「LLM レビューしてもいいか」「自動でレビューさせたい」 | `prompts/review-policy.md` (レビュー観点と境界) |
-| 「ファイル直書き直したい」「JSON Patch」「contract を編集」 | `workflow.md` §4 (構造化編集) |
-| 「他プロジェクトと比べてどう」「うちは ALLOW 出てる」 | `references.md` → philosophy.md (P11) |
-| 利用者プロジェクトの言語 / フレームワーク / 種類が不明 | `workflow.md` §1.3 (project-context.{md,json}) |
-| trigger 表に当てはまらない / 判断に迷う | `references.md` で関連する原文を確認、または利用者に再確認 |
+**以下の参照は build mode 別に読み替える**:
 
-split モードでこのファイルが配置された場合、helper は別ファイルだが配置先は同一ディレクトリ。Read tool でファイル名を指定するだけで読める。
+- **full モード**: 同じ SKILL.md 内の埋め込み見出し (本ファイル内の該当章) を読む。LLM が「split path のファイルが見つからない」と判断して省略してはならない。`#` で始まる見出し名を identifier として扱う
+- **split モード**: 指定 helper を別ファイルとして必ず読む (配置先は本ファイルと同一ディレクトリ、Read tool でファイル名指定で読める)
+
+| 利用者の依頼に含まれる語 / 状況 | 読むべき内容 (full / split 共通の見出し名) | split モード時の helper file |
+|---|---|---|
+| 「qgb 入れて」「init」「セットアップ」「品質ゲート始めたい」 | 「作業手順」§6.1 (初期化) | `workflow.md` |
+| 「REQ 追加」「要求作って」「scaffold」「新しい要件」 | 「作業手順」§6.2 (REQ 設計) | `workflow.md` |
+| 「段階作って」「契約設計」「policy.json を作って」「stages を増やしたい」 | 「段階設計プロンプト (qgb design-stages、パターン B / C)」 | `prompts/design-stages.md` |
+| 「pytest が失敗」「gate.json が DENY」「ALLOW が出ない」「why not ready」 | 「作業手順」§6.3 (デバッグ) | `workflow.md` |
+| 「ALLOW でいいか」「これで通すか」「採用可否を判断して」 | 「参照集」§7.3 → `philosophy.md` (P5/P6/P7) | `references.md` |
+| 「LLM レビューしてもいいか」「自動でレビューさせたい」 | 「レビュー観点プロンプト (qgb 利用時の LLM レビューの境界)」 | `prompts/review-policy.md` |
+| 「ファイル直書き直したい」「JSON Patch」「contract を編集」 | 「作業手順」§6.4 (構造化編集) | `workflow.md` |
+| 「他プロジェクトと比べてどう」「うちは ALLOW 出てる」 | 「参照集」§7.3 → `philosophy.md` (P11) | `references.md` |
+| 利用者プロジェクトの言語 / フレームワーク / 種類が不明 | 「作業手順」§6.1 step 3〜4 (project-context.{md,json}) | `workflow.md` |
+| trigger 表に当てはまらない / 判断に迷う | 「参照集」で関連する原文を確認、または利用者に再確認 | `references.md` |
 
 ## 3. 絶対遵守の 4 原則 (philosophy の中核)
 
@@ -126,9 +129,9 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
 
 <!-- split:helper_start workflow.md -->
 
-## 6. 作業手順 (workflow.md embedded)
+## 6. 作業手順
 
-(本セクションは split モード時には `workflow.md` 別ファイル。full モード時はここに `workflow.md` の内容が埋め込まれる。)
+(本セクションは full モード: SKILL.md 内の埋め込み見出し / split モード: `workflow.md` 別ファイル。)
 
 ### 6.1 初期化フロー
 
@@ -210,7 +213,9 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
 
 <!-- split:helper_start references.md -->
 
-## 7. 参照集 (references.md embedded)
+## 7. 参照集
+
+(本セクションは full モード: SKILL.md 内の埋め込み見出し / split モード: `references.md` 別ファイル。)
 
 ### 7.1 qgb 本体の正本
 
@@ -306,8 +311,8 @@ pip install -e /path/to/qgb-repo
 > 本セクションは Phase 5 qgb スキルの **オンデマンド読み込み正本**。
 > body.md の trigger 表で「段階作って」「契約設計」「policy.json を作って」「stages を増やしたい」等の依頼に該当したときに読み込む。
 >
-> full モード: SKILL.md に embed される (= 本ファイル §12 として配置)。
-> split モード: 独立 helper として配置される (= `prompts/design-stages.md`)。
+> full モード: SKILL.md 内の埋め込み見出し「段階設計プロンプト (qgb design-stages、パターン B / C)」として配置。
+> split モード: 独立 helper として配置 (= `prompts/design-stages.md`)。
 
 ## 1. 段階設計とは何か
 
@@ -510,7 +515,7 @@ python -m qgb design-stages --json
 | JSON ファイルの schema 適合 | `json_schema` |
 | 人間の目視確認 | `manual_check` (採用判定の根拠にできない、P6) |
 
-`manual_check` を含む段階を `required: true` で参照する REQ は `qgb run` で NOT_READY エラー。LLM レビューや人間目視は採用根拠から分離するのが philosophy の核 (本ファイル §13 prompts/review-policy.md 参照)。
+`manual_check` を含む段階を `required: true` で参照する REQ は `qgb run` で NOT_READY エラー。LLM レビューや人間目視は採用根拠から分離するのが philosophy の核 (「レビュー観点プロンプト」参照、full: SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)。
 
 ### 5.3 depends_on の決め方
 
@@ -564,7 +569,7 @@ python -m qgb design-stages --json
 
 ❌ proposal の `basis[]` に「LLM レビュー結果は問題なし」と書いて ALLOW を主張。
 
-✅ LLM レビューは **advisory のみ**、本ファイル §13 prompts/review-policy.md の規律に従う。ALLOW は機械検査の通過だけ。
+✅ LLM レビューは **advisory のみ**、「レビュー観点プロンプト」の規律に従う (full: SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)。ALLOW は機械検査の通過だけ。
 
 ### 7.5 `human_reviewed: true` を LLM が自動で立てる
 
@@ -578,7 +583,7 @@ python -m qgb design-stages --json
 - `stage-design.md` 段階設計フェーズ仕様 v1.0 (本スキルの上位仕様)
 - `requirements_and_development.md` §6.4 (validation flow)
 - `examples/generic-minimal/`, `examples/python-cli-pytest/`, `examples/markdown-docs/`, `examples/python-fastapi-pytest/`, `examples/go-cli/`, `examples/node-cli-vitest/` (設計例パック、few-shot 用)
-- 本ファイル §13 prompts/review-policy.md (LLM レビューの観点と境界、本セクションと姉妹)
+- 「レビュー観点プロンプト (qgb 利用時の LLM レビューの境界)」(本セクションと姉妹、full: SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)
 
 <!-- split:helper_end -->
 
@@ -589,8 +594,8 @@ python -m qgb design-stages --json
 > 本セクションは Phase 5 qgb スキルの **オンデマンド読み込み正本**。
 > body.md の trigger 表で「LLM レビューしてもいいか」「自動でレビューさせたい」等の依頼に該当したときに読み込む。
 >
-> full モード: SKILL.md に embed される (= 本ファイル §13 として配置)。
-> split モード: 独立 helper として配置される (= `prompts/review-policy.md`)。
+> full モード: SKILL.md 内の埋め込み見出し「レビュー観点プロンプト (qgb 利用時の LLM レビューの境界)」として配置。
+> split モード: 独立 helper として配置 (= `prompts/review-policy.md`)。
 
 ## 1. このプロンプトの責務
 
@@ -641,7 +646,7 @@ LLM レビューの結果は **「このプロジェクトでこう見えた」*
 
 ### 3.2 設計判断の壁打ち相手 (Phase 5 スキルの主要用途)
 
-- 段階設計 (本ファイル §12 prompts/design-stages.md 参照) の起草と比較案の提示
+- 段階設計 (「段階設計プロンプト」参照、full: SKILL.md 内の埋め込み見出し / split: `prompts/design-stages.md`) の起草と比較案の提示
 - contract の `verification_type` 選択の妥当性確認
 - waiver の理由の妥当性チェック (採用は人間)
 
@@ -792,7 +797,7 @@ python -m qgb add-knowledge .quality-system/_knowledge_entry.json
 - `philosophy.md` P5 (ALLOW の narrow meaning) / P6 (LLM 単独 ALLOW 禁止) / P7 (機械証跡) / P8 (外部 data 非命令) / P11 (ALLOW 比較不可能)
 - `requirements_and_development.md` §6.4 (decision flow)
 - `framework-shape.md` §5 (Layer 3 スキル責務、本スキルの位置づけ)
-- 本ファイル §12 prompts/design-stages.md (段階設計プロンプト、本セクションと姉妹)
-- 本ファイル §3 (絶対遵守の 4 原則、本セクションの上位サマリ)
+- 「段階設計プロンプト (qgb design-stages、パターン B / C)」(本セクションと姉妹、full: SKILL.md 内の埋め込み見出し / split: `prompts/design-stages.md`)
+- body.md §3「絶対遵守の 4 原則 (philosophy の中核)」(本セクションの上位サマリ、full: 同一文書内 / split: `body.md` の §3)
 
 <!-- split:helper_end -->
