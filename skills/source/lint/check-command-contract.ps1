@@ -72,6 +72,19 @@ function Read-TextStrict {
     return [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($true))
 }
 
+function Normalize-PathForCompare {
+    param([string]$PathStr, [string]$BaseDir)
+    # Cross-style normalization: convert backslashes to forward slashes,
+    # resolve relative to BaseDir if not absolute, lowercase for
+    # case-insensitive comparison (Windows convention).
+    if ([string]::IsNullOrWhiteSpace($PathStr)) { return "" }
+    if ([System.IO.Path]::IsPathRooted($PathStr)) {
+        return ([System.IO.Path]::GetFullPath($PathStr)).Replace('\', '/').ToLower()
+    }
+    $combined = Join-Path $BaseDir $PathStr
+    return ([System.IO.Path]::GetFullPath($combined)).Replace('\', '/').ToLower()
+}
+
 function Test-Utf8Bom {
     param([string]$Path)
     $bytes = [System.IO.File]::ReadAllBytes($Path)
@@ -180,7 +193,7 @@ function Check-PowerShellBom {
 }
 
 function Check-PowerShellArgv {
-    param($Contract, [string]$ScriptPath)
+    param($Contract, [string]$ScriptPath, [string]$ContractPath)
     $findings = @()
     $runtime = $Contract.runtime
     if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $findings }
@@ -208,6 +221,15 @@ function Check-PowerShellArgv {
         $findings += "C3: PowerShell argv is missing required flags ($($missing -join ', ')). These flags ensure deterministic execution (no profile load, no interactive prompt, no policy ambiguity). See body.md sec 6.5."
     }
 
+    # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass (adjacency).
+    if ($runtime -eq 'powershell-5' -and ($command -contains '-ExecutionPolicy')) {
+        $epIdx = [Array]::IndexOf($command, '-ExecutionPolicy')
+        $nextArg = if ($epIdx + 1 -lt $command.Count) { [string]$command[$epIdx + 1] } else { $null }
+        if ($nextArg -ne 'Bypass') {
+            $findings += "C3: '-ExecutionPolicy' must be immediately followed by 'Bypass', but the next argv element is '$nextArg'. The current argv would set a different policy, defeating the deterministic-execution intent. See body.md sec 6.5."
+        }
+    }
+
     # -File presence and consistency.
     $fileIdx = [Array]::IndexOf($command, '-File')
     if ($fileIdx -lt 0) {
@@ -221,18 +243,38 @@ function Check-PowerShellArgv {
     $fileArg = [string]$command[$fileIdx + 1]
     if ($fileArg.StartsWith('-')) {
         $findings += "C3: argv item after '-File' is '$fileArg', which looks like another flag. Expected a script path. See body.md sec 6.5."
-    } elseif (-not [string]::IsNullOrWhiteSpace($ScriptPath)) {
-        # Compare -File argument with -Script we resolved.
-        $fileBasename = [System.IO.Path]::GetFileName($fileArg)
-        $scriptBasename = [System.IO.Path]::GetFileName($ScriptPath)
-        if ([System.IO.Path]::IsPathRooted($fileArg)) {
-            $fileFull = [System.IO.Path]::GetFullPath($fileArg)
-            $scriptFull = [System.IO.Path]::GetFullPath($ScriptPath)
-            if ($fileFull -ne $scriptFull) {
-                $findings += "C3: contract.command -File argument '$fileArg' does not match -Script '$ScriptPath'. The skill should invoke exactly the script under review."
+        return $findings
+    }
+    # Compare -File argument with -Script we resolved (full-path normalization,
+    # not basename-only). Both POSIX and Windows path styles are handled by
+    # .NET's path APIs on the running host (PowerShell sibling runs on Windows
+    # native, so we use ntpath-equivalent forward/backslash normalization).
+    # -File and -Script can be relative paths but interpreted against
+    # different base dirs at runtime (-File: user's project working dir at
+    # `qgb run`; -Script: lint invocation cwd, or absolute). Use a layered
+    # comparison: full-path equality when either side is absolute, basename
+    # equality otherwise. Stronger same-path verification belongs in 5.b
+    # dogfooding against a real fixture project.
+    if (-not [string]::IsNullOrWhiteSpace($ScriptPath)) {
+        $fileIsAbsolute = [System.IO.Path]::IsPathRooted($fileArg)
+        $scriptIsAbsolute = [System.IO.Path]::IsPathRooted($ScriptPath)
+        if ($fileIsAbsolute -or $scriptIsAbsolute) {
+            $contractDir = (Get-Location).Path
+            if (-not [string]::IsNullOrWhiteSpace($ContractPath)) {
+                $resolved = [System.IO.Path]::GetFullPath($ContractPath)
+                $contractDir = [System.IO.Path]::GetDirectoryName($resolved)
             }
-        } elseif ($fileBasename -ne $scriptBasename) {
-            $findings += "C3: contract.command -File argument basename '$fileBasename' does not match -Script basename '$scriptBasename'."
+            $fileNorm = Normalize-PathForCompare -PathStr $fileArg -BaseDir $contractDir
+            $scriptNorm = Normalize-PathForCompare -PathStr $ScriptPath -BaseDir $contractDir
+            if ($fileNorm -ne $scriptNorm) {
+                $findings += "C3: contract.command -File argument '$fileArg' does not resolve to the same path as -Script '$ScriptPath' (normalized: '$fileNorm' vs '$scriptNorm'). The skill must invoke exactly the script under review."
+            }
+        } else {
+            $fileBasename = [System.IO.Path]::GetFileName($fileArg)
+            $scriptBasename = [System.IO.Path]::GetFileName($ScriptPath)
+            if ($fileBasename -ne $scriptBasename) {
+                $findings += "C3: contract.command -File argument basename '$fileBasename' does not match -Script basename '$scriptBasename'. The skill must invoke exactly the script under review (relative paths checked by basename only; for stricter check, pass absolute paths to both -File and -Script)."
+            }
         }
     }
     return $findings
@@ -258,14 +300,20 @@ function Check-PowerShellStdoutInit {
 
 function Check-RuntimeAvailable {
     param($Contract)
-    $advisories = @()
+    # Return a hashtable to avoid PowerShell's array-collapse-on-empty
+    # behavior (where @(), $advisories in destructuring would collapse the
+    # empty array and shift the advisories into the findings slot).
+    $result = @{
+        Findings = @()
+        Advisories = @()
+    }
     $runtime = $Contract.runtime
-    if (-not $runtime) { return @(), $advisories }
+    if (-not $runtime) { return $result }
     $resolved = Find-RuntimeExecutable -Runtime $runtime
     if (-not $resolved) {
-        $advisories += "C5 (advisory): runtime '$runtime' executable not found on this host's PATH. This is the skill-agent's local environment; the target user environment may differ. Verify availability on the user's host before relying on this contract."
+        $result.Advisories += "C5 (advisory): runtime '$runtime' executable not found on this host's PATH. This is the skill-agent's local environment; the target user environment may differ. Verify availability on the user's host before relying on this contract."
     }
-    return @(), $advisories
+    return $result
 }
 
 function Check-EvidenceMojibake {
@@ -326,11 +374,11 @@ $advisories = @()
 
 $findings += Check-ExtensionRuntimeMatch -Contract $contractObj -ScriptPath $resolvedScript
 $findings += Check-PowerShellBom         -Contract $contractObj -ScriptPath $resolvedScript
-$findings += Check-PowerShellArgv        -Contract $contractObj -ScriptPath $resolvedScript
+$findings += Check-PowerShellArgv        -Contract $contractObj -ScriptPath $resolvedScript -ContractPath $Contract
 $findings += Check-PowerShellStdoutInit  -Contract $contractObj -ScriptPath $resolvedScript
-$runtimeFindings, $runtimeAdvisories = Check-RuntimeAvailable -Contract $contractObj
-$findings += $runtimeFindings
-$advisories += $runtimeAdvisories
+$runtimeResult = Check-RuntimeAvailable -Contract $contractObj
+$findings += $runtimeResult.Findings
+$advisories += $runtimeResult.Advisories
 $findings += Check-EvidenceMojibake      -EvidencePath $Evidence
 $advisories += Check-OutputEncodingAdvisory -Contract $contractObj -ScriptPath $resolvedScript
 

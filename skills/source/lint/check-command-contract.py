@@ -48,11 +48,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import ntpath
 import os
+import posixpath
 import re
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Optional
 
 
@@ -108,6 +110,49 @@ def is_pure_ascii(text: str) -> bool:
         return True
     except UnicodeEncodeError:
         return False
+
+
+def basename_universal(path_str: str) -> str:
+    """Extract basename treating both POSIX and Windows path separators.
+
+    On POSIX hosts, os.path.basename("C:\\foo\\bar.exe") returns the whole
+    string because backslash isn't a separator. For lint we must handle both
+    styles since contracts may be authored for Windows users from any host.
+    """
+    # Try POSIX first (forward slash), then Windows (backslash).
+    # If the string contains backslash, ntpath handles it correctly.
+    if "\\" in path_str:
+        return ntpath.basename(path_str)
+    return posixpath.basename(path_str)
+
+
+def has_path_separator(path_str: str) -> bool:
+    """True iff path_str contains a path separator (POSIX or Windows)."""
+    return "/" in path_str or "\\" in path_str
+
+
+def normalize_path_for_compare(path_str: str, base_dir: Path) -> str:
+    """Normalize a path string for full-path comparison.
+
+    Handles both POSIX (forward slash) and Windows (backslash) styles.
+    Relative paths are resolved against base_dir. Returns a normalized
+    POSIX-style string for case-insensitive comparison on Windows-like
+    paths.
+    """
+    if "\\" in path_str:
+        # Windows-style path string.
+        win_path = PureWindowsPath(path_str)
+        if win_path.is_absolute():
+            return str(win_path).replace("\\", "/").lower()
+        # Resolve relative to base_dir.
+        candidate = (base_dir / Path(path_str.replace("\\", "/"))).resolve()
+        return str(candidate).replace("\\", "/").lower()
+    # POSIX-style path string.
+    posix_path = Path(path_str)
+    if posix_path.is_absolute():
+        return str(posix_path.resolve()).replace("\\", "/").lower()
+    candidate = (base_dir / posix_path).resolve()
+    return str(candidate).replace("\\", "/").lower()
 
 
 def find_runtime_executable(runtime: str) -> Optional[str]:
@@ -258,9 +303,23 @@ def check_powershell_bom(
 
 
 def check_powershell_argv(
-    contract: dict, script_path: Optional[Path]
+    contract: dict,
+    script_path: Optional[Path],
+    contract_path: Path,
 ) -> list[str]:
-    """C3: PowerShell argv が完全明示か (basename / runtime ↔ invoker / -File 整合)."""
+    """C3: PowerShell argv が完全明示か.
+
+    Checks:
+    - first arg basename matches invoker for runtime (case-insensitive,
+      cross-platform path-style aware: handles both 'powershell.exe' and
+      'C:\\path\\powershell.exe')
+    - required flags present (PS 5 also needs -ExecutionPolicy Bypass)
+    - -ExecutionPolicy is immediately followed by 'Bypass' (adjacency check)
+    - -File present, followed by a script path (not another flag)
+    - -File argument resolves to same full path as --script argument
+      (normalized to a single comparable form, handling Windows and POSIX
+      path styles independently of host OS)
+    """
     findings: list[str] = []
     runtime = contract.get("runtime")
     if runtime not in POWERSHELL_INVOKER_BASENAMES:
@@ -274,10 +333,10 @@ def check_powershell_argv(
         )
         return findings
 
-    # Check the first arg: must be a recognized PowerShell invoker matching the runtime.
+    # First arg: invoker basename, cross-platform path style aware.
     allowed_invokers = POWERSHELL_INVOKER_BASENAMES[runtime]
-    first_arg = command[0]
-    first_basename = os.path.basename(str(first_arg)).lower()
+    first_arg = str(command[0])
+    first_basename = basename_universal(first_arg).lower()
     if first_basename not in allowed_invokers:
         findings.append(
             f"C3: contract.command[0] basename = '{first_basename}' is not "
@@ -286,7 +345,7 @@ def check_powershell_argv(
             "explicit invoker as the first argv element. "
             "See body.md §6.5 PowerShell 5 rules."
         )
-        # Continue checking remaining structure, since the rest may still be wrong.
+        # Continue: remaining checks may still surface issues.
 
     # Required flags.
     required_flags = ["-NoLogo", "-NoProfile", "-NonInteractive"]
@@ -300,6 +359,19 @@ def check_powershell_argv(
             "no interactive prompt, no policy ambiguity). "
             "See body.md §6.5."
         )
+
+    # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass (adjacency).
+    if runtime == "powershell-5" and "-ExecutionPolicy" in command:
+        ep_idx = command.index("-ExecutionPolicy")
+        next_arg = command[ep_idx + 1] if ep_idx + 1 < len(command) else None
+        if next_arg != "Bypass":
+            findings.append(
+                f"C3: '-ExecutionPolicy' must be immediately followed by "
+                f"'Bypass', but the next argv element is "
+                f"{next_arg!r}. The current argv would set a different "
+                "policy, defeating the deterministic-execution intent. "
+                "See body.md §6.5."
+            )
 
     # -File <path> presence and consistency.
     try:
@@ -317,31 +389,65 @@ def check_powershell_argv(
             "required immediately after. See body.md §6.5."
         )
         return findings
-    file_arg = command[file_idx + 1]
+    file_arg = str(command[file_idx + 1])
     if file_arg.startswith("-"):
         findings.append(
             f"C3: argv item after '-File' is '{file_arg}', which looks "
             "like another flag. Expected a script path. See body.md §6.5."
         )
-    elif script_path is not None:
-        # Verify the -File argument matches the --script we resolved (path equality
-        # check; normalize both as relative-or-absolute strings).
-        file_path = Path(file_arg)
-        # If file_arg is absolute, compare directly; else compare basenames.
-        if file_path.is_absolute():
-            if file_path != script_path.resolve():
+        return findings
+
+    # If --script was provided, compare -File argument to it.
+    # Both -File and --script can be relative paths, but they are interpreted
+    # against different base directories at runtime:
+    #   -File: relative to the user's project working dir (cwd at `qgb run`)
+    #   --script: relative to the lint invocation cwd, or absolute
+    # We therefore use a layered comparison:
+    #   (a) If either side is absolute, full-path equality after normalization.
+    #   (b) Otherwise, basename equality (we cannot disambiguate same-basename
+    #       different-dir cases without knowing the user's project layout).
+    # Basename equality is intentionally weak; the proposal author is
+    # expected to keep -File and --script aligned. Stronger checks belong
+    # in 5.b dogfooding (a real `qgb check` against a fixture project).
+    if script_path is not None:
+        file_path_obj = Path(file_arg) if "\\" not in file_arg else PureWindowsPath(file_arg)
+        either_absolute = (
+            file_path_obj.is_absolute() or script_path.is_absolute()
+        )
+        if either_absolute:
+            try:
+                contract_dir = contract_path.resolve().parent
+                file_norm = normalize_path_for_compare(file_arg, contract_dir)
+                script_norm = normalize_path_for_compare(
+                    str(script_path), contract_dir
+                )
+                if file_norm != script_norm:
+                    findings.append(
+                        f"C3: contract.command -File argument '{file_arg}' "
+                        f"does not resolve to the same path as --script "
+                        f"'{script_path}' "
+                        f"(normalized: {file_norm!r} vs {script_norm!r}). "
+                        "The skill must invoke exactly the script under "
+                        "review."
+                    )
+            except (OSError, ValueError) as exc:
                 findings.append(
-                    f"C3: contract.command -File argument '{file_arg}' does "
-                    f"not match --script '{script_path}'. The skill should "
-                    "invoke exactly the script under review."
+                    f"C3: could not normalize -File path '{file_arg}' or "
+                    f"--script '{script_path}' for comparison: {exc}"
                 )
         else:
-            if file_path.name != script_path.name:
+            file_basename = basename_universal(file_arg)
+            script_basename = script_path.name
+            if file_basename != script_basename:
                 findings.append(
                     f"C3: contract.command -File argument basename "
-                    f"'{file_path.name}' does not match --script basename "
-                    f"'{script_path.name}'."
+                    f"'{file_basename}' does not match --script basename "
+                    f"'{script_basename}'. The skill must invoke exactly "
+                    "the script under review (relative paths checked by "
+                    "basename only; for stricter check, pass absolute "
+                    "paths to both -File and --script)."
                 )
+
     return findings
 
 
@@ -503,7 +609,7 @@ def run_checks(
 
     findings.extend(check_extension_runtime_match(contract, script_path))
     findings.extend(check_powershell_bom(contract, script_path))
-    findings.extend(check_powershell_argv(contract, script_path))
+    findings.extend(check_powershell_argv(contract, script_path, contract_path))
     findings.extend(check_powershell_stdout_init(contract, script_path))
     runtime_findings, runtime_advisories = check_runtime_available(contract)
     findings.extend(runtime_findings)

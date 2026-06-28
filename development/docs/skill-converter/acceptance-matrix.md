@@ -89,7 +89,7 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 - **build 入力 1 byte 変更 → digest 完全変化** (binary diffuse な hash の特性)
 - **golden fixture は build 入力同期で更新**: 上記 8 カテゴリのいずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
 - **build 入力外の変化は digest を変えない**: 例えば `development/docs/journal/` の追記、利用者プロジェクト側の変更、CI 設定の変更等は digest に影響しない (= golden 比較も影響しない)
-- **`SOURCE_DATE_EPOCH` 設定時の挙動**: 環境変数値が digest カテゴリ 7 に含まれるため、設定値が異なれば digest も異なる。通常 build (未設定) と release build (epoch 値設定) は別 digest 系統で扱う (golden fixture も 2 系統 — 通常 build 系統が standard、release CI 系統は release artifact 検証用、運用は 5.b / 5.c で具体化)
+- **`SOURCE_DATE_EPOCH` 設定時の挙動**: 環境変数値が digest カテゴリ 8 に含まれるため、設定値が異なれば digest も異なる。通常 build (未設定) と release build (epoch 値設定) は別 digest 系統で扱う (golden fixture も 2 系統 — 通常 build 系統が standard、release CI 系統は release artifact 検証用、運用は 5.b / 5.c で具体化)
 
 #### 旧 source_content_digest との違い
 
@@ -115,7 +115,7 @@ K=2 r2 で導入した `source_content_digest` (body.md のみ対象) は **buil
 
 **`SOURCE_DATE_EPOCH` と digest の関係** (K=2 r4 spec fix #3 反映):
 
-- `SOURCE_DATE_EPOCH` は **build_input_digest のカテゴリ 7** (環境変数) に含まれる
+- `SOURCE_DATE_EPOCH` は **build_input_digest のカテゴリ 8** (環境変数) に含まれる
 - 通常 build (`SOURCE_DATE_EPOCH` 未設定): manifest に `SOURCE_DATE_EPOCH: unset` が記録 → digest A
 - release build (`SOURCE_DATE_EPOCH=1735689600`): manifest に該当値が記録 → digest B (digest A とは異なる、生成物 header に日時が埋め込まれた事実を捉える)
 - これにより golden fixture の整合性が保証される: 通常 CI golden は digest A 系、release CI artifact は digest B 系、両者は別物として扱う

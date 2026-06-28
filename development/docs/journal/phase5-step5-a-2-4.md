@@ -92,7 +92,8 @@ Step 5.a-2-4 で発生した修正は **既存 spec drift の訂正ではなく�
 | `2dd22cb` | 段階 5 | examples/japanese-docs-pwsh/ 新設 (18 files、ζ fixture) |
 | `9c57de8` | 段階 6 | body.md §13.3.5 mojibake sentinel (γ-lite + κ) + 完結 journal §6.6 拡張 |
 | `db34758` | 7 | 5.a-2-4 完結 journal (本書、初版) |
-| K=2 r1 fix commit (本書更新後) | 段階 8 K=2 r1 fix | (a) lint script Python + PowerShell の C1/C2/C4 必須化 (script path 解決失敗時、PowerShell runtime のみ hard finding、他 runtime は skip) (b) C3 完全明示 argv 検証強化 (invoker basename 完全一致、runtime ↔ invoker 整合、-File 後 script path 検査) (c) C4 必須/任意分離 ([Console]::OutputEncoding 必須、$OutputEncoding advisory) (d) C5 advisory 化 (利用者 host との差を accept) (e) acceptance-matrix.md に lint 同梱規律を正本化 (digest カテゴリ 5 = lint、合計 8 カテゴリへ番号繰り下げ、生成物表に lint/ 行追加) |
+| K=2 r1 fix commit | 段階 8 K=2 r1 fix | (a) lint script Python + PowerShell の C1/C2/C4 必須化 (script path 解決失敗時、PowerShell runtime のみ hard finding、他 runtime は skip) (b) C3 完全明示 argv 検証強化 (invoker basename 完全一致、runtime ↔ invoker 整合、-File 後 script path 検査) (c) C4 必須/任意分離 ([Console]::OutputEncoding 必須、$OutputEncoding advisory) (d) C5 advisory 化 (利用者 host との差を accept) (e) acceptance-matrix.md に lint 同梱規律を正本化 (digest カテゴリ 5 = lint、合計 8 カテゴリへ番号繰り下げ、生成物表に lint/ 行追加) |
+| K=2 r2 fix commit | 段階 8 K=2 r2 fix | (a) PowerShell sibling C5 advisory parity 修正 (戻り値を hashtable で構造化、空配列 collapse 回避) (b) C3 -ExecutionPolicy Bypass 隣接検査追加 (Python + PS) (c) -File path 整合検査を layered 化 (absolute → full path 比較、relative → basename equality、Phase 5 では絶対 path 渡し時のみ strict 比較、relative は 5.b dogfooding に委ねる) (d) Python に basename_universal / has_path_separator / normalize_path_for_compare helper 追加 (ntpath + PureWindowsPath で cross-platform Windows path 解釈) (e) acceptance-matrix.md カテゴリ番号繰下げ漏れ修正 (line 92, 118 の「カテゴリ 7」を「カテゴリ 8」に) (f) lint/README.md + body.md §13.3.5 に C5 advisory 化を明文化 |
 
 ## 4. 機械検証実績
 

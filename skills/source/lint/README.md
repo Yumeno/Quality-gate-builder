@@ -27,18 +27,21 @@ python <skill_install>/lint/check-command-contract.py \
   <contract.json path> [--script <script path>] [--evidence <stage.log path>]
 ```
 
-exit 0 → adopt OK、exit 1 → fix required (proposal を直す)、exit 2 → usage error。
+exit 0 → adopt OK (fix-required findings なし、advisory note があっても 0)。
+exit 1 → fix required (proposal を直す)。exit 2 → usage error。
 
 ## 検査項目 (6 件、body.md §6.5 + §12.5.5 と対応)
 
-| ID | 検査内容 | 失敗例 |
-|---|---|---|
-| **C1** | script 拡張子と confirmed runtime の整合 | `runtime=powershell-5` なのに `.sh` を指定 |
-| **C2** | PowerShell 5 + 非 ASCII `.ps1` の BOM 有無 | 日本語コメント含む `.ps1` を BOM なし保存 (cp932 誤読で parse error) |
-| **C3** | `.ps1` を `shell=False` の argv で直接起動 | `contract.command = ["script.ps1"]` (PowerShell invoker を経由しない) |
-| **C4** | PowerShell `.ps1` の stdout encoding 初期化 | `[Console]::OutputEncoding = UTF8` 設定なし (cp932 出力で qgb 文字化け) |
-| **C5** | confirmed runtime executable が PATH にあるか | `runtime=node` だが Node がインストールされていない |
-| **C6** | qgb check stage log に `U+FFFD` (mojibake sentinel) | cp932 出力を qgb が utf-8 decode → 文字化け |
+| ID | 種別 | 検査内容 | 失敗例 |
+|---|---|---|---|
+| **C1** | fix-required | script 拡張子と confirmed runtime の整合 | `runtime=powershell-5` なのに `.sh` を指定 |
+| **C2** | fix-required | PowerShell 5 + 非 ASCII `.ps1` の BOM 有無 | 日本語コメント含む `.ps1` を BOM なし保存 (cp932 誤読で parse error) |
+| **C3** | fix-required | PowerShell argv の完全明示 (invoker basename / runtime 整合 / -ExecutionPolicy Bypass 隣接 / -File ↔ --script full path 整合) | `contract.command = ["script.ps1"]` (PowerShell invoker を経由しない) / `-ExecutionPolicy RemoteSigned ... Bypass` (隣接していない) |
+| **C4** | fix-required | PowerShell `.ps1` で `[Console]::OutputEncoding = UTF8` 設定 (必須) | `$OutputEncoding` 単独 (child process 向け、必須を満たさない) / 設定なし (cp932 出力で qgb 文字化け) |
+| **C5** | **advisory** | confirmed runtime executable がローカル PATH にあるか | `runtime=node` だが skill agent 環境に Node なし (利用者環境では存在する可能性あり、advisory note 出力のみ、exit code に影響しない) |
+| **C6** | fix-required | qgb check stage log に `U+FFFD` (mojibake sentinel) | cp932 出力を qgb が utf-8 decode → 文字化け |
+
+**C5 は advisory** (Codex K=2 r1 fix #4 確定): 検査は skill agent の local env で実行されるため、利用者の host とは異なる場合がある。advisory note として stderr に出力するが exit code 1 には**しない** (false negative を避ける)。
 
 ## 設計境界
 

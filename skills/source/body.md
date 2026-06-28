@@ -898,7 +898,9 @@ python <skill_install>/lint/check-command-contract.py <contract.json> \
   [--script <script path>] [--evidence <stage log>]
 ```
 
-exit 0 (全 check pass) なら adopt 推奨、exit 1 (1 件以上の finding) なら proposal を修正してから adopt。lint 結果は **advisory** として利用者に提示、ALLOW 判定の根拠ではない。
+exit 0 (fix-required findings なし、advisory note があっても 0) なら adopt 推奨。exit 1 (1 件以上の fix-required finding) なら proposal を修正してから adopt。lint 結果全体は **advisory** として利用者に提示、ALLOW 判定の根拠ではない。
+
+**C5 (runtime PATH 検査) は advisory note 扱い** (Codex K=2 r1 fix #4 確定): skill agent のローカル env と利用者 host の差を許容、PATH 不在を fix-required にしない。詳細は `skills/source/lint/README.md` の検査項目表を参照。
 
 ## 4. やってはいけない LLM レビュー (禁止リスト)
 
