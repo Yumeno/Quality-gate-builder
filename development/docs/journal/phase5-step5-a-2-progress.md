@@ -300,4 +300,25 @@ LLM 開発主体の特性 (削除と再作成の間に compact 走るリスク) 
   - body.md 新サイズ: 798 行, 27,990 chars, cl100k 17,094 tokens, o200k 13,834 tokens
   - skills/source/prompts/ 原本は段階 5 まで残す (二重化過渡、fail-safe)
   - pytest test_step9_docs.py 15 passed
-  - **次: Codex 横断レビュー 1 回目** (A1' で正しい方向か / Q2-pre 解釈 (b) と整合か確認)
+- **Codex 横断レビュー 1 回目完了** (`codex_ctx_p5_step5a-2-2c_review_r1_20260628-105714.txt`):
+  - 必須 code fix 5 件 + 推奨 code fix 2 件 + spec fix 3 件を受領
+  - A1' の方向性は妥当、ただし段階 4 / 5 着手前に修正が必要
+  - 6 段階を 8 段階に分割 (段階 3.5 + 4.5 を追加、段階 5 は不可分 commit)
+- **段階 3.5 完了** (commit `c9c2a09`, 2026-06-28):
+  - body.md §2 trigger 表を mode-neutral 化 (full/split 別の読み替え原則を明示)
+  - 「本ファイル §12 / §13」cross-reference を実在見出し名 (「段階設計プロンプト」「レビュー観点プロンプト」) ベースに修正
+  - §6 / §7 / §12 / §13 のメタ説明と include marker 内 sister reference も mode-neutral 化
+  - Codex r1 必須 code fix #1, #2 反映
+  - pytest 15 passed
+- **段階 4 完了** (commit `5532bfb`, 2026-06-28):
+  - metadata.schema.json source_files description を「過渡記述」から「永続的最終契約」に書き換え
+  - source_files items pattern を path 安全性強化 (`..` / `./` / 連続 `//` / 先頭末尾スラッシュ / バックスラッシュ拒否)
+  - 境界ケース 22 件全 PASS、現状 metadata.yaml は更新 schema で valid
+  - Codex r1 必須 code fix #4, #5 反映
+- **段階 4.5 完了** (本 commit):
+  - body.md include marker 内容と prompts/* 原本の欠落比較を実施
+  - design-stages: 見出し 30/30 identical, code blocks 5/5, table rows 21/21
+  - review-policy: 見出し 30/30 identical, code blocks 3/3, table rows 0/0
+  - mode-neutral 化分の +225 / +233 chars 差は意図通り
+  - Codex r1 code fix #6 反映、段階 5 削除前検証完了
+  - **次: Codex 横断レビュー 2 回目** (段階 5 不可分 commit 着手前の最終確認)
