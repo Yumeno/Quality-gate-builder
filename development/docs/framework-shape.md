@@ -263,7 +263,7 @@ Antigravity CLI 対応は GitHub issue #25 で TODO 化 (Phase 5 では着手し
 
 スキル本体（中間表現とコンバータ）は qgb リポジトリ側に置く。利用者プロジェクトに複製しない。
 
-利用者はリリース成果物（`dist/skills/{claude,codex,gemini}/` または GitHub Releases）から自分の使うエージェント向けの 1 セットだけを取得し、各エージェントの規約に従って配置する。配置先の詳細はリリースに同梱するインストール手順を参照。
+利用者はリリース成果物（`dist/skills/{full,split}/{claude,codex}/` または GitHub Releases）から自分の使うエージェント向け × 採用 build mode の 1 セットだけを取得し、各エージェントの規約に従って配置する。配置先の詳細はリリースに同梱するインストール手順を参照。
 
 ### Phase 計画
 

@@ -2,18 +2,25 @@
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
 
 build modes:
-- full モード: 本ファイルがそのまま SKILL.md / AGENTS.md 等の主成果物になる。
-  <!-- split:helper_start NAME --> ... <!-- split:helper_end --> の間は
-  そのまま展開される (helper の中身は別ファイルから読み込んで埋め込む)。
-- split モード: include marker 部分は本体から削除され、helper の中身は
-  別ファイルとして dist/skills/split/{agent}/ に並べて配置される。
-  本体 (split SKILL.md) には marker 行の代わりに「@see <helper_filename>」
-  程度の参照だけが残る。
+- full モード: 本ファイル全体がそのまま dist/skills/full/<agent>/SKILL.md の
+  主成果物になる。include marker 自体は converter が除去し、marker で
+  囲まれた本文はそのまま残る (helper の中身を別ファイルから読み込んで
+  埋め込む処理は不要 — body.md が単一正本)。
+- split モード: include marker で囲まれた本文は本体から取り除かれ、
+  helper file として dist/skills/split/<agent>/<helper-path> に書き出される。
+  本体 (split SKILL.md) には marker 1 組の位置に **正確に 1 行だけ**:
+      @see <helper-path>
+  という置換行が残る (前後の空行は marker 直前直後の本文構造に従う、
+  詳細 grammar は 5.a-2 完結 journal §6.3 を参照)。
 
 include marker syntax (5.b の build_skill.py で parse):
-- <!-- split:helper_start <relative_path_from_skills_source> -->
-  ...content...
-  <!-- split:helper_end -->
+- 行頭が <!-- split:helper_start <relative_path_from_skills_source> --> である行のみ実 marker
+- 同 marker name で対応する <!-- split:helper_end --> が行頭にあること
+- helper_end は行頭完全一致 (末尾空白なし)、入れ子禁止、重複禁止
+- relative_path_from_skills_source は POSIX 形式 (前方 `/`)、
+  `..` / `./` / 連続 `//` / 先頭末尾スラッシュ / バックスラッシュ拒否
+  (metadata.schema.json の source_files items pattern と同じ規律)
+- HTML コメント内の構文例示 (本コメント内も含む) は parse 除外
 -->
 
 # qgb スキル

@@ -49,13 +49,13 @@ build_skill.py が実行時に `target_agents` の各 agent について journal
 
 1. `metadata.yaml` を `metadata.schema.json` で validate (jsonschema、Phase 1 から runtime 依存)
 2. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` の front matter を読む
-3. 各 agent の `status` が `supported` であることを確認 (なければ error、`build_modes` 別の生成を skip)
+3. 各 agent の `status` が `supported` であることを確認 (1 件でも欠ければ build 全体を **fail-closed** で停止、部分成功を許さない)
 4. `source_files` に列挙されたファイル (= `body.md`) が本 dir 配下に存在することを確認
 5. `body.md` 内の include marker (例: `<!-- split:helper_start workflow.md -->`) を parse し、`build_modes: [full, split]` 両方を生成:
-   - **full モード**: marker 内容を本文ごと `SKILL.md` 1 ファイルに埋め込み
-   - **split モード**: marker 内容を helper file (`workflow.md` / `references.md` / `prompts/<name>.md`) として切り出し、`SKILL.md` には trigger 参照行だけ残す
+   - **full モード**: marker tag (start / end コメント行 2 行) を除去し、marker 内本文はそのまま `SKILL.md` 本文として埋め込み
+   - **split モード**: marker 内本文を helper file (`workflow.md` / `references.md` / `prompts/<name>.md`) として切り出し、本体 (`SKILL.md`) には marker 1 組の位置に **正確に 1 行 `@see <helper-path>`** という置換行を残す (`<helper-path>` は marker name そのまま)
 6. 各 agent 別の変換ロジック (frontmatter キー差分 / 配置先 / etc) を適用
-7. `dist/skills/{mode}/{agent}/` に成果物を書き出し
+7. `dist/skills/{mode}/{agent}/` に成果物を書き出し (deterministic build、`SOURCE_DATE_EPOCH` 等で再現可能)
 8. `tools/_golden/{agent}/{mode}/` と byte 一致を CI で検証
 
 ## 利用者目線 (Phase 5 完結後)

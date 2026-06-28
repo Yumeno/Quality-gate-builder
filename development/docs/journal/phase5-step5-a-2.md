@@ -88,6 +88,22 @@ prejournal v4 や上位仕様には A1' 確定前 (v3 以前) の構造記述が
 - `examples/*/knowledge/project-context.md` 内の「Gemini CLI 等」: 利用者プロジェクトの補佐 LLM 例として一般的記述、Phase 5 supported target の宣言ではない
 - `detailed-design.md` 内の補佐 LLM 例: 同上
 
+### 2.4 Step 5.a-2-3 + K=2 r1 横断レビュー反映 (2026-06-28、9 件)
+
+Step 5.a-2-3 (hooks テンプレ実装) commit `a7234e6` の後、5.a 全体完結 K=2 r1 横断レビューで必須 / 推奨 fix 9 件を追加受領。すべて K=2 r1 fix commit (本表更新後の commit、§3.2 commit chronology 末尾参照) で反映済:
+
+| # | 旧記述の場所 | 旧記述 (要約) | 訂正後 | 訂正理由 (K=2 r1 source) |
+|---|---|---|---|---|
+| 14 | `framework-shape.md` line 266 (commit `c416345` 時点) | `dist/skills/{claude,codex,gemini}/` の旧 3-agent 想定 | `dist/skills/{full,split}/{claude,codex}/` の 4 成果物 | K=2 r1 spec fix #4: 段階 5 不可分 commit で見落とした残ドリフト、§5 訂正 + 関連 9 箇所と一致しない記述 |
+| 15 | `skills/source/body.md` 冒頭コメント + `skills/source/README.md` + 本 journal §6.3 | split モード残置「marker 行の代わりに『@see <helper_filename>』程度の参照だけが残る」(body.md) vs 「trigger 参照行だけ残す」(README + journal、表現がブレ) | **正確に 1 行 `@see <helper-path>` を marker 1 組の位置に残す** (body.md コメントの contract が正本、README + journal もこの表現に統一) | K=2 r1 spec fix #3: 実装可能な変換規則として一意化。golden 作成前の必須確定 |
+| 16 | `skills/source/hooks/{claude-code,codex}/settings.example.json` (commit `a7234e6`) | hook config 階層の `matcher` フィールドに qgb 関連 keyword の正規表現 | matcher フィールドは silently ignored のため**意図的に書かない**、command を PowerShell script (`scripts/check-relevance.ps1`) 起動に変更、script 内部で stdin JSON `.prompt` を正規表現判定 | K=2 r1 code fix #1: Claude Code + Codex CLI 両方の UserPromptSubmit event で matcher が機能しない実装上の事実を反映。「README 説明と逆になっていた」誤りを修正 |
+| 17 | `skills/source/hooks/{claude-code,codex}/README.md` (commit `a7234e6`) | matcher 直接試行手順 + 未確定の `claude/codex config validate` 等の検証手順 | script 動作確認 3 ケース (match / no-match / empty stdin) + `/hooks` コマンド (source / trust / enable 状態確認) に書き換え | K=2 r1 code fix #2: hook README の検証手順が実体と一致していなかった誤りを修正 |
+| 18 | `skill-converter/acceptance-matrix.md` 生成物 header 「生成日時」 | 生成日時を埋め込み + golden byte 一致を要求 | **生成日時は埋め込まない** (deterministic build) + `SOURCE_DATE_EPOCH` 環境変数で utility build に固定値を埋め込む規律 + `source_commit_hash` の dirty tree / archive / 非 Git 環境での挙動明文化 + encoding / newline / sort 順序の固定 | K=2 r1 spec fix #1: 「golden byte 一致と生成日時の矛盾」を解消、reproducible-builds.org 規約に整合 |
+| 19 | 本 journal §6.3 「5.b 責務 9 項目」 | 9 項目で確定扱い (Step 5.a-2-2 段階 6 commit `acbd64f`) | **16 項目に拡張**: converter_min_version 比較 / generator header / INSTALL.md 生成 / hooks 同梱 / 構文検証 / deterministic ordering+encoding+newline / stale output 除去 or clean build を追加 | K=2 r1 spec fix #2: acceptance matrix を網羅できていなかった |
+| 20 | `skills/source/README.md` 機械検証フロー step 3 (commit `c416345`) | unsupported/missing は「error、build_modes 別生成を skip」(部分成功あり) | **build 全体 fail-closed で停止** (部分成功を許さない、A1' 契約と整合) + 本 journal §6.3 にも反映 | K=2 r1 spec fix #5: agent status 失敗動作の矛盾を解消 |
+| 21 | `skill-converter/agent-codex.md` line 168-172 (commit `c416345`) | hook 提供を「判断点」「暫定方針」と古い記述、`hooks.example.json` 内の `matcher` フィールド | Step 5.a-2-3 で実装済の状態を反映 (commit `a7234e6` + K=2 r1 fix #3 PowerShell script) + Codex `UserPromptSubmit` matcher silently ignored + stdin filtering + `/hooks` trust review の運用知見を追加 | K=2 r1 推奨 #1: agent-codex.md を最新化 |
+| 22 | 本 journal §6.3 marker grammar 仕様 (commit `acbd64f`) | marker syntax の基本のみ明文化 | **完全固定**: helper_end 行頭完全一致 (末尾空白なし) / CRLF/LF 許容 / Unicode NFC normalization 後重複検出 / marker 内本文の先頭末尾空行を converter が trim せず保存 / symlink/hardlink/外部 path 経由の出力先逸脱防止 (`os.path.realpath` 確認) を追加 | K=2 r1 推奨 #2: marker grammar 完全固定 (golden fixture 作成前の必須確定) |
+
 ## 3. Step 5.a-2 の作業成果 (commit chronology)
 
 ### 3.1 body.md final 状態 (commit `c416345`)
@@ -114,7 +130,9 @@ prejournal v4 や上位仕様には A1' 確定前 (v3 以前) の構造記述が
 | `5532bfb` | 5.a-2-2 段階 4 | metadata.schema.json description 最終契約化 + source_files path 安全性強化 (Codex r1 必須 #4, #5) |
 | `17498d6` | 5.a-2-2 段階 4.5 | embedded vs 原本 欠落比較 (Codex r1 #6) + progress journal 追記 |
 | `c416345` | 5.a-2-2 段階 5 | A1' 完成不可分 commit (helper 4 ファイル物理削除 + source_files: [body.md] 縮小 + README A1' 完成形 + framework-shape §5 全面改訂 + requirements §F-019 / C-008 / Phase 5 概要訂正 + progress journal SUPERSEDED + converter design 3 ファイル補足訂正、Codex r2 必須 #C1/#S1/#S2/#S3/#S4 + 推奨 S5) |
-| 本 commit | 5.a-2-2 段階 6 | 5.a-2 完結 journal (本書、Codex r1 spec fix #1 反映) |
+| `acbd64f` | 5.a-2-2 段階 6 | 5.a-2 完結 journal 初版 (Codex r1 spec fix #1 反映) |
+| `a7234e6` | 5.a-2-3 | hooks テンプレ実装 (Claude Code + Codex CLI) — UserPromptSubmit hook 初版 |
+| K=2 r1 fix commit (本書更新後) | K=2 r1 fix #1〜#9 | framework-shape line 266 Gemini 残ドリフト訂正 (#1) + split 残置規則 @see 統一 (#2) + hook PowerShell script + JSON 起動変更 (#3) + hook README script 動作確認 + /hooks 確認 (#4) + acceptance-matrix deterministic build 規則明示 (#5) + 完結 journal §6.3 を 9→16 項目拡張 (#6) + agent status fail-closed 統一 (#7) + agent-codex.md hook 実装済 + matcher 非対応 + /hooks 反映 (#8) + marker grammar 完全固定 (#9) |
 
 ### 3.3 Codex 横断レビュー履歴
 
@@ -123,6 +141,8 @@ prejournal v4 や上位仕様には A1' 確定前 (v3 以前) の構造記述が
 | r0 (段階 2 前) | `codex_ctx_5a22_helper_decision.txt` → `codex_ctx_p5_step5a-2-2_review_20260628-012308.txt` (rename) | A1+ 推奨、spec fix #5 (full/prompts 矛盾) 発見、9 件指摘 | user 確定 (Q2-pre) で full モードでも prompts embed = A1' に拡張 |
 | r1 (段階 3 後) | `codex_ctx_p5_step5a-2-2c_review_r1_20260628-105714.txt` | 必須 code fix 5 件 + 推奨 2 件 + spec fix 3 件 | 段階 3.5 / 4 / 4.5 / 段階 5 で全件反映 |
 | r2 (段階 5 前) | `codex_ctx_p5_step5a-2-2_review_r2_20260628-131141.txt` | 追加必須 4 件 (C1 / S1 / S2 / S3 / S4) + 推奨 S5 | 段階 5 不可分 commit で全件反映、5.b 必須契約 (marker parser コメント内例示除外) は 5.b 着手時に反映予定 |
+| K=2 r1 (5.a 全体完結 = 5.a-0 + 5.a-1 + 5.a-2 + 5.a-2-3) | `codex_ctx_p5_step5a_completion_kappa2_r1_20260628-172902.txt` | 必須 code fix 2 + 必須 spec fix 5 + 推奨 2 | K=2 r1 fix commit 群で全件反映 (本 §3.2 commit chronology 末尾参照)。`#3` PowerShell script + matcher 非対応対策、`#6` 5.b 責務 16 項目化、`#1` Gemini 残ドリフト、`#5` deterministic build、`#7` fail-closed、`#9` marker grammar 等を集約 |
+| 設計再検討 (K=2 r1 fix 進行中、user 提起) | `codex_ctx_p5_step5a-2-x_jp-docs-design_review_20260628-180821.txt` | 「日本語文書執筆プロジェクトの .ps1 契約」を append 章でなく構造的に解決すべき、と user 指摘 → Codex 推奨 `(η改) = θ command authoring protocol + ι capability-based dispatch + β-lite + ζ + γ-lite + κ mojibake sentinel` | 既存 K=2 r1 fix 完了後、別 Step `5.a-2-4` で θ/ι 設計判断を独立実装する方針確定 (Codex「混ぜるな」指摘)。本 Step の影響は body.md §6/§12 構造変更 (中〜大)、examples/japanese-docs-pwsh 新設 (中)、qgb core/schema 改修なし |
 
 ## 4. 機械検証実績 (段階 4.5 / 段階 5 / 全 Step)
 
@@ -158,26 +178,41 @@ prejournal v4 や上位仕様には A1' 確定前 (v3 以前) の構造記述が
 
 を渡して、Codex に「Phase 5 5.a 全体の構造として整合しているか」「5.b 着手に必要な情報が揃っているか」「prejournal v4 と実装のドリフトはないか (本書 §2 対応表で訂正済の項目以外に残ドリフトがないか)」を点検してもらう。
 
-### 6.3 Step 5.b (build_skill.py 実装) で必要になる前提
+### 6.3 Step 5.b (build_skill.py 実装) で必要になる前提 (Codex K=2 r1 で 16 項目に拡張)
 
-A1' 確定により build_skill.py の責務が明確化:
+A1' 確定 + Codex K=2 r1 必須 / 推奨 fix 反映により build_skill.py の責務が明確化。**16 項目すべて 5.b の acceptance に含める**:
 
 1. `metadata.yaml` を `metadata.schema.json` で validate
-2. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` の front matter `status: supported` を確認
-3. `source_files` (= `[body.md]`) が skills/source/ 配下に存在することを確認
-4. `body.md` 内の include marker (`<!-- split:helper_start NAME --> ... <!-- split:helper_end -->`) を parse:
-   - **行頭が `<!-- split:helper_start <NAME> --> `である marker のみ実 marker と判定** (HTML コメント内例示は除外、Codex r2 5.b 必須契約)
-   - start / end の対応 (各 start に対応する end が存在、入れ子なし、未閉鎖なし)
-   - marker name の重複なし
+2. **`converter_min_version` と実装側 converter version の比較**、旧版 (実装 version が `converter_min_version` 未満) は build を refuse (Codex K=2 r1 spec fix #2)
+3. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` の front matter `status: supported` を確認。**1 件でも欠ければ build 全体を fail-closed で停止** (部分成功を許さない、Codex K=2 r1 spec fix #5)
+4. `source_files` (= `[body.md]`) が skills/source/ 配下に存在することを確認
+5. `body.md` 内の include marker (`<!-- split:helper_start NAME --> ... <!-- split:helper_end -->`) を parse:
+   - **行頭が `<!-- split:helper_start <NAME> -->` である marker のみ実 marker と判定** (行末は LF/CRLF いずれも許容、行頭は完全一致、末尾の `-->` 直後は EOL のみ、HTML コメント内例示は除外、Codex K=2 r1 推奨 #2 + r2 5.b 必須契約)
+   - `<!-- split:helper_end -->` も **行頭完全一致** (末尾空白なし、Codex K=2 r1 推奨 #2)
+   - start / end の対応 (各 start に対応する end が存在、入れ子禁止、未閉鎖禁止)
+   - marker name の重複禁止
+   - marker name の **Unicode NFC normalization 後**で重複検出 (case collision 含む、Codex K=2 r1 推奨 #2)
    - marker name の path 安全性 (`..` / `./` / 連続 `//` / 先頭末尾スラッシュ / バックスラッシュ拒否、schema regex と同等)
    - marker name と `source_files` の集合分離 (collision detection で fail-closed)
-5. **full モード生成**: marker をそのまま無視 (本文ごと埋め込み)、`SKILL.md` 1 ファイル + コメント自体は除去
-6. **split モード生成**: marker 内容を helper file (`workflow.md` / `references.md` / `prompts/<name>.md`) に切り出し、body.md (= SKILL.md) には trigger 参照行だけ残す
-7. agent 別変換:
+   - marker 内容の先頭末尾空行は **converter が trim せずそのまま保存** (helper 単独利用時の Markdown 構造を保つ、Codex K=2 r1 推奨 #2)
+   - **symlink / hardlink / 外部 path を介した出力先逸脱防止**: helper file path は dist root 配下に正規化、`os.path.realpath` で確認 (Codex K=2 r1 推奨 #2)
+6. **full モード生成**: marker tag (start / end コメント行 2 行) を converter が除去、marker 内本文はそのまま `SKILL.md` 本文として埋め込み
+7. **split モード生成**: marker 内本文を helper file (`workflow.md` / `references.md` / `prompts/<name>.md`) に切り出し、本体 (`SKILL.md`) には marker 1 組の位置に **正確に 1 行 `@see <helper-path>`** という置換行を残す (Codex K=2 r1 spec fix #3、`<helper-path>` は marker name そのまま)
+8. agent 別変換:
    - Claude Code: SKILL.md frontmatter (`allowed-tools` 等を追加)、`~/.claude/skills/qgb/` 配置想定
-   - Codex CLI: SKILL.md frontmatter (Agent Skills 標準準拠)、`~/.agents/skills/qgb/` 配置想定
-8. `dist/skills/{mode}/{agent}/` に成果物を書き出し
-9. `tools/_golden/{agent}/{mode}/` と byte 一致を CI で検証
+   - Codex CLI: SKILL.md frontmatter (Agent Skills 標準準拠、`agent-codex.md` の確定キーのみ)、`~/.agents/skills/qgb/` 配置想定
+9. **生成物 header の埋め込み**: 全成果物の先頭に generator comment (converter_version + source_commit_hash + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時は埋め込まない** (deterministic build 規律、Codex K=2 r1 spec fix #1)
+10. **`INSTALL.md` 生成**: 各 `dist/skills/{mode}/{agent}/INSTALL.md` を converter が生成 (配置 path / 任意 hook 有効化手順を含む、Codex K=2 r1 spec fix #2)
+11. **hooks の成果物同梱**: `skills/source/hooks/<agent>/*` を `dist/skills/{full,split}/<agent>/hooks/` 配下に **そのまま copy** (Codex K=2 r1 spec fix #2)
+12. **構文検証**: 生成された SKILL.md の YAML frontmatter parse 成功 + Markdown parse 成功 (helper file も同様、Codex K=2 r1 spec fix #2)
+13. **deterministic ordering / encoding / newline**:
+    - 出力 encoding: **UTF-8 BOM なし**、改行 **LF 固定**
+    - frontmatter YAML キー順序: schema 定義順 (alphabetical でなく宣言順)
+    - helper file 列挙順序: body.md 内 marker の出現順序に従う (re-sort しない)
+    - `SOURCE_DATE_EPOCH` 未設定時は生成日時を埋め込まない (Codex K=2 r1 spec fix #1)
+14. **stale output 除去 or clean build**: `dist/skills/<mode>/<agent>/` を build 前に空にする (clean build を default、stale file が残らない、Codex K=2 r1 spec fix #2)
+15. `dist/skills/{mode}/{agent}/` に成果物を書き出し
+16. `tools/_golden/{agent}/{mode}/` と byte 一致を CI で検証 + `tests/fixtures/build-skill/` の異常系で fail-closed 動作確認
 
 ### 6.4 5.b で実装する fixture 構造
 

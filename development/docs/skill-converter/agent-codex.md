@@ -141,38 +141,43 @@ Claude Code と同型:
 
 複数 source から merge (replace でなく)。各 layer ごとに `hooks.json` か inline `[hooks]` の片方推奨 (両方は warn)。
 
-### qgb skill が提供する hook テンプレ案
+### qgb skill が提供する hook テンプレ (Phase 5 Step 5.a-2-3 で実装済)
 
-`skills/source/hooks/codex/hooks.example.json` に:
+Step 5.a-2-3 (commit `a7234e6`) + K=2 r1 fix #3 で実装した実装形:
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "qgb|REQ-[A-Z]+-\\d+|契約段階|gate.json|ALLOW|DENY|NOT_READY",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo qgb skill relevant"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+- `skills/source/hooks/codex/hooks.example.json` — `UserPromptSubmit` event を登録、command は PowerShell script を起動
+- `skills/source/hooks/codex/scripts/check-relevance.ps1` — Windows native PowerShell (5/7 両対応)、pure ASCII + Unicode escape で JP keyword を構築 (PowerShell 5 の BOM なし `.ps1` 日本語 cp932 誤読を回避)
+- `skills/source/hooks/codex/README.md` — opt-in / dry-run / validate / 非破壊 の 4 原則 + 利用者手順
 
-Claude Code と同型の opt-in / dry-run / validate / 非破壊 規律を適用。
+### Codex CLI hook 機構の確定知見 (K=2 r1 で明示化)
 
-ただし **Phase 5 v4 では Codex 向け hook 提供は判断点**:
+#### `UserPromptSubmit` の `matcher` フィールドは silently 無視される
 
-- Codex CLI hook 機構が安定している (公式 docs 確認済) ので技術的には可能
-- 案 ii (Codex は smoke + 利用者目線 1 サイクルのみ) なので、hook の利用者目線検証まで Phase 5 でカバーするか議論余地
-- **暫定方針**: Phase 5 では Codex 向け hook テンプレも提供する (Claude 用と並行作成、設計差は小さい)、ただし dogfood は smoke のみ
+K=2 r1 横断レビュー (2026-06-28) で確定:
+
+- `hooks.UserPromptSubmit[].matcher` を書いても **prompt 本文での filtering にはならない** (Claude Code も同様)
+- 公式 docs: https://developers.openai.com/codex (UserPromptSubmit hook の matcher は ignored)
+- 対策: **script 内側で stdin JSON の `.prompt` を正規表現判定** (`scripts/check-relevance.ps1` で実装、非 match → exit 0 + stdout 空、match → plain text nudge)
+- `hooks.example.json` の hook 階層に `matcher` フィールドは **意図的に書かない** (silently ignored を見せかけ非破壊にしない)
+
+#### hook 設定の validate 経路
+
+Codex CLI の `/hooks` コマンドで以下が確認可能 (K=2 r1 で確定):
+
+- 登録された hook の一覧 (event 名 / command path)
+- source (どの config layer に書かれているか、`~/.codex/hooks.json` / inline `[hooks]` / repo-local 等)
+- trust (利用者が hook 実行を許可済みか、Codex は初回起動時に prompt するため利用者意思確認の証跡)
+- enabled / disabled state
+
+利用者は merge 後に `/hooks` で source path / trust 状態を確認する (README.md に明文化済)。
+
+### Claude Code 同型の規律
+
+opt-in / dry-run / validate / 非破壊 規律を適用。詳細は `skills/source/hooks/codex/README.md` 参照。
 
 ## 知見の変化点記録
 
 (将来の仕様変更時に追記)
 
 - 2026-06-27: 初回 verify (Phase 5 Step 5.a-0)。SKILL.md frontmatter 完全網羅と dynamic context injection 有無は未確認、5.b で実機検証する想定
+- 2026-06-28: hook 実装完了 (Step 5.a-2-3 commit `a7234e6`、K=2 r1 fix #3 で PowerShell script + matcher 非対応対策を反映)。`UserPromptSubmit` matcher silently ignored / stdin filtering / `/hooks` trust review の運用知見を追加
