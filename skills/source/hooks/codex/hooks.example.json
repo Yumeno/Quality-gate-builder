@@ -1,0 +1,18 @@
+{
+  "$comment_top": "qgb skill optional hook for Codex CLI. See README.md for opt-in / dry-run / validate / non-destructive merge instructions. DO NOT replace ~/.codex/hooks.json with this file; merge the hooks.UserPromptSubmit entry into your existing hooks file (or [hooks] table in ~/.codex/config.toml, but not both).",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "$comment_matcher": "Same conservative pattern as the Claude Code template. Tighten for noisier projects. Codex matcher syntax follows the lifecycle event API documented at developers.openai.com/codex.",
+        "matcher": "qgb|REQ-[A-Z]+-\\d+|gate\\.json|\\bALLOW\\b|\\bDENY\\b|NOT_READY|契約段階|品質ゲート",
+        "hooks": [
+          {
+            "$comment_hook": "Pure stdout nudge. Codex injects the command stdout as additional context for the matched prompt. No filesystem or network side effects; safe for dry-run inspection.",
+            "type": "command",
+            "command": "echo qgb skill may be relevant for this prompt. Consider loading the qgb skill if it is not yet active."
+          }
+        ]
+      }
+    ]
+  }
+}

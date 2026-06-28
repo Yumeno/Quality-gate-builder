@@ -1,0 +1,18 @@
+{
+  "$comment_top": "qgb skill optional hook for Claude Code. See README.md for opt-in / dry-run / validate / non-destructive merge instructions. DO NOT replace ~/.claude/settings.json with this file; merge the hooks.UserPromptSubmit entry into your existing settings.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "$comment_matcher": "Match user prompts that almost certainly call for the qgb skill. Conservative pattern: qgb literal, REQ-XXX-NNN IDs, key gate keywords, and JP trigger phrases. Tighten this for noisier projects.",
+        "matcher": "qgb|REQ-[A-Z]+-\\d+|gate\\.json|\\bALLOW\\b|\\bDENY\\b|NOT_READY|契約段階|品質ゲート",
+        "hooks": [
+          {
+            "$comment_hook": "Pure stdout JSON additionalContext nudge. No filesystem or network side effects; safe to enable for dry-run inspection. The skill itself decides whether to take action; the hook only surfaces the relevance signal.",
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"qgb skill may be relevant for this prompt. Consider loading the qgb skill (~/.claude/skills/qgb/ or .claude/skills/qgb/) if it is not yet active. The skill validates whether the request actually matches qgb scope before acting.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}
