@@ -176,7 +176,8 @@ def derive_script_from_command(contract: dict) -> Optional[Path]:
     """Derive script path from contract.command for PowerShell runtimes.
 
     PowerShell invocation pattern: ["powershell.exe", ..., "-File", "<path>", ...]
-    Returns the path argument that follows -File, or None if not derivable.
+    Returns the path argument that follows -File (case-insensitive), or None
+    if not derivable.
     """
     command = contract.get("command")
     if not isinstance(command, list):
@@ -185,7 +186,7 @@ def derive_script_from_command(contract: dict) -> Optional[Path]:
     if runtime not in POWERSHELL_INVOKER_BASENAMES:
         return None
     for i, arg in enumerate(command):
-        if arg == "-File" and i + 1 < len(command):
+        if str(arg).lower() == "-file" and i + 1 < len(command):
             return Path(command[i + 1])
     return None
 
@@ -314,11 +315,16 @@ def check_powershell_argv(
       cross-platform path-style aware: handles both 'powershell.exe' and
       'C:\\path\\powershell.exe')
     - required flags present (PS 5 also needs -ExecutionPolicy Bypass)
-    - -ExecutionPolicy is immediately followed by 'Bypass' (adjacency check)
-    - -File present, followed by a script path (not another flag)
-    - -File argument resolves to same full path as --script argument
-      (normalized to a single comparable form, handling Windows and POSIX
-      path styles independently of host OS)
+      with case-insensitive matching to keep parity with PowerShell's own
+      option parser; option values like Bypass also case-insensitive.
+    - host options (NoLogo / NoProfile / NonInteractive / ExecutionPolicy)
+      must appear BEFORE -File; -File is followed by the script and
+      script-side arguments.
+    - host options have no duplicates (single occurrence of each).
+    - -ExecutionPolicy is immediately followed by 'Bypass' (adjacency).
+    - -File present exactly once, followed by a script path (not another flag).
+    - -File argument resolves to same full path as --script argument when
+      either side is absolute; otherwise basename equality.
     """
     findings: list[str] = []
     runtime = contract.get("runtime")
@@ -333,10 +339,15 @@ def check_powershell_argv(
         )
         return findings
 
+    # Normalize argv to strings; build a case-insensitive lower form for
+    # option matching (PowerShell's parser is case-insensitive on option
+    # names and on Bypass). Path arguments retain original casing.
+    command_str = [str(arg) for arg in command]
+    command_lower = [arg.lower() for arg in command_str]
+
     # First arg: invoker basename, cross-platform path style aware.
     allowed_invokers = POWERSHELL_INVOKER_BASENAMES[runtime]
-    first_arg = str(command[0])
-    first_basename = basename_universal(first_arg).lower()
+    first_basename = basename_universal(command_str[0]).lower()
     if first_basename not in allowed_invokers:
         findings.append(
             f"C3: contract.command[0] basename = '{first_basename}' is not "
@@ -347,49 +358,105 @@ def check_powershell_argv(
         )
         # Continue: remaining checks may still surface issues.
 
-    # Required flags.
-    required_flags = ["-NoLogo", "-NoProfile", "-NonInteractive"]
+    # Required flags (case-insensitive presence check).
+    required_flags = [
+        "-nologo",
+        "-noprofile",
+        "-noninteractive",
+    ]
     if runtime == "powershell-5":
-        required_flags.extend(["-ExecutionPolicy", "Bypass"])
-    missing = [flag for flag in required_flags if flag not in command]
+        required_flags.extend(["-executionpolicy", "bypass"])
+    missing = [flag for flag in required_flags if flag not in command_lower]
     if missing:
         findings.append(
-            f"C3: PowerShell argv is missing required flags {missing}. "
-            "These flags ensure deterministic execution (no profile load, "
-            "no interactive prompt, no policy ambiguity). "
-            "See body.md §6.5."
+            f"C3: PowerShell argv is missing required flags {missing} "
+            "(case-insensitive). These flags ensure deterministic "
+            "execution (no profile load, no interactive prompt, no "
+            "policy ambiguity). See body.md §6.5."
         )
 
-    # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass (adjacency).
-    if runtime == "powershell-5" and "-ExecutionPolicy" in command:
-        ep_idx = command.index("-ExecutionPolicy")
-        next_arg = command[ep_idx + 1] if ep_idx + 1 < len(command) else None
-        if next_arg != "Bypass":
-            findings.append(
-                f"C3: '-ExecutionPolicy' must be immediately followed by "
-                f"'Bypass', but the next argv element is "
-                f"{next_arg!r}. The current argv would set a different "
-                "policy, defeating the deterministic-execution intent. "
-                "See body.md §6.5."
-            )
-
-    # -File <path> presence and consistency.
-    try:
-        file_idx = command.index("-File")
-    except ValueError:
+    # Locate -File (case-insensitive, first occurrence).
+    file_idx = -1
+    file_count = 0
+    for i, lower in enumerate(command_lower):
+        if lower == "-file":
+            if file_idx < 0:
+                file_idx = i
+            file_count += 1
+    if file_idx < 0:
         findings.append(
             "C3: PowerShell argv is missing '-File <script.ps1>'. "
             ".ps1 must be invoked via -File explicitly (not via positional "
             "argument or shell association). See body.md §6.5."
         )
         return findings
-    if file_idx + 1 >= len(command):
+    if file_count > 1:
+        findings.append(
+            f"C3: '-File' appears {file_count} times in contract.command; "
+            "exactly one occurrence is required. PowerShell would use the "
+            "first, but the duplicate is misleading. See body.md §6.5."
+        )
+
+    # Structure: all host options must appear BEFORE -File. Anything after
+    # -File is the script path or script-side arguments, not host options.
+    host_option_lowercase = {
+        "-nologo",
+        "-noprofile",
+        "-noninteractive",
+        "-executionpolicy",
+        "-command",
+        "-encodedcommand",
+        "-windowstyle",
+        "-version",
+        "-mta",
+        "-sta",
+        "-psconsolefile",
+        "-inputformat",
+        "-outputformat",
+    }
+    for i in range(file_idx + 2, len(command_lower)):  # skip -File and its path
+        if command_lower[i] in host_option_lowercase:
+            findings.append(
+                f"C3: host option '{command_str[i]}' appears AFTER '-File' "
+                "(position " + str(i) + "). Host options must precede -File; "
+                "anything after -File is interpreted as script arguments. "
+                "See body.md §6.5."
+            )
+
+    # Duplicate -ExecutionPolicy check.
+    ep_indices = [
+        i for i, lower in enumerate(command_lower) if lower == "-executionpolicy"
+    ]
+    if len(ep_indices) > 1:
+        findings.append(
+            f"C3: '-ExecutionPolicy' appears {len(ep_indices)} times in "
+            "contract.command; exactly one occurrence is required (the "
+            "duplicate would silently apply a non-deterministic value). "
+            "See body.md §6.5."
+        )
+
+    # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass.
+    if runtime == "powershell-5" and ep_indices:
+        ep_idx = ep_indices[0]
+        next_arg = command_lower[ep_idx + 1] if ep_idx + 1 < len(command_lower) else None
+        if next_arg != "bypass":
+            actual = command_str[ep_idx + 1] if ep_idx + 1 < len(command_str) else None
+            findings.append(
+                f"C3: '-ExecutionPolicy' must be immediately followed by "
+                f"'Bypass' (case-insensitive), but the next argv element is "
+                f"{actual!r}. The current argv would set a different "
+                "policy, defeating the deterministic-execution intent. "
+                "See body.md §6.5."
+            )
+
+    # -File path immediately follows -File.
+    if file_idx + 1 >= len(command_str):
         findings.append(
             "C3: '-File' is the last argv element, but a script path is "
             "required immediately after. See body.md §6.5."
         )
         return findings
-    file_arg = str(command[file_idx + 1])
+    file_arg = command_str[file_idx + 1]
     if file_arg.startswith("-"):
         findings.append(
             f"C3: argv item after '-File' is '{file_arg}', which looks "

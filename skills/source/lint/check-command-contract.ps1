@@ -123,7 +123,8 @@ function Get-ScriptPathFromCommand {
     $runtime = $Contract.runtime
     if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $null }
     for ($i = 0; $i -lt $Contract.command.Length - 1; $i++) {
-        if ($Contract.command[$i] -eq '-File') {
+        # case-insensitive -File matching to parity with PowerShell parser.
+        if (([string]$Contract.command[$i]).ToLower() -eq '-file') {
             return [string]$Contract.command[$i + 1]
         }
     }
@@ -203,44 +204,89 @@ function Check-PowerShellArgv {
         return $findings
     }
 
-    # First arg: invoker basename exact match (case-insensitive).
+    # Normalize argv to strings + lower-cased copy for case-insensitive
+    # option matching (PowerShell parser is case-insensitive on option
+    # names and on Bypass).
+    $commandStr = @()
+    $commandLower = @()
+    foreach ($a in $command) {
+        $s = [string]$a
+        $commandStr += $s
+        $commandLower += $s.ToLower()
+    }
+
+    # First arg: invoker basename, case-insensitive.
     $allowedInvokers = $PowerShellInvokerBasenames[$runtime]
-    $firstBasename = ([System.IO.Path]::GetFileName([string]$command[0])).ToLower()
+    $firstBasename = ([System.IO.Path]::GetFileName($commandStr[0])).ToLower()
     if (-not ($allowedInvokers -contains $firstBasename)) {
         $findings += "C3: contract.command[0] basename = '$firstBasename' is not a recognized invoker for runtime '$runtime' (expected one of $($allowedInvokers -join ', ')). PowerShell runtimes require an explicit invoker as the first argv element. See body.md sec 6.5 PowerShell 5 rules."
     }
 
-    # Required flags.
-    $required = @('-NoLogo', '-NoProfile', '-NonInteractive')
+    # Required flags (case-insensitive).
+    $required = @('-nologo', '-noprofile', '-noninteractive')
     if ($runtime -eq 'powershell-5') {
-        $required += '-ExecutionPolicy'
-        $required += 'Bypass'
+        $required += '-executionpolicy'
+        $required += 'bypass'
     }
-    $missing = $required | Where-Object { $command -notcontains $_ }
+    $missing = $required | Where-Object { $commandLower -notcontains $_ }
     if ($missing.Count -gt 0) {
-        $findings += "C3: PowerShell argv is missing required flags ($($missing -join ', ')). These flags ensure deterministic execution (no profile load, no interactive prompt, no policy ambiguity). See body.md sec 6.5."
+        $findings += "C3: PowerShell argv is missing required flags ($($missing -join ', ')) (case-insensitive). These flags ensure deterministic execution (no profile load, no interactive prompt, no policy ambiguity). See body.md sec 6.5."
     }
 
-    # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass (adjacency).
-    if ($runtime -eq 'powershell-5' -and ($command -contains '-ExecutionPolicy')) {
-        $epIdx = [Array]::IndexOf($command, '-ExecutionPolicy')
-        $nextArg = if ($epIdx + 1 -lt $command.Count) { [string]$command[$epIdx + 1] } else { $null }
-        if ($nextArg -ne 'Bypass') {
-            $findings += "C3: '-ExecutionPolicy' must be immediately followed by 'Bypass', but the next argv element is '$nextArg'. The current argv would set a different policy, defeating the deterministic-execution intent. See body.md sec 6.5."
+    # Locate -File (case-insensitive, first occurrence).
+    $fileIdx = -1
+    $fileCount = 0
+    for ($i = 0; $i -lt $commandLower.Count; $i++) {
+        if ($commandLower[$i] -eq '-file') {
+            if ($fileIdx -lt 0) { $fileIdx = $i }
+            $fileCount++
         }
     }
-
-    # -File presence and consistency.
-    $fileIdx = [Array]::IndexOf($command, '-File')
     if ($fileIdx -lt 0) {
         $findings += "C3: PowerShell argv is missing '-File <script.ps1>'. .ps1 must be invoked via -File explicitly (not via positional argument or shell association). See body.md sec 6.5."
         return $findings
     }
-    if ($fileIdx + 1 -ge $command.Count) {
+    if ($fileCount -gt 1) {
+        $findings += "C3: '-File' appears $fileCount times in contract.command; exactly one occurrence is required. PowerShell would use the first, but the duplicate is misleading. See body.md sec 6.5."
+    }
+
+    # Structure: all host options must appear BEFORE -File.
+    $hostOptionLower = @(
+        '-nologo', '-noprofile', '-noninteractive', '-executionpolicy',
+        '-command', '-encodedcommand', '-windowstyle', '-version',
+        '-mta', '-sta', '-psconsolefile', '-inputformat', '-outputformat'
+    )
+    for ($i = $fileIdx + 2; $i -lt $commandLower.Count; $i++) {
+        if ($hostOptionLower -contains $commandLower[$i]) {
+            $findings += "C3: host option '$($commandStr[$i])' appears AFTER '-File' (position $i). Host options must precede -File; anything after -File is interpreted as script arguments. See body.md sec 6.5."
+        }
+    }
+
+    # Duplicate -ExecutionPolicy check.
+    $epIndices = @()
+    for ($i = 0; $i -lt $commandLower.Count; $i++) {
+        if ($commandLower[$i] -eq '-executionpolicy') { $epIndices += $i }
+    }
+    if ($epIndices.Count -gt 1) {
+        $findings += "C3: '-ExecutionPolicy' appears $($epIndices.Count) times in contract.command; exactly one occurrence is required (the duplicate would silently apply a non-deterministic value). See body.md sec 6.5."
+    }
+
+    # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass.
+    if ($runtime -eq 'powershell-5' -and $epIndices.Count -gt 0) {
+        $epIdx = $epIndices[0]
+        $nextArgLower = if ($epIdx + 1 -lt $commandLower.Count) { $commandLower[$epIdx + 1] } else { $null }
+        if ($nextArgLower -ne 'bypass') {
+            $actual = if ($epIdx + 1 -lt $commandStr.Count) { $commandStr[$epIdx + 1] } else { $null }
+            $findings += "C3: '-ExecutionPolicy' must be immediately followed by 'Bypass' (case-insensitive), but the next argv element is '$actual'. The current argv would set a different policy, defeating the deterministic-execution intent. See body.md sec 6.5."
+        }
+    }
+
+    # -File path immediately follows -File.
+    if ($fileIdx + 1 -ge $commandStr.Count) {
         $findings += "C3: '-File' is the last argv element, but a script path is required immediately after. See body.md sec 6.5."
         return $findings
     }
-    $fileArg = [string]$command[$fileIdx + 1]
+    $fileArg = $commandStr[$fileIdx + 1]
     if ($fileArg.StartsWith('-')) {
         $findings += "C3: argv item after '-File' is '$fileArg', which looks like another flag. Expected a script path. See body.md sec 6.5."
         return $findings
