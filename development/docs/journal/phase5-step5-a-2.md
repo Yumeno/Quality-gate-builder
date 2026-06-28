@@ -115,14 +115,23 @@ K=2 r2 横断レビュー (Codex `codex_ctx_p5_step5a_completion_kappa2_r2_20260
 | 25 | 本 journal §6.3 step 5 marker grammar (commit `dd58cd6`) | symlink / hardlink 防御を `os.path.realpath` で実現 | symlink 防御は realpath で OK、**hardlink 防御は別経路**: (a) clean build を default 採用 (`dist/.../` を build 冒頭で rmtree + 新規作成)、(b) target が存在しないことを `os.lstat` で確認、(c) `os.open(O_CREAT \| O_EXCL)` の exclusive create で書き込み、(d) POSIX で `O_NOFOLLOW` 併用、(e) 作成後 `st_nlink == 1` 確認 (検査のみ、真の防御線は (c)) | K=2 r2 spec fix #3 + K=2 r3 spec fix #1: 初版の「親 dir の `st_nlink == 0`」は誤り (既存 dir の link count は 0 にならない、全 build 失敗) → exclusive create を主防御に修正、検査のみは TOCTOU 防御にならない事実を明記 |
 | 26 | `skill-converter/README.md` line 43 + line 66 (commit `c416345`) | line 43: `dist/skills/{claude,codex}/full/` 旧順序 / line 66: 「Codex CLI 用 hook は 5.a-0 後の判断、Phase 5 後送りも可」 | line 43: `dist/skills/full/{claude,codex}/` 正順序に訂正 / line 66: 「Step 5.a-2-3 (commit `a7234e6`) + K=2 r1 fix #3 で Claude Code + Codex CLI 両方の hook テンプレを実装済」と現状反映 | K=2 r2 spec fix #4: 段階 5 不可分 commit + Step 5.a-2-3 + K=2 r1 fix の累積結果と converter README の旧記述の不整合を解消 |
 
-### 2.6 K=2 r3 横断レビュー反映 (2026-06-28、2 件)
+### 2.6 K=2 r3 / r4 横断レビュー反映 (2026-06-28、計 6 件)
+
+#### K=2 r3 反映 (2 件)
 
 K=2 r3 横断レビュー (Codex `codex_ctx_p5_step5a_completion_kappa2_r3_20260628-183143.txt`) で K=2 未達と判定、新規 spec finding 2 件を受領:
 
 | # | 旧記述の場所 | 旧記述 (要約) | 訂正後 | 訂正理由 (K=2 r3 source) |
 |---|---|---|---|---|
-| 27 | 本 journal §6.3 step 5 marker grammar (commit `ee7cdc6`) + §2.5 #25 | hardlink 防御の sanity check として「親 dir の `st_nlink == 0`」を要求 | **実装可能な形に修正**: (a) clean build (rmtree + 新規作成)、(b) target が存在しないことを `os.lstat` で確認、(c) **exclusive create** (`os.O_CREAT \| os.O_EXCL`) で書き込み (TOCTOU 防御の主防御線)、(d) POSIX で `O_NOFOLLOW` 併用、(e) 作成後 `st_nlink == 1` 確認 (検査のみ、TOCTOU 完全防御にはならない) | K=2 r3 spec fix #1: 親 dir の `st_nlink == 0` は既存 dir で常に成立せず全 build 失敗、かつ親 dir の link count は target が hardlink かどうかと無関係。exclusive create を主防御に修正 |
-| 28 | `acceptance-matrix.md` deterministic build 契約 + 本 journal §6.3 step 9 (commit `ee7cdc6`) | `source_content_digest` は body.md (source_files) のみを digest 対象としていたが、「build 入力の完全性証跡」と主張 | **`build_input_digest` に rename + 範囲拡張**: digest 対象を build 結果を決定する全入力に拡張: (1) `metadata.yaml` 全体、(2) `metadata.schema.json` 全体、(3) source_files の authored source、(4) 同梱対象 hook 関連ファイル (`AGENT_TO_HOOK_DIRNAME` mapping 適用)、(5) target_agents 各 agent の `agent-{name}.md` 全体、(6) `converter_version`。canonical 順 (上記番号順 + 各カテゴリ内辞書順 ASCII sort) で連結 sha256 計算 | K=2 r3 spec fix #2: 旧 source_content_digest は hook / metadata 変更で build 結果が変わっても digest が変わらない範囲不整合があった。真の build 入力範囲を反映する設計に修正 |
+| 27 | 本 journal §6.3 step 5 marker grammar (commit `ee7cdc6`) + §2.5 #25 | hardlink 防御の sanity check として「親 dir の `st_nlink == 0`」を要求 | **実装可能な形に修正**: (a) clean build (rmtree + 新規作成)、(b) target が存在しないことを `os.lstat` で確認、(c) **exclusive create** (`os.O_CREAT \| os.O_EXCL`) で書き込み (TOCTOU 防御の主防御線)、(d) POSIX で `O_NOFOLLOW` 併用 (最終 component のみ)、(e) 作成後 `os.fstat(fd).st_nlink == 1` 確認 (`os.stat(path)` でなく `os.fstat(fd)` で TOCTOU 緩和、検査のみで完全防御にはならない)、(f) **脅威モデル限定明記**: 親 dir の symlink race は本防御範囲外 (POSIX `openat()` 相当が必要、Phase 5 では out of scope)、Windows native は `O_NOFOLLOW` 相当なしで防御弱化 | K=2 r3 spec fix #1 + K=2 r4 spec fix #1: 親 dir の `st_nlink == 0` は既存 dir で常に成立せず全 build 失敗、かつ親 dir の link count は target が hardlink かどうかと無関係。exclusive create を主防御に修正 + 親 dir symlink race / Windows native 防御弱化の脅威モデル限定を明文化 (`O_NOFOLLOW` は最終 component のみ保護) |
+| 28 | `acceptance-matrix.md` deterministic build 契約 + 本 journal §6.3 step 9 (commit `ee7cdc6` / `786fdca`) | `source_content_digest` は body.md (source_files) のみを digest 対象としていたが、「build 入力の完全性証跡」と主張 | **`build_input_digest` に rename + 範囲拡張 (r3) + 更に範囲拡張 (r4)**: digest 対象を build 結果を決定する全入力に拡張: (1) `metadata.yaml` 全体、(2) `metadata.schema.json` 全体、(3) source_files の authored source、(4) 同梱対象 hook 関連ファイル (`AGENT_TO_HOOK_DIRNAME` mapping 適用)、(5) target_agents 各 agent の `agent-{name}.md` 全体、**(6) converter 実装自身 (`tools/build_skill.py` または `tools/build_skill/**/*.py` 全 source)** (K=2 r4 spec fix #2)、**(7) 環境変数 `SOURCE_DATE_EPOCH` (設定値または `unset`)** (K=2 r4 spec fix #3)。canonical 順 (番号順 + 各カテゴリ内辞書順 ASCII sort) で連結 sha256 計算 | K=2 r3 spec fix #2 + K=2 r4 spec fix #2/#3: 旧 source_content_digest は hook / metadata 変更で build 結果が変わっても digest が変わらない範囲不整合 (r3 で 6 カテゴリ拡張) + converter_version 文字列のみでは version bump 忘れで build 挙動変化を捉えられない (r4 で converter 実装自身を追加) + `SOURCE_DATE_EPOCH` 設定で生成物 header が変化するが digest manifest に含まれていなかった矛盾 (r4 で環境変数カテゴリ追加で解消) |
+
+#### K=2 r4 反映 (4 件、上記 #27/#28 の追記 + 新規 #29/#30)
+
+| # | 旧記述の場所 | 旧記述 (要約) | 訂正後 | 訂正理由 (K=2 r4 source) |
+|---|---|---|---|---|
+| 29 | `.gitattributes` (commit `57e11fe` 以前から既存) | `requirements*.lock text eol=lf` のみ、`*.md` / `*.json` 等は LF 強制なし | digest 対象拡張: `*.md` / `*.json` / `*.yaml` / `*.yml` / `*.ps1` / `*.sh` / `*.py` すべてに `text eol=lf` を追加 | K=2 r4 code fix #1: Windows の `core.autocrlf` で digest 対象が CRLF に変換され、build が環境依存になる問題を構造的に防止。converter 実装も `.py` で digest 対象 (#28 カテゴリ 6) のため `*.py` も含める |
+| 30 | 本 journal §6.3 step 5 marker grammar (commit `786fdca`) | symlink/hardlink 防御の脅威モデル限定が未記述 | **脅威モデル限定明文化**: (a) `O_NOFOLLOW` は最終 component のみ保護、親 dir symlink race は POSIX `openat()` 相当が必要だが Python 標準 `os.open()` に API なし、Phase 5 では out of scope、(b) `os.stat(path)` → `os.fstat(fd)` への変更で TOCTOU 緩和、(c) Windows native は `O_NOFOLLOW` 相当機能なしで防御弱化、install ガイドで明示 | K=2 r4 spec fix #1: 「TOCTOU 主防御線」の主張範囲を明確化、Phase 5 accept 範囲と Phase 6+ 再評価項目を分離 |
 
 ## 3. Step 5.a-2 の作業成果 (commit chronology)
 
@@ -164,6 +173,7 @@ K=2 r3 横断レビュー (Codex `codex_ctx_p5_step5a_completion_kappa2_r3_20260
 | K=2 r1 (5.a 全体完結 = 5.a-0 + 5.a-1 + 5.a-2 + 5.a-2-3) | `codex_ctx_p5_step5a_completion_kappa2_r1_20260628-172902.txt` | 必須 code fix 2 + 必須 spec fix 5 + 推奨 2 | K=2 r1 fix commit 群で全件反映 (本 §3.2 commit chronology 末尾参照)。`#3` PowerShell script + matcher 非対応対策、`#6` 5.b 責務 16 項目化、`#1` Gemini 残ドリフト、`#5` deterministic build、`#7` fail-closed、`#9` marker grammar 等を集約 |
 | K=2 r2 (K=2 r1 fix 反映後の整合性確認) | `codex_ctx_p5_step5a_completion_kappa2_r2_20260628-182541.txt` | 新規 spec fix 4 件 (K=2 未達判定) | K=2 r2 fix commit で全件反映: `#1` source_commit_hash 自己参照問題 → source_content_digest に置換 (後に r3 で build_input_digest に再修正)、`#2` hook agent 名 mapping 明示、`#3` hardlink 防御を clean build + sanity check に分離 (後に r3 で実装可能な形に再修正)、`#4` skill-converter/README.md 旧 path + 旧 hook 方針残存訂正。本 §2.5 旧→新対応表 #23〜#26 参照 |
 | K=2 r3 (K=2 r2 fix 反映後の整合性確認) | `codex_ctx_p5_step5a_completion_kappa2_r3_20260628-183143.txt` | 新規 spec fix 2 件 (K=2 未達判定) | K=2 r3 fix commit で全件反映: `#1` hardlink sanity check の親 dir `st_nlink == 0` が実装不能 → exclusive create (`O_CREAT \| O_EXCL`) を主防御に修正、`#2` source_content_digest 範囲不整合 (body.md のみ対象、build 結果に影響する hook / metadata 変更を捉えられない) → build_input_digest に rename + 範囲拡張。本 §2.6 旧→新対応表 #27〜#28 参照 |
+| K=2 r4 (K=2 r3 fix 反映後の整合性確認) | `codex_ctx_p5_step5a_completion_kappa2_r4_20260628-183741.txt` | 新規 code fix 1 + spec fix 3 (K=2 未達判定) | K=2 r4 fix commit で全件反映: `#1` `.gitattributes` に digest 対象 LF 強制を追加 (`*.md` / `*.json` / `*.yaml` / `*.yml` / `*.ps1` / `*.sh` / `*.py`)、`#2` 親 dir symlink race の脅威モデル限定明記 (`O_NOFOLLOW` 最終 component のみ保護、`os.fstat(fd)` で TOCTOU 緩和、Windows native の防御弱化)、`#3` build_input_digest に converter 実装自身 (カテゴリ 6) を追加、`#4` `SOURCE_DATE_EPOCH` 環境変数 (カテゴリ 7) を追加で「全入力」主張との矛盾解消。本 §2.6 旧→新対応表 #27/#28/#29/#30 参照 |
 | 設計再検討 (K=2 r1 fix 進行中、user 提起) | `codex_ctx_p5_step5a-2-x_jp-docs-design_review_20260628-180821.txt` | 「日本語文書執筆プロジェクトの .ps1 契約」を append 章でなく構造的に解決すべき、と user 指摘 → Codex 推奨 `(η改) = θ command authoring protocol + ι capability-based dispatch + β-lite + ζ + γ-lite + κ mojibake sentinel` | 既存 K=2 r1 fix 完了後、別 Step `5.a-2-4` で θ/ι 設計判断を独立実装する方針確定 (Codex「混ぜるな」指摘)。本 Step の影響は body.md §6/§12 構造変更 (中〜大)、examples/japanese-docs-pwsh 新設 (中)、qgb core/schema 改修なし |
 
 ## 4. 機械検証実績 (段階 4.5 / 段階 5 / 全 Step)
@@ -217,15 +227,20 @@ A1' 確定 + Codex K=2 r1 必須 / 推奨 fix 反映により build_skill.py の
    - marker name の path 安全性 (`..` / `./` / 連続 `//` / 先頭末尾スラッシュ / バックスラッシュ拒否、schema regex と同等)
    - marker name と `source_files` の集合分離 (collision detection で fail-closed)
    - marker 内容の先頭末尾空行は **converter が trim せずそのまま保存** (helper 単独利用時の Markdown 構造を保つ、Codex K=2 r1 推奨 #2)
-   - **symlink / hardlink / 外部 path を介した出力先逸脱防止** (Codex K=2 r1 推奨 #2 + K=2 r2 spec fix #3 + K=2 r3 spec fix #1):
+   - **symlink / hardlink / 外部 path を介した出力先逸脱防止** (Codex K=2 r1 推奨 #2 + K=2 r2 spec fix #3 + K=2 r3 spec fix #1 + K=2 r4 spec fix #1):
      - **path traversal 防御**: helper file path を `os.path.normpath` で正規化、dist root 配下に収まることを literal path compare で確認
-     - **symlink 防御**: `os.path.realpath` で symlink を解決後、dist root の `realpath` の prefix 配下にあることを確認 (symlink で外部 path を指すケースを reject)
+     - **symlink 防御 (最終 component)**: `os.path.realpath` で symlink を解決後、dist root の `realpath` の prefix 配下にあることを確認 (symlink で外部 path を指すケースを reject)
      - **hardlink 防御**: `os.path.realpath` では hardlink の別名関係は **検出できない**ため、別経路で対処:
        (a) **clean build を default 採用**: 各 build run の冒頭で `dist/skills/{mode}/{agent}/` を `shutil.rmtree` + `os.makedirs` で完全に作り直し、既存ファイル (hardlink 含む) を削除してから新規作成。これにより既存 hardlink 経由で外部 inode が書き換わる経路を構造的に潰す (K=2 r1 spec fix #2 step 14 「stale output 除去 or clean build」と統合)
        (b) **clean build 後の存在確認**: 書き込み前に target path が存在しないことを `os.lstat` (symlink を解決しない stat) で確認。存在すれば clean build が機能していない兆候として error
        (c) **exclusive create で書き込み**: `open(target, "xb")` または `os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY)` で書き込み。既存ファイルがあると `FileExistsError` で失敗、これにより TOCTOU 経由の置換攻撃の余地を最小化
-       (d) **POSIX 環境では `O_NOFOLLOW` も併用**: 書き込み中に symlink race で外部 path にすり替えられる経路を防御 (Windows native では `O_NOFOLLOW` 相当機能なし、accept)
-       (e) **作成後の sanity check**: 作成直後に `os.stat(target).st_nlink == 1` を確認 (新規作成ファイルなので link count は 1 のはず、それ以外なら hardlink で既存 inode に結合した兆候)。ただしこれは検査のみで TOCTOU 完全防御にはならず、(c) の exclusive create が真の防御線
+       (d) **POSIX 環境では `O_NOFOLLOW` も併用**: 書き込み中に **最終 component の** symlink race で外部 path にすり替えられる経路を防御 (Windows native では `O_NOFOLLOW` 相当機能なし、accept)
+       (e) **作成後の sanity check**: 作成直後に `os.fstat(fd).st_nlink == 1` を確認 (新規作成ファイルなので link count は 1 のはず、それ以外なら hardlink で既存 inode に結合した兆候)。**`os.stat(target)` ではなく `os.fstat(fd)` を使う**ことで、open 後 stat 前の再 link 攻撃を防ぐ (TOCTOU 緩和)。ただし検査のみで TOCTOU 完全防御にはならず、(c) の exclusive create が真の防御線
+     - **脅威モデル限定 (K=2 r4 spec fix #1 で明文化)**:
+       - 本防御は **dist root 配下の最終 component (= helper file 自体)** の不正書き換えを防ぐ。`O_NOFOLLOW` も `os.fstat(fd).st_nlink` も最終 component のみを保護する
+       - **親ディレクトリ (`dist/skills/{mode}/{agent}/` 内の中間 dir) の symlink race は本防御範囲外**: open 前に親 dir が symlink へ置換されると `O_NOFOLLOW` では検出できない。完全防御には POSIX の `openat()` 相当 (信頼済み dir fd からの相対 open + 各親 component の `O_NOFOLLOW` 検証) が必要だが、Python 標準 `os.open()` には `openat` 公開 API がなく実装難度が高い
+       - **本 Step での accept 範囲**: converter 実行中に dist tree の親 dir が攻撃者によって動的に書き換えられる脅威モデルは **out of scope** (利用者が信頼できる開発環境で build する前提)。利用者プロジェクトを target にした外部攻撃シナリオ (例: CI ランナー上で他プロセスが dist tree を mutate) は Phase 6+ で再評価
+       - **Windows native の脅威モデル制限**: `O_NOFOLLOW` 相当機能がないため symlink race の防御は (a) clean build + (b) lstat + (c) exclusive create のみ。シナリオによっては POSIX 環境より防御が弱い、利用者には install ガイドで明示
 6. **full モード生成**: marker tag (start / end コメント行 2 行) を converter が除去、marker 内本文はそのまま `SKILL.md` 本文として埋め込み
 7. **split モード生成**: marker 内本文を helper file (`workflow.md` / `references.md` / `prompts/<name>.md`) に切り出し、本体 (`SKILL.md`) には marker 1 組の位置に **正確に 1 行 `@see <helper-path>`** という置換行を残す (Codex K=2 r1 spec fix #3、`<helper-path>` は marker name そのまま)
 8. agent 別変換:

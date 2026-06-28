@@ -65,17 +65,21 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 3. `metadata.yaml#source_files` に列挙された authored source 文書 (現状 `[body.md]` のみ、将来追加された場合も含む)
 4. 同梱対象の hook 関連ファイル (`skills/source/hooks/**/*.json` + `skills/source/hooks/**/*.ps1` + `skills/source/hooks/**/*.md` + `skills/source/hooks/**/*.sh` 等、`AGENT_TO_HOOK_DIRNAME` mapping で target_agents に対応する dir のみ)
 5. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` 全体 (converter が status / frontmatter キー / hook_support 等を読むため、変更で build 挙動が変わる)
-6. **converter version** (`converter_version`) も digest 入力に含める (converter 改修で生成物が変わるため、build 入力の一部とみなす)
+6. **converter 実装自身**: `tools/build_skill.py` (single file の場合) または `tools/build_skill/**/*.py` (package の場合) の全 source code (K=2 r4 spec fix #2 反映、`converter_version` 文字列のみでは version bump 忘れで build 挙動変化を捉えられない問題を構造的に解消)
+7. **環境変数**: `SOURCE_DATE_EPOCH` の値 (設定されていれば、digest に含めることで K=2 r4 spec fix #3 反映 — release CI build で日時を埋め込むケースでも digest と build 結果が一致)。未設定なら manifest に `SOURCE_DATE_EPOCH: unset` と記録
 
-**ファイル列挙の canonical 順**: 上記 1〜5 の各カテゴリ内で、相対 path の **辞書順 ASCII sort** (locale 非依存)。カテゴリ間順序は上記の番号順 (= manifest 構造順) を固定。
+**ファイル列挙の canonical 順**: 上記 1〜6 の各カテゴリ内で、相対 path の **辞書順 ASCII sort** (locale 非依存)。カテゴリ間順序は上記の番号順 (= manifest 構造順) を固定。カテゴリ 7 は単一 key-value なので順序問題なし。
 
 #### digest 計算手順
 
 1. 上記 canonical manifest を構築
-2. 各 input file を **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済)
-3. 連結フォーマット: 各 input について `<categorical id (1〜6)>\n<file path as UTF-8 bytes>\n<file content bytes>\n` を生成、全体を 1 byte stream に連結。`converter_version` だけは `6\n<version string>\n` の形 (file content ではなく文字列直接)
+2. 各 input file を **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済、digest 対象は `.md` / `.json` / `.yaml` / `.yml` / `.ps1` / `.sh` / `.py`)
+3. 連結フォーマット: 各 input について `<categorical id (1〜7)>\n<file path as UTF-8 bytes>\n<file content bytes>\n` を生成、全体を 1 byte stream に連結
+   - カテゴリ 7 (環境変数) は `7\nSOURCE_DATE_EPOCH\n<value or unset>\n` の形 (file content ではなく文字列直接)
 4. sha256 を計算、16 進 lowercase で表現
 5. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `build_input_digest: 0123456789abcdef`
+
+**注**: カテゴリ 6 (converter 実装) は **build_skill.py 自身を読み込んで digest に含める** = converter 起動時に `__file__` または package root を再帰的に読む。`.py` 改行は `.gitattributes` で LF 固定。
 
 #### 設計上の主張
 
@@ -106,9 +110,16 @@ K=2 r2 で導入した `source_content_digest` (body.md のみ対象) は **buil
 
 これにより通常の CI build (golden 比較する run) では生成日時非埋め込み、release CI build (utc 固定日時を埋め込みたい run) では `SOURCE_DATE_EPOCH` 経由で再現可能な値を埋め込む、という二段運用が可能。Phase 5 完結時の release CI 設計 (5.c) で具体化。
 
+**`SOURCE_DATE_EPOCH` と digest の関係** (K=2 r4 spec fix #3 反映):
+
+- `SOURCE_DATE_EPOCH` は **build_input_digest のカテゴリ 7** (環境変数) に含まれる
+- 通常 build (`SOURCE_DATE_EPOCH` 未設定): manifest に `SOURCE_DATE_EPOCH: unset` が記録 → digest A
+- release build (`SOURCE_DATE_EPOCH=1735689600`): manifest に該当値が記録 → digest B (digest A とは異なる、生成物 header に日時が埋め込まれた事実を捉える)
+- これにより golden fixture の整合性が保証される: 通常 CI golden は digest A 系、release CI artifact は digest B 系、両者は別物として扱う
+
 ### encoding / newline / sort 順序の固定
 
-- 出力 encoding: **UTF-8 BOM なし**、改行 LF (Phase 3 規律と整合、`.gitattributes` で *.md / *.json の LF を強制)
+- 出力 encoding: **UTF-8 BOM なし**、改行 LF (Phase 3 規律と整合、`.gitattributes` で digest 対象 (`.md` / `.json` / `.yaml` / `.yml` / `.ps1` / `.sh` / `.py`) の LF を強制、K=2 r4 code fix #1)
 - frontmatter YAML キーの順序: schema 定義順 (alphabetical でなく宣言順)、deterministic
 - helper file 列挙順序: `body.md` 内 include marker の出現順序に従う (re-sort しない)
 

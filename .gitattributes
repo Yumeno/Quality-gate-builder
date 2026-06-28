@@ -8,3 +8,22 @@
 # representation in the repo is OS-independent. The lock-integrity job
 # regenerates with the same LF convention on Windows via Git Bash's pip-compile.
 requirements*.lock text eol=lf
+
+# Phase 5 Step 5.a 完結 K=2 r4 fix #1: pin line endings for all build input
+# files. The Phase 5 converter (tools/build_skill.py, to be implemented in 5.b)
+# computes build_input_digest over byte-level content of these files. Without
+# LF pinning, git's autocrlf on Windows could rewrite line endings during
+# checkout, causing the digest to become environment-dependent (CRLF on
+# Windows, LF on Linux). This breaks golden fixture byte equality and
+# defeats the deterministic build contract documented in
+# development/docs/skill-converter/acceptance-matrix.md "deterministic build 契約".
+#
+# We pin both authored sources under skills/source/ and the docs that the
+# converter reads (development/docs/skill-converter/agent-*.md front matter).
+*.md text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
