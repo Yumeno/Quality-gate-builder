@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "stages": [
+    {
+      "stage_id": "S1",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S1-link.json",
+      "required": true
+    },
+    {
+      "stage_id": "S2",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S2-glossary.json",
+      "required": true
+    },
+    {
+      "stage_id": "S3",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S3-style.json",
+      "required": true
+    },
+    {
+      "stage_id": "S4",
+      "contract_ref": ".quality-system/contracts/REQ-DOC-001/S4-structure.json",
+      "required": true
+    }
+  ]
+}

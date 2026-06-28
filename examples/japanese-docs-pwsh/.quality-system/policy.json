@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "default",
+  "stages": [
+    {
+      "id": "S1",
+      "name": "link 整合性",
+      "responsibility": "docs/ 配下の Markdown 内 link が壊れていない",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command", "expected_exit_code", "runtime"]
+    },
+    {
+      "id": "S2",
+      "name": "用語統一",
+      "responsibility": "用語表 (glossary.json) で禁止された表記 / 旧称が docs/ に出現しない",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command", "expected_exit_code", "runtime"]
+    },
+    {
+      "id": "S3",
+      "name": "style 規約",
+      "responsibility": "見出し階層が連続している (H1 → H3 のスキップなし) 等の構造規約に従う",
+      "depends_on": [],
+      "verification_type": "command",
+      "required_contract_fields": ["command", "expected_exit_code", "runtime"]
+    },
+    {
+      "id": "S4",
+      "name": "起点ファイル存在 + H1",
+      "responsibility": "docs/README.md が存在し H1 (# ) を持つ",
+      "depends_on": [],
+      "verification_type": "substring_match",
+      "required_contract_fields": ["target", "must_contain"]
+    }
+  ]
+}

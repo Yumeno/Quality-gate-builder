@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "human_reviewed": true,
+  "project_kind": "japanese-documentation",
+  "purpose": "日本語の技術文書 / 規約文書 / マニュアル等を Markdown で執筆する個人 / チーム向け qgb 設計例。Windows native + 日本語 locale (ja-JP) + PowerShell 5 (Windows 同梱) を想定し、verification_type=command + PowerShell 5 .ps1 契約による link 整合性 / 用語統一 / style 規約検査を機械化する例。Phase 5 Step 5.a-2-4 で確立した command authoring protocol (θ) + capability-based dispatch (ι) の PowerShell 5 セクション適用例を兼ねる。",
+  "scope": {
+    "in_scope": [
+      "docs/ 配下の日本語 Markdown ファイル",
+      "用語表 (docs/glossary.json) の旧称 / 禁止表記",
+      "見出し階層 / style 規約",
+      "PowerShell 5 .ps1 script による検査の encoding 規律 (BOM + Console.OutputEncoding)"
+    ],
+    "out_of_scope": [
+      "日本語の意味的妥当性 (文法 / 自然さ)",
+      "外部リンク先の生存確認 (404 検出)",
+      "多言語版の翻訳整合性 (本例は ja-JP 単一言語)",
+      "PowerShell 7 専用機能の活用 (PS 5 互換性を主軸)",
+      "Windows 以外の OS (macOS / Linux) での実行 (本例は Windows native 限定)"
+    ]
+  },
+  "technologies": [
+    "markdown",
+    "json",
+    "powershell-5"
+  ],
+  "artifact_kinds": [
+    "documentation"
+  ],
+  "platform": [
+    "windows"
+  ],
+  "non_adopted_methods": [
+    {
+      "method": "PowerShell 7 (pwsh) を必須にする",
+      "reason": "利用者ベース (法務 / 行政 / 教育機関 / 国内エンタープライズ) は Windows + PowerShell 5 がデフォルト、install 強制でハードルが上がる"
+    },
+    {
+      "method": "Python 検査 script に切替",
+      "reason": "Windows + 日本語ユーザーは Python install が前提でない場合あり。PowerShell 5 同梱の方がハードル低い"
+    },
+    {
+      "method": "外部リンク 404 チェック",
+      "reason": "ネットワーク依存 + flaky test の温床、本例は scope 外。必要なら別 stage / 別 REQ で実装"
+    },
+    {
+      "method": "多言語整合性検査",
+      "reason": "本例は ja-JP 単一言語。多言語化は project-context を分けるか別 REQ で扱う"
+    },
+    {
+      "method": "macOS / Linux 対応",
+      "reason": "本例は Windows native 限定。cross-platform 化は examples/markdown-docs (英語、generic) を参照"
+    }
+  ],
+  "references": [
+    {
+      "kind": "design_notes",
+      "path": "design-notes.md"
+    },
+    {
+      "kind": "readme",
+      "path": "README.md"
+    },
+    {
+      "kind": "skill",
+      "path": "../../skills/source/body.md",
+      "section": "§6.5 command authoring protocol + §12.5.5 capability-based dispatch (PowerShell 5)"
+    }
+  ],
+  "source_metadata": {
+    "generated_by": "agent-assisted",
+    "agent_name": "claude-code",
+    "agent_version": "opus-4.7-1m-context",
+    "generated_at": "2026-06-28T00:00:00Z",
+    "source_md_sha256": "placeholder-regenerate-on-md-change"
+  }
+}

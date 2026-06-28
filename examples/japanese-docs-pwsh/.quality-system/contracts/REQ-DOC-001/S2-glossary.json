@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "stage_id": "S2",
+  "verification_type": "command",
+  "runtime": "powershell-5",
+  "command": [
+    "powershell.exe",
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/quality-checks/check-glossary.ps1",
+    "-DocsRoot",
+    "docs",
+    "-GlossaryFile",
+    "docs/glossary.json"
+  ],
+  "expected_exit_code": 0,
+  "timeout_seconds": 60
+}

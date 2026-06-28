@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "stage_id": "S4",
+  "verification_type": "substring_match",
+  "target": "docs/README.md",
+  "must_contain": "# "
+}

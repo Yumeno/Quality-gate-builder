@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "req_id": "REQ-DOC-001",
+  "stage_id": "S3",
+  "verification_type": "command",
+  "runtime": "powershell-5",
+  "command": [
+    "powershell.exe",
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/quality-checks/check-style.ps1",
+    "-DocsRoot",
+    "docs"
+  ],
+  "expected_exit_code": 0,
+  "timeout_seconds": 60
+}

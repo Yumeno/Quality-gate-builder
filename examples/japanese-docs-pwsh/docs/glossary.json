@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "deprecated": [
+    {
+      "term": "旧称サンプル",
+      "use_instead": "新称サンプル",
+      "reason": "本 example の glossary sample、実プロジェクトでは具体的な旧称 / 禁止用語に置き換える"
+    }
+  ]
+}
