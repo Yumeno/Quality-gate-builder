@@ -58,7 +58,21 @@ token 計測 (実機):
 
 include marker は **§6 と §7 のみ**。`prompts/design-stages.md` と `prompts/review-policy.md` は body.md に embed せず、利用者の明示依頼で trigger 表経由オンデマンド読み込み (prejournal v4 判断点 3 確定方針)。
 
-## 2. 未解決論点 (5.a-2-2 着手前の確認待ち)
+## 2. 未解決論点 (5.a-2-2 着手前の確認待ち) — ⚠️ SUPERSEDED
+
+> **⚠️ 本節 §2 (および案 A/B/C 議論全体) は §7「5.a-2-2 着手前の最終確定」で
+> 撤回され、最終決定が示された。LLM がこのファイルの途中だけを読む場合は §7 を
+> 参照すること**。
+>
+> 最終決定への pointer:
+> - §7.1 user 確定事項 (Q1 / Q2 / Q2-pre / Q5)
+> - §7.2 Codex r1 横断レビュー受領
+> - §7.3 安全な作業手順 (6 段階に分割、削除は最終段階)
+> - 段階 5 で確定: A1' (`source_files: [body.md]` のみ、`workflow.md` /
+>   `references.md` / `prompts/*` は body.md include marker から converter が
+>   split build で機械生成)
+>
+> 本節 §2 は「議論の経緯を残すための historical record」として保持。
 
 prejournal v4 §3.4 と §3.1 の間に小さな解釈ブレが残っていることを 5.a-2-2 着手時に発見:
 
@@ -315,10 +329,25 @@ LLM 開発主体の特性 (削除と再作成の間に compact 走るリスク) 
   - source_files items pattern を path 安全性強化 (`..` / `./` / 連続 `//` / 先頭末尾スラッシュ / バックスラッシュ拒否)
   - 境界ケース 22 件全 PASS、現状 metadata.yaml は更新 schema で valid
   - Codex r1 必須 code fix #4, #5 反映
-- **段階 4.5 完了** (本 commit):
+- **段階 4.5 完了** (commit `17498d6`):
   - body.md include marker 内容と prompts/* 原本の欠落比較を実施
   - design-stages: 見出し 30/30 identical, code blocks 5/5, table rows 21/21
   - review-policy: 見出し 30/30 identical, code blocks 3/3, table rows 0/0
   - mode-neutral 化分の +225 / +233 chars 差は意図通り
   - Codex r1 code fix #6 反映、段階 5 削除前検証完了
-  - **次: Codex 横断レビュー 2 回目** (段階 5 不可分 commit 着手前の最終確認)
+- **Codex 横断レビュー 2 回目完了** (`codex_ctx_p5_step5a-2-2_review_r2_20260628-131141.txt`):
+  - 追加必須 fix 4 件 (C1 body.md line 128 / S1 framework-shape 9 箇所 / S2 requirements 6+3 箇所 / S3 README / S4 progress journal)
+  - 推奨 S5 (converter design docs 3 ファイル) を段階 5 に含める判断
+  - helper 4 件削除そのものによるコード/テスト破綻なしを Codex が静的検証で確認
+  - 段階 5 着手可、不可分 commit 維持
+- **段階 5 完了** (本 commit、不可分):
+  - skills/source/workflow.md / references.md / prompts/design-stages.md / prompts/review-policy.md を `git rm`
+  - metadata.yaml `source_files` を `[body.md]` に縮小 (A1' = body.md 単一正本完成)
+  - body.md line 128 cross-reference mode-neutral 化 (Codex r2 C1)
+  - skills/source/README.md を A1' 完成形に更新 (Codex r2 S3)
+  - framework-shape.md §5 全面改訂 + 関連 4 箇所訂正 (Codex r2 S1)
+  - requirements_and_development.md F-019 / C-008 / Phase 5 概要 + 関連 5 箇所訂正 (Codex r2 S2)
+  - progress journal §2 に SUPERSEDED admonition + §7 へのポインタ追加 (Codex r2 S4)
+  - converter design 3 ファイル (skill-converter/README.md / acceptance-matrix.md / agent-codex.md) を A1' 補足訂正 (Codex r2 S5)
+  - 機械検証: marker 集合 4/4 / metadata schema valid / 欠落比較 60/60 / README keyword test / 全 pytest 緑 / 削除後 git grep
+  - **次: 段階 6** (5.a-2 完結 journal で旧→新対応表を作成、Codex r1 spec fix #1 反映)

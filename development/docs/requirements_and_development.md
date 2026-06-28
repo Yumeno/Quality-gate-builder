@@ -26,7 +26,7 @@ quality-gate-builder 要件定義書・基本設計書 v0.3
 - gate.json スキーマを最小化（runner / failed_stage / stages[].contract_ref を追加、checks[] を stages[] に統合）
 - 採用判定 (`evidence/`) と揮発 (`artifacts/`) の 2 系統パス分離を採用
 - 新コマンド `qgb design-stages`, `qgb validate-policy` を追加
-- エージェント中立スキル提供方針を追加：単一の中間表現から Claude Code / Codex CLI / Gemini CLI 向けスキル成果物をコンバータで生成する（F-019, C-008）
+- エージェント中立スキル提供方針を追加：A1' 単一正本 (`body.md`) からコンバータで Claude Code + Codex CLI 向けスキル成果物 (full/split 計 4 成果物) を生成する (F-019, C-008、Phase 5 v4 で supported = Claude Code + Codex CLI に確定、Antigravity CLI は TODO、Gemini CLI は扱わない)
 
 > 撤回履歴: v0.3 の当初版では「入口分離（`qgb verify` 軽量 / `qgb run` 採用判定）」と新コマンド `qgb verify` を追加していたが、後の Phase 1 spec-review で撤回した。理由は思想憲章 P3（保証対象の転換＝コード不変を前提にしない）と「検査範囲を絞る軽量入口」が緊張するため。部分検証は CLI コマンドでなく REQ 分割（設計）で扱う。詳細は `stage-design.md` §3.1 および `yaoyorozu-entry-points-investigation.md` を参照。
 
@@ -187,21 +187,24 @@ quality-gate-builder/
     python-cli-pytest/
     markdown-docs/
   skills/
-    source/                          # 単一の中間表現（正本）
-      metadata.yaml
-      body.md
-      workflow.md
-      references.md
-      prompts/
-        design-stages.md
-        review-policy.md
+    source/                          # A1' 単一正本（Phase 5 Step 5.a-2-2 確定）
+      metadata.yaml                  # thin typed manifest
+      metadata.schema.json           # JSON Schema 型固定
+      body.md                        # authored source 正本
+                                     # (split helper 本文を include marker で内包)
+                                     # workflow.md / references.md / prompts/* は
+                                     # body.md include marker から converter 生成、
+                                     # skills/source/ には存在しない
   tools/
-    build_skill.py                   # 3 エージェント向けスキル生成コンバータ
+    build_skill.py                   # Claude Code + Codex CLI 向けスキル生成コンバータ
   dist/
     skills/                          # ビルド成果物（.gitignore、リリース時にのみ生成）
-      claude/
-      codex/
-      gemini/
+      full/
+        claude/   SKILL.md           # 全部のせ、helper を SKILL.md に embed
+        codex/    SKILL.md
+      split/
+        claude/   SKILL.md + workflow.md + references.md + prompts/*
+        codex/    同構造
   tests/
   pyproject.toml
   README.md
@@ -645,47 +648,49 @@ Phase 1 では導入マニュアルを成果物に含める。必須章立ては
 
 #### F-019: エージェント中立なスキル提供
 
-qgb の Phase 5 スキルは、Claude Code / Codex CLI / Gemini CLI のいずれにも投入できる形で提供する。
+qgb の Phase 5 スキルは、Claude Code + Codex CLI に投入できる形で提供する (Phase 5 v4 で supported = Claude Code + Codex CLI に確定。Antigravity CLI は GitHub issue #25 で TODO 化、Gemini CLI は扱わない (終息品))。
 
-##### 単一中間表現
+##### A1' 単一正本 (Phase 5 Step 5.a-2-2 で確定)
 
-スキル本体は `skills/source/` 配下の単一の中間表現を正本とする：
+スキル本体は `skills/source/` 配下の **`body.md` 単一正本** を採用する (A1'):
 
 ```text
 skills/source/
-  metadata.yaml         # スキル ID、バージョン、各エージェント向けバインディング
-  body.md               # スキル本体（中立 Markdown）
-  workflow.md           # 作業手順
-  references.md         # philosophy.md / stage-design.md などへの参照集
-  prompts/
-    design-stages.md
-    review-policy.md
+  metadata.yaml          # thin typed manifest (build matrix 宣言)
+  metadata.schema.json   # JSON Schema 型固定
+  body.md                # authored source 正本
+                         # (full モード本文 + split helper 本文を
+                         #  include marker で内包する単一ファイル)
 ```
 
-`metadata.yaml` には各エージェント固有の配置情報（filename、frontmatter キー、補助ファイルの取り込み方）を持たせる。中間表現のフォーマット詳細は `framework-shape.md` を参照。
+`workflow.md` / `references.md` / `prompts/design-stages.md` / `prompts/review-policy.md` は **`skills/source/` には存在しない**。`body.md` 内の include marker (`<!-- split:helper_start <NAME> --> ... <!-- split:helper_end -->`) から converter が split build で機械生成する。
+
+`metadata.yaml` は thin typed manifest (skill_id / version / description / converter_min_version / source_files / build_modes / target_agents) のみを持つ。agent_bindings は Phase 5 v4 で廃止 (二重管理回避)、agent 別の変換規則は `tools/build_skill.py` が持ち、agent 状態 (status / last_verified / hook_support 等) は `development/docs/skill-converter/agent-{name}.md` の front matter で 1 か所だけ管理する。
+
+集合分離契約: `metadata.yaml#source_files` は converter が直接読む authored source (= `[body.md]` のみ)、include marker 名は split build の生成 helper 名を宣言、両者は別集合。中間表現のフォーマット詳細は `framework-shape.md` §5 を参照。
 
 ##### コンバータ
 
-`tools/build_skill.py` が中間表現から 3 エージェント向け成果物を生成する：
+`tools/build_skill.py` が中間表現から Claude Code + Codex CLI 向け成果物を full/split 計 4 通り (2 agent × 2 mode) 生成する：
 
-| エージェント | 成果物 | 配置先（利用者環境） |
-|---|---|---|
-| Claude Code | `SKILL.md`（YAML frontmatter 付き）+ 補助ファイル一式 | `~/.claude/skills/<skill-id>/` または `.claude/skills/<skill-id>/` |
-| Codex CLI | `AGENTS.md`（補助ファイルを末尾に連結したフラット Markdown） | プロジェクトルート |
-| Gemini CLI | `GEMINI.md`（補助ファイルを `@import` で参照） + `.gemini/commands/<command>.toml` | `~/.gemini/` またはプロジェクト直下 |
+| エージェント | 成果物 | full モード | split モード | 配置先（利用者環境） |
+|---|---|---|---|---|
+| Claude Code | `SKILL.md`（YAML frontmatter 付き） | 単一ファイル | `SKILL.md` + helper 4 件を同ディレクトリに配置 | `~/.claude/skills/<skill-id>/` または `.claude/skills/<skill-id>/` |
+| Codex CLI | `SKILL.md`（Agent Skills 標準準拠） | 単一ファイル | `SKILL.md` + helper 4 件を同ディレクトリに配置 | `~/.agents/skills/<skill-id>/` または `.agents/skills/<skill-id>/` |
 
-生成物は `dist/skills/{claude,codex,gemini}/` に出力される。`dist/` は `.gitignore` 対象とし、リリースタグ付与時に CI で生成して GitHub Releases にアタッチする。
+生成物は `dist/skills/{full,split}/{claude,codex}/` に出力される。`dist/` は `.gitignore` 対象とし、リリースタグ付与時に CI で生成して GitHub Releases にアタッチする。
 
 ##### 再生成可能性
 
-- 中間表現を変更したら、必ずコンバータを通して 3 成果物を再生成する
+- 中間表現 (`body.md` および `metadata.yaml`) を変更したら、必ずコンバータを通して 4 成果物 (2 agent × 2 mode) を再生成する
 - リリース成果物に対する直接編集は禁止（ドリフトを防ぐ）
 - コンバータ自体のバージョンを成果物に記録し、再現可能性を担保する（思想 P7）
+- marker 名と `source_files` の集合分離を converter が構造的に検証 (collision detection で fail-closed)
 
 ##### Phase 計画
 
 - Phase 1〜4: スキル成果物は作らない。`skills/source/` のディレクトリ構造のみ予約
-- Phase 5: 中間表現とコンバータを本実装、3 エージェント向けリリースを CI で生成
+- Phase 5: 中間表現とコンバータを本実装、Claude Code + Codex CLI 向け (full/split 計 4 成果物) のリリースを CI で生成
 
 ### 5.3 非機能要件
 
@@ -765,11 +770,11 @@ L1〜L6 などの固定段階体系を qgb 本体に持たない。段階は `po
 
 #### C-008: スキルは中間表現を正本とする
 
-エージェント向けスキル成果物（`SKILL.md` / `AGENTS.md` / `GEMINI.md` 等）は、`skills/source/` の中間表現からコンバータで生成する。
+エージェント向けスキル成果物 (Claude Code / Codex CLI 向けの `SKILL.md` + 補助ファイル) は、`skills/source/body.md` を単一正本 (A1') として converter `tools/build_skill.py` から生成する。
 
-- 中間表現を介さずに成果物を直接編集して配布してはならない（F-019）
-- 特定エージェントの固有機能に依存する内容を中間表現に含める場合、`metadata.yaml` の `agent_bindings` で限定的に宣言する
-- 3 エージェントすべてで動作する共通機能を中間表現の中核に据え、固有機能は補助的に扱う
+- 中間表現 (`body.md`) を介さずに成果物を直接編集して配布してはならない（F-019）
+- agent 別の変換規則は `tools/build_skill.py` が持つ (Phase 5 v4 で `agent_bindings` 廃止)。agent 状態 (status / hook_support 等) は `development/docs/skill-converter/agent-{name}.md` の front matter で 1 か所だけ管理する (二重管理回避)
+- supported 全 agent (Claude Code + Codex CLI) で動作する共通機能を中間表現の中核に据え、固有機能は補助的に扱う
 
 ### 5.5 対象外
 
@@ -1399,15 +1404,14 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 ### Phase 5: Skill Creator 化（エージェント中立、adapter なしで設計）
 
-- スキル中間表現 `skills/source/` の整備（`metadata.yaml`, `body.md`, `workflow.md`, `references.md`, `prompts/`）
-- コンバータ `tools/build_skill.py` の実装
-- Claude Code 向け成果物（`SKILL.md` + 補助ファイル）の生成
-- Codex CLI 向け成果物（`AGENTS.md` 単体）の生成
-- Gemini CLI 向け成果物（`GEMINI.md` + `.gemini/commands/qgb.toml`）の生成
-- 3 エージェント向け CI ビルドと GitHub Releases へのアタッチ
+- スキル中間表現 `skills/source/` の整備 (A1' 単一正本: `body.md` + `metadata.yaml` + `metadata.schema.json`、Phase 5 Step 5.a-2-2 で確定)。`workflow.md` / `references.md` / `prompts/design-stages.md` / `prompts/review-policy.md` は `skills/source/` には存在せず、body.md include marker から converter が split build で機械生成
+- コンバータ `tools/build_skill.py` の実装 (集合分離契約 + marker path 安全性 + golden fixture 検証)
+- Claude Code 向け成果物 (`SKILL.md` + 補助ファイル) の生成 (full/split 両モード)
+- Codex CLI 向け成果物 (`SKILL.md` + 補助ファイル、Agent Skills 標準準拠) の生成 (full/split 両モード)
+- supported 2 agent × 2 mode = 計 4 成果物 の CI ビルドと GitHub Releases へのアタッチ
 - 段階設計フェーズ（パターン B / C）の自律実行
 - 設計例パック few-shot 参照 (Phase 2 で 6 例完成済み、Phase 5 で必要に応じて追加: prompt-collection / terraform-modules / sql-schemas / legal-templates / mixed-devops 等の言語非依存ドメイン)
-- 3 エージェント向け運用ガイド（インストール・更新・トラブルシューティング）
+- supported 2 agent 向け運用ガイド（インストール・更新・トラブルシューティング）
 - **スキルが対象プロジェクトを Read で読んで分析** (adapter なし、対象理解は LLM 責務、ALLOW/DENY は qgb の contract 実行結果で決まる)
 - 利用者プロジェクトに CI テンプレ (GitHub Actions 等) を生成する機能はスキルに含める (当初 Phase 4 の項目を吸収)
 

@@ -17,14 +17,14 @@ qgb プロジェクトは次の 4 層で構成される：
    ↓ 制約を与える
 [Layer 2] フレームワーク層 — qgb 本体（このリポジトリ）
    ↓ 道具を提供する
-[Layer 3] スキル層 — Phase 5 のスキル（エージェント中立、3 エージェント向けにビルド）
+[Layer 3] スキル層 — Phase 5 のスキル（エージェント中立、Claude Code + Codex CLI 向けにビルド）
    ↓ 適応・対話する
 [Layer 4] 利用者プロジェクト層 — qgb init 後の対象プロジェクト
 ```
 
 各層は明確な所有物と責務を持ち、上位層から下位層への一方向の依存関係を保つ。
 
-Layer 3 のスキルは Claude Code / Codex CLI / Gemini CLI のいずれにも投入できる。詳細は §5 を参照。
+Layer 3 のスキルは Claude Code / Codex CLI に投入できる (Phase 5 v4 で supported = Claude Code + Codex CLI に確定、Antigravity CLI は GitHub issue で TODO、Gemini CLI は扱わない)。詳細は §5 を参照。
 
 ## 3. Layer 1: 思想層
 
@@ -99,86 +99,97 @@ Layer 2 の `qgb.core.command.run_command` は、利用者が与えた foregroun
 
 ## 5. Layer 3: スキル層（Phase 5、エージェント中立）
 
-### 構造
+### 構造 (A1' = body.md 単一正本、Phase 5 Step 5.a-2-2 で確定)
 
-Layer 3 は **単一の中間表現 + コンバータ + 3 エージェント向け成果物** で構成される：
+Layer 3 は **A1' 単一正本 + コンバータ + Claude Code/Codex CLI 向け成果物** で構成される：
 
 ```text
 skills/source/                   # 中間表現（正本、リポジトリで保守）
-  metadata.yaml
-  body.md
-  workflow.md
-  references.md
-  prompts/
-    design-stages.md
-    review-policy.md
+  metadata.yaml                  # thin typed manifest (build matrix 宣言)
+  metadata.schema.json           # JSON Schema 型固定
+  body.md                        # authored source 正本
+                                 # (full モード本文 + split helper 本文を
+                                 #  include marker で内包する単一ファイル)
 
 tools/build_skill.py             # コンバータ（リポジトリで保守）
 
 dist/skills/                     # ビルド成果物（.gitignore、リリース時に生成）
-  claude/
-  codex/
-  gemini/
+  full/
+    claude/   SKILL.md           # 単一ファイル (helper を本文に embed)
+    codex/    SKILL.md
+  split/
+    claude/
+      SKILL.md
+      workflow.md                # body.md include marker から converter 生成
+      references.md              # 同上
+      prompts/
+        design-stages.md         # 同上
+        review-policy.md         # 同上
+    codex/  (同構造)
 ```
+
+`workflow.md` / `references.md` / `prompts/design-stages.md` / `prompts/review-policy.md` は **`skills/source/` には存在しない** (A1' = body.md 単一正本)。これらは body.md 内の include marker (`<!-- split:helper_start <NAME> --> ... <!-- split:helper_end -->`) から converter が split build で機械生成し、`dist/skills/split/{claude,codex}/` 配下にのみ現れる。
 
 ### 中間表現の役割
 
 `skills/source/` がスキルの正本。各エージェント向け成果物はすべてここから派生する。
 
-- `metadata.yaml` — スキル ID、バージョン、各エージェント固有の配置情報
-- `body.md` — スキル本体（中立 Markdown）
-- `workflow.md` — 作業手順
-- `references.md` — Layer 1（思想憲章）と Layer 2（段階設計仕様、設計例パック）への参照集
-- `prompts/` — 段階設計フェーズや policy レビュー用のプロンプト断片
+- `metadata.yaml` — thin typed manifest (skill_id / version / description / converter_min_version / source_files / build_modes / target_agents、Phase 5 v4 case C で確定)
+- `metadata.schema.json` — JSON Schema 型固定
+- `body.md` — スキル本体 (中立 Markdown)、split build で個別 helper として配置される章を include marker で内包
 
-`metadata.yaml` の例：
+`metadata.yaml` の例 (A1' 完成形):
 
 ```yaml
-skill_id: quality-gate-builder
+skill_id: qgb
 version: 0.1.0
-description: 任意のプロジェクトに証跡ゲートを構築するスキル
-entry_body: body.md
-helper_files:
-  - workflow.md
-  - references.md
-  - prompts/design-stages.md
-  - prompts/review-policy.md
-agent_bindings:
-  claude:
-    skill_dir_name: quality-gate-builder
-    frontmatter:
-      name: quality-gate-builder
-      description: 任意のプロジェクトに証跡ゲートを構築する
-      allowed-tools: [Read, Write, Edit, Bash, Glob, Grep]
-  codex:
-    primary_filename: AGENTS.md
-    placement: project_root
-    include_helpers_as: appendix
-  gemini:
-    memory_filename: GEMINI.md
-    command_file: .gemini/commands/qgb.toml
-    command_name: qgb
-    helpers_via_import: true
+description: |
+  qgb (quality-gate-builder) を使って任意のプロジェクトに証跡ゲート
+  (REQ → contract → 機械検査 → ALLOW/DENY) を構築するスキル。
+converter_min_version: 0.1.0
+
+source_files:
+  - body.md              # A1' で source は body.md のみ
+
+build_modes:
+  - full                 # 全部のせ (helper 内容を SKILL.md に embed)
+  - split                # 分離 (helper を別ファイルとして配置)
+
+target_agents:
+  - claude               # Claude Code
+  - codex                # Codex CLI
 ```
+
+`agent_bindings` は Phase 5 v4 で廃止 (二重管理回避)。agent 別の変換規則は `tools/build_skill.py` が持ち、agent 状態 (status / last_verified / hook_support 等) は `development/docs/skill-converter/agent-{name}.md` の front matter で 1 か所だけ管理する。
+
+### 集合分離契約 (A1' 核心)
+
+- `metadata.yaml#source_files` は **converter が直接読む authored source 文書**の一覧 (現状 `[body.md]` のみ)
+- `body.md` 内の include marker 名は **split build の生成 helper 名**を宣言
+- 両者は **別集合** であり、marker 名は `source_files` に含めない
+- A1' により skills/source/ に「読まないが置かれているファイル」は存在しない
 
 ### コンバータの責務
 
-`tools/build_skill.py` は中間表現を読み、3 エージェント向け成果物を `dist/skills/{claude,codex,gemini}/` に生成する。
+`tools/build_skill.py` は中間表現を読み、Claude Code / Codex CLI 向け成果物を `dist/skills/{full,split}/{claude,codex}/` に生成する。
 
 各エージェント向けの変換規則：
 
-| エージェント | 主成果物 | 補助の扱い | 配置先（利用者環境） |
-|---|---|---|---|
-| Claude Code | `SKILL.md`（YAML frontmatter 付き） | ディレクトリ内に補助ファイルを実体として配置 | `~/.claude/skills/<skill-id>/` または `.claude/skills/<skill-id>/` |
-| Codex CLI | `AGENTS.md`（フラット Markdown） | 補助ファイルを `AGENTS.md` 末尾に章として連結 | プロジェクトルート（`AGENTS.md`） |
-| Gemini CLI | `GEMINI.md` + `.gemini/commands/<command>.toml` | 補助ファイルを `@import` で参照、スラッシュコマンドは TOML | `~/.gemini/` またはプロジェクト直下の `.gemini/` |
+| エージェント | 主成果物 | full モード | split モード | 配置先（利用者環境） |
+|---|---|---|---|---|
+| Claude Code | `SKILL.md`（YAML frontmatter 付き） | 単一ファイル (helper 本文を埋め込み) | `SKILL.md` + 4 helper を同ディレクトリに配置 | `~/.claude/skills/<skill-id>/` または `.claude/skills/<skill-id>/` |
+| Codex CLI | `SKILL.md`（Agent Skills 標準準拠） | 単一ファイル | `SKILL.md` + 4 helper を同ディレクトリに配置 | `~/.agents/skills/<skill-id>/` または `.agents/skills/<skill-id>/` |
+
+Antigravity CLI 対応は GitHub issue #25 で TODO 化 (Phase 5 では着手しない)。Gemini CLI は扱わない (終息品)。
 
 ### コンバータが守るべき制約
 
 - 中間表現を介さない直接編集の禁止（思想憲章 C-008）
 - 成果物にコンバータ版数とソースのコミットハッシュを埋め込む（再生成可能性、思想 P7）
-- 各成果物に「これは生成物である。`skills/source/` を編集すること」と明示する
-- 3 エージェントすべてで動作する共通機能を中核に据え、固有機能は補助的に扱う
+- 各成果物に「これは生成物である。`skills/source/body.md` を編集すること」と明示する
+- supported 全 agent で動作する共通機能を中核に据え、固有機能は補助的に扱う
+- `source_files` と marker 名の集合分離を構造的に保証 (collision detection で fail-closed)
+- marker path 安全性検査 (`..` / 絶対パス / バックスラッシュ / 連続区切り / 入れ子等を拒否)
 
 ### 責務
 
@@ -207,7 +218,7 @@ agent_bindings:
 | ファイル | 編集者 | 内容 |
 |---|---|---|
 | `project-context.md` | **人間** | 自然言語で対象プロジェクトの自己定義 (目的、対象範囲、制約、採用しない方式、参照文書) を書く。設計意図と背景の正本 |
-| `project-context.json` | **補佐 Agent (利用者環境の LLM: Claude Code / Codex CLI / Gemini CLI 等)** | md を読んで構造化、schema 整合性を保つ。`generated_by: "agent-assisted"` を立てる |
+| `project-context.json` | **補佐 Agent (利用者環境の LLM: Claude Code / Codex CLI / その他の補佐 LLM)** | md を読んで構造化、schema 整合性を保つ。`generated_by: "agent-assisted"` を立てる |
 | `human_reviewed: true` | **人間のみ** | json をレビューして承認したら手で `true` に書き換える。Agent が立ててはならない (P8 違反になる) |
 
 **不一致時の扱い (md と json が乖離した場合):**
@@ -257,7 +268,7 @@ agent_bindings:
 ### Phase 計画
 
 - Phase 1〜4: `skills/source/` のディレクトリ構造のみ予約。コンバータ未実装
-- Phase 5: 中間表現とコンバータを本実装、3 エージェント向けリリースを CI で生成、GitHub Releases にアタッチ
+- Phase 5: 中間表現とコンバータを本実装、Claude Code + Codex CLI 向け (full/split 計 4 成果物) のリリースを CI で生成、GitHub Releases にアタッチ
 
 ## 6. Layer 4: 利用者プロジェクト層
 
@@ -321,7 +332,7 @@ agent_bindings:
 
 これらは qgb リポジトリ側に置き、利用者は必要に応じて参照する。利用者プロジェクトには「確定したもの」だけを書く。
 
-利用者は自分が使うエージェント向けのスキル成果物（`SKILL.md` / `AGENTS.md` / `GEMINI.md` のいずれか）だけを GitHub Releases から取得し、各エージェントの規約に従って配置する。
+利用者は自分が使うエージェント向けのスキル成果物 (Claude Code / Codex CLI 用の `SKILL.md` + 補助ファイル、full モード or split モードのいずれか 1 セット) だけを GitHub Releases から取得し、各エージェントの規約に従って配置する。
 
 ### 変更主体
 
@@ -422,7 +433,7 @@ Python は composer のような vendor 配置が標準でない。core の `com
 
 ### エージェント間の差分の隠蔽
 
-スキル本体（中間表現）は 3 エージェント共通のロジックを記述する。エージェント固有の差分（ツール呼び出しの構文、ファイル読み書きの API、スラッシュコマンドの起動方法）はコンバータが吸収する。
+スキル本体 (中間表現) は supported agent (Claude Code + Codex CLI) 共通のロジックを記述する。エージェント固有の差分 (ツール呼び出しの構文、ファイル読み書きの API、スラッシュコマンドの起動方法) はコンバータが吸収する。
 
 スキル利用者は、自分が使うエージェントの規約に従ってインストールするだけで、同じ動作を得られる。
 

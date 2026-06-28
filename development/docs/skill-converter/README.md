@@ -56,7 +56,7 @@
 - 配置: `~/.codex/AGENTS.md` (user) / project root (root から cwd まで) / `.override.md` で上書き可
 - max bytes: `project_doc_max_bytes` (default 32 KiB)
 
-これは Phase 5 中間表現の `body.md` / `workflow.md` / `references.md` を **Codex CLI 向けには AGENTS.md として 1 ファイルに連結** する選択肢を示唆 (Codex CLI 利用者が`.agents/skills/qgb/` でなく project root に置きたい場合の経路として)。ただし Phase 5 では **`.agents/skills/qgb/SKILL.md` 経路を main 経路**にして、AGENTS.md は補助的に扱う方針 (Skill 標準の方が wide 適用可能)。
+これは Phase 5 中間表現の `body.md` (および split build で `body.md` include marker から converter が生成する `workflow.md` / `references.md`、A1' 構造) を **Codex CLI 向けには AGENTS.md として 1 ファイルに連結** する選択肢を示唆 (Codex CLI 利用者が `.agents/skills/qgb/` でなく project root に置きたい場合の経路として)。ただし Phase 5 では **`.agents/skills/qgb/SKILL.md` 経路を main 経路**にして、AGENTS.md は補助的に扱う方針 (Skill 標準の方が wide 適用可能)。なお `workflow.md` / `references.md` は **`skills/source/` には authored source として存在しない** — body.md include marker からの生成物名。
 
 ### Hook 機構は両 agent でほぼ並行
 

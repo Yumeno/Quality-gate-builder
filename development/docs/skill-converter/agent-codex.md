@@ -109,7 +109,7 @@ qgb skill の **代替経路**として、利用者プロジェクトに `AGENTS
 ### AGENTS.md を Phase 5 で生成するかの判断
 
 - **生成しない案**: main 経路 SKILL.md で十分、利用者は `~/.agents/skills/qgb/` か `.agents/skills/qgb/` に入れる。AGENTS.md は利用者が必要に応じて手で書く
-- **生成する案**: `body.md` / `workflow.md` / `references.md` を連結した AGENTS.md を `dist/skills/{full,split}/codex/AGENTS.md` として用意、利用者の選択肢を増やす
+- **生成する案**: `body.md` (および split build 用に converter が body.md include marker から機械生成する `workflow.md` / `references.md`、A1' 構造) を連結した AGENTS.md を `dist/skills/{full,split}/codex/AGENTS.md` として用意、利用者の選択肢を増やす
 
 **Phase 5 v4 では「生成しない」がデフォルト判断**。Codex CLI 向け main 経路は SKILL.md、AGENTS.md は Phase 6+ で利用者要望があれば追加 (issue 起票で対応)。
 

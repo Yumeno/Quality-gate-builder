@@ -18,10 +18,6 @@ converter_min_version: 0.1.0
 
 source_files:
   - body.md
-  - workflow.md
-  - references.md
-  - prompts/design-stages.md
-  - prompts/review-policy.md
 
 build_modes:
   - full

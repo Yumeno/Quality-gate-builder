@@ -125,7 +125,7 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
 - 推奨段階数は 3〜7 (1〜2 は階層化の意味が薄く、8 以上は単一責任の破綻サイン)
 - 各段階には `responsibility` (一文) を明示する (`policy.json` で機械的に強制、複数センテンスは単一責任原則違反の警告)
 
-段階設計の進め方は `prompts/design-stages.md` 参照 (パターン B/C)。
+段階設計の進め方は「段階設計プロンプト」を参照 (パターン B/C、full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/design-stages.md`)。
 
 <!-- split:helper_start workflow.md -->
 
