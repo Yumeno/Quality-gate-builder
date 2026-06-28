@@ -9,7 +9,7 @@ Step 5.a-0 で確定する成果物受け入れ条件。5.b 実装 + 5.b-ci CI +
 | **生成ファイル** | `SKILL.md` 単独 (本文に philosophy/stage-design/examples 全て埋め込み) | `SKILL.md` + `workflow.md` + `references.md` + `prompts/design-stages.md` + `prompts/review-policy.md` | `SKILL.md` 単独 (構造は Claude full と同等の本文、frontmatter 差分のみ) | `SKILL.md` + helper files (Claude split と同型) |
 | **frontmatter** | `name: qgb` + `description` + `allowed-tools` + 他 (`agent-claude.md` 参照) | 同 (full / split で frontmatter 同一) | `name: qgb` + `description` (Codex CLI で確認済キーのみ) | 同 |
 | **構文検証** | YAML frontmatter parse 成功 + Markdown parse 成功 | 同 + helper files も Markdown parse 成功 | 同 (Codex 側で `name`/`description` が読める) | 同 + helper files Markdown parse |
-| **生成物 header** | 全成果物先頭に generator comment (converter version + source content digest + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時 / source commit hash は埋め込まない** (下記「deterministic build 契約」参照、commit hash は golden 自己参照問題を構造的に回避) | 同 | 同 | 同 |
+| **生成物 header** | 全成果物先頭に generator comment (converter version + build input digest + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時 / source commit hash は埋め込まない** (下記「deterministic build 契約」参照、commit hash は golden 自己参照問題を構造的に回避) | 同 | 同 | 同 |
 | **install ガイド** | `dist/skills/full/claude/INSTALL.md` 同梱、`~/.claude/skills/qgb/` への配置手順 | `dist/skills/split/claude/INSTALL.md`、配置手順 + helper files の関係説明 | `dist/skills/full/codex/INSTALL.md`、`~/.agents/skills/qgb/` への配置手順 | 同 (split 用) |
 | **golden fixture** | `tools/_golden/claude/full/` 配下に期待生成物全件、`tools/build_skill.py` 出力と byte 一致 | `tools/_golden/claude/split/` 配下、同 | `tools/_golden/codex/full/` 配下、同 | `tools/_golden/codex/split/` 配下、同 |
 | **manual smoke** | 配置 → 利用者 prompt 「qgb 入れて」で skill 起動確認 → SKILL.md 内容が Claude に読まれている確認 (深 dogfood で完全な対話を実施) | 同 + helper files が必要な依頼 (例: 「契約段階の設計やって」) で `workflow.md` / `prompts/design-stages.md` が参照される確認 (深 dogfood) | 配置 → smoke (`/skills` で qgb が一覧に出る + 起動成功) のみ。深 dogfood は不要 (案 ii) | 同 (smoke のみ) |
@@ -43,31 +43,50 @@ golden fixture との byte 一致を成り立たせるため、converter は **�
 ### 含める要素 (再現可能な情報)
 
 - `converter_version` (`tools/build_skill.py` の semver、source 同梱)
-- `source_content_digest` (`skills/source/` 配下の authored source 群を canonical 順で連結した sha256 hex digest、下記「source content digest の構成」参照)
+- `build_input_digest` (build 結果を決定する全入力を canonical 順で連結した sha256 hex digest、下記「build_input_digest の構成」参照)
 - 「これは生成物。`skills/source/body.md` を編集すること」固定文言
 
 **`source_commit_hash` は生成物に埋め込まない** (Codex K=2 r2 spec fix #1 反映):
 
 - 旧設計では `git rev-parse HEAD` を埋め込もうとしていた
 - しかし golden fixture 更新 commit で HEAD が変わるため、golden 内の hash が自己参照になり、byte 一致を維持できない
-- 代わりに **source tree の content hash (`source_content_digest`)** を埋め込む。これは入力の完全性証跡として `source_commit_hash` と同等の trust を提供し、HEAD に依存しない (commit 前後で source 内容が同じなら同じ digest)
+- 代わりに **build 入力全体の content hash (`build_input_digest`)** を埋め込む。これは入力の完全性証跡として `source_commit_hash` と同等の trust を提供し、HEAD に依存しない (commit 前後で build 入力が同じなら同じ digest)
 
-### `source_content_digest` の構成 (deterministic input hash)
+### `build_input_digest` の構成 (deterministic input hash、Codex K=2 r3 spec fix #2 反映)
 
-converter は以下の手順で digest を生成:
+**build 結果を変化させる全入力**を digest 対象に含める。converter は以下の手順で digest を生成:
 
-1. `metadata.yaml#source_files` (= `[body.md]` 等) を入力ファイル一覧として取得
-2. ファイル名で **辞書順 ASCII sort** (locale 非依存)
-3. 各ファイルを **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済)
-4. 連結フォーマット: `<file path as UTF-8 bytes>\n<file content bytes>\n` を各ファイルについて生成、全体を 1 byte stream に連結
-5. sha256 を計算、16 進 lowercase で表現
-6. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `source_content_digest: 0123456789abcdef`
+#### digest 対象 (canonical input manifest)
 
-この設計により:
+build 結果は以下に依存するため、すべてを digest 対象に含める:
 
-- **同一 source 内容 → 同一 digest** (clean Git / dirty Git / Git archive / 非 Git 環境すべて同じ digest)
-- **source 1 byte 変更 → digest 完全変化** (binary diffuse な hash の特性)
-- **golden fixture は source 同期で更新**: source 変更 → golden 再生成 + commit (1 commit 内で source と digest が一致する状態を維持)
+1. `metadata.yaml` 全体 (skill_id / version / description / converter_min_version / source_files / build_modes / target_agents)
+2. `metadata.schema.json` 全体 (schema 変更で validate 挙動が変わるため)
+3. `metadata.yaml#source_files` に列挙された authored source 文書 (現状 `[body.md]` のみ、将来追加された場合も含む)
+4. 同梱対象の hook 関連ファイル (`skills/source/hooks/**/*.json` + `skills/source/hooks/**/*.ps1` + `skills/source/hooks/**/*.md` + `skills/source/hooks/**/*.sh` 等、`AGENT_TO_HOOK_DIRNAME` mapping で target_agents に対応する dir のみ)
+5. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` 全体 (converter が status / frontmatter キー / hook_support 等を読むため、変更で build 挙動が変わる)
+6. **converter version** (`converter_version`) も digest 入力に含める (converter 改修で生成物が変わるため、build 入力の一部とみなす)
+
+**ファイル列挙の canonical 順**: 上記 1〜5 の各カテゴリ内で、相対 path の **辞書順 ASCII sort** (locale 非依存)。カテゴリ間順序は上記の番号順 (= manifest 構造順) を固定。
+
+#### digest 計算手順
+
+1. 上記 canonical manifest を構築
+2. 各 input file を **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済)
+3. 連結フォーマット: 各 input について `<categorical id (1〜6)>\n<file path as UTF-8 bytes>\n<file content bytes>\n` を生成、全体を 1 byte stream に連結。`converter_version` だけは `6\n<version string>\n` の形 (file content ではなく文字列直接)
+4. sha256 を計算、16 進 lowercase で表現
+5. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `build_input_digest: 0123456789abcdef`
+
+#### 設計上の主張
+
+- **同一 build 入力 → 同一 digest**: metadata / source / hook / agent docs / converter version のいずれが変わっても digest が変化、それ以外 (環境変数 / HEAD / build 時刻等) では変化しない
+- **build 入力 1 byte 変更 → digest 完全変化** (binary diffuse な hash の特性)
+- **golden fixture は build 入力同期で更新**: 上記いずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
+- **build 入力外の変化は digest を変えない**: 例えば `development/docs/journal/` の追記、利用者プロジェクト側の変更、CI 設定の変更等は digest に影響しない (= golden 比較も影響しない)
+
+#### 旧 source_content_digest との違い
+
+K=2 r2 で導入した `source_content_digest` (body.md のみ対象) は **build 入力の完全性証跡として不十分**だった (Codex K=2 r3 spec fix #2 指摘)。例: hook / metadata のみを変更しても build 結果は変わるが digest は変わらず、golden 不一致が起きるが digest からは原因が辿れない。`build_input_digest` で真の入力範囲を反映する設計に修正。
 
 ### 利用者向け「どの commit で build されたか」の参照
 
