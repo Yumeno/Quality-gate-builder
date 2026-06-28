@@ -38,12 +38,13 @@
     },
     "source_files": {
       "type": "array",
-      "description": "skills/source/ 配下の source 文書一覧。converter はここに列挙されたファイルだけを読む。順序は body (entry) を先頭に、helper はその後の慣習",
+      "description": "converter が直接読む authored source 文書の順序付き一覧。各要素は skills/source/ 配下に実在しなければならない。split helper の出力名は body.md の split:helper_start marker で宣言し、source_files には含めない。A1' (Phase 5 Step 5.a-2-2) では body.md が本文および helper 内容の単一正本となる。path は POSIX 形式 relative path のみ、絶対パス・親参照・空 segment・カレント参照・連続区切り・バックスラッシュは禁止。",
       "minItems": 1,
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*\\.md$"
+        "description": "skills/source/ からの POSIX 形式 relative path (.md 拡張子必須)。`..` / `./` / 連続 `//` / 先頭スラッシュ / 末尾スラッシュ / バックスラッシュは構造的に拒否。",
+        "pattern": "^(?!.*//)(?!.*/\\.\\.?/)(?!.*/\\.\\.?$)(?!\\.\\.?/)[A-Za-z0-9][A-Za-z0-9_-]*(?:/[A-Za-z0-9][A-Za-z0-9_-]*)*\\.md$"
       }
     },
     "build_modes": {
