@@ -250,6 +250,18 @@ function Check-PowerShellArgv {
         $findings += "C3: '-File' appears $fileCount times in contract.command; exactly one occurrence is required. PowerShell would use the first, but the duplicate is misleading. See body.md sec 6.5."
     }
 
+    # -Command / -EncodedCommand are mutually exclusive with -File. If any
+    # execution-mode option appears alongside -File, PowerShell runs the
+    # -Command body and treats -File + path as string arguments to that
+    # command -- the target script is never executed but exit code is 0.
+    # This is a silent failure mode that must be detected.
+    $exclusiveWithFile = @('-command', '-encodedcommand')
+    foreach ($excl in $exclusiveWithFile) {
+        if ($commandLower -contains $excl) {
+            $findings += "C3: contract.command contains '$excl' alongside '-File'. These options are mutually exclusive in PowerShell host invocation: '-Command' / '-EncodedCommand' specifies an execution-mode body, and PowerShell would silently treat '-File' and its path as string arguments to that command, never executing the target script (exit 0 with stdout showing the command output, not the script output). Choose exactly one execution mode. For verification_type=command contracts that invoke .ps1, use -File only. See body.md sec 6.5."
+        }
+    }
+
     # Structure: all host options must appear BEFORE -File.
     $hostOptionLower = @(
         '-nologo', '-noprofile', '-noninteractive', '-executionpolicy',

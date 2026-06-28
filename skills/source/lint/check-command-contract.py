@@ -397,6 +397,28 @@ def check_powershell_argv(
             "first, but the duplicate is misleading. See body.md §6.5."
         )
 
+    # -Command / -EncodedCommand are mutually exclusive with -File. If
+    # any execution-mode option appears alongside -File, PowerShell runs
+    # the -Command body and treats -File + path as string arguments to
+    # that command — the target script is never executed but the contract
+    # still appears to exit 0. This is a silent failure mode that must
+    # be detected. See:
+    #   https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+    exclusive_with_file = {"-command", "-encodedcommand"}
+    for excl in exclusive_with_file:
+        if excl in command_lower:
+            findings.append(
+                f"C3: contract.command contains '{excl}' alongside '-File'. "
+                "These options are mutually exclusive in PowerShell host "
+                "invocation: '-Command' / '-EncodedCommand' specifies an "
+                "execution-mode body, and PowerShell would silently treat "
+                "'-File' and its path as string arguments to that command, "
+                "never executing the target script (exit 0 with stdout "
+                "showing the command output, not the script output). "
+                "Choose exactly one execution mode. For verification_type=command "
+                "contracts that invoke .ps1, use -File only. See body.md §6.5."
+            )
+
     # Structure: all host options must appear BEFORE -File. Anything after
     # -File is the script path or script-side arguments, not host options.
     host_option_lowercase = {
