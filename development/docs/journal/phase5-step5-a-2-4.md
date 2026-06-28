@@ -91,7 +91,8 @@ Step 5.a-2-4 で発生した修正は **既存 spec drift の訂正ではなく�
 | `153a2b1` | 段階 4 | skills/source/lint/check-command-contract.{ps1,py} + README.md (新設) |
 | `2dd22cb` | 段階 5 | examples/japanese-docs-pwsh/ 新設 (18 files、ζ fixture) |
 | `9c57de8` | 段階 6 | body.md §13.3.5 mojibake sentinel (γ-lite + κ) + 完結 journal §6.6 拡張 |
-| 本 commit | 段階 7 | 5.a-2-4 完結 journal (本書) |
+| `db34758` | 7 | 5.a-2-4 完結 journal (本書、初版) |
+| K=2 r1 fix commit (本書更新後) | 段階 8 K=2 r1 fix | (a) lint script Python + PowerShell の C1/C2/C4 必須化 (script path 解決失敗時、PowerShell runtime のみ hard finding、他 runtime は skip) (b) C3 完全明示 argv 検証強化 (invoker basename 完全一致、runtime ↔ invoker 整合、-File 後 script path 検査) (c) C4 必須/任意分離 ([Console]::OutputEncoding 必須、$OutputEncoding advisory) (d) C5 advisory 化 (利用者 host との差を accept) (e) acceptance-matrix.md に lint 同梱規律を正本化 (digest カテゴリ 5 = lint、合計 8 カテゴリへ番号繰り下げ、生成物表に lint/ 行追加) |
 
 ## 4. 機械検証実績
 

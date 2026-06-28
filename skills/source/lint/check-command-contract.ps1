@@ -9,21 +9,23 @@
 # BOM 不要 (JP keyword は [char]0x<codepoint> で構築)。
 # Python sibling: check-command-contract.py (cross-platform)
 #
+# Behaviour notes (K=2 r1 fix 反映):
+#   - -Script omitted: derive from contract.command for PowerShell runtimes
+#     ("-File" -> next arg). If derivation fails for a PowerShell runtime,
+#     C1/C2/C4 emit hard findings (not silent skip).
+#   - C4 requires [Console]::OutputEncoding (PowerShell self stdout).
+#     $OutputEncoding alone is recommended but does NOT satisfy C4.
+#   - C5 (runtime PATH) is advisory only (host may differ from user env).
+#   - C3 verifies invoker basename exactly, -File presence, and consistency
+#     with -Script if provided.
+#
 # Usage:
 #   powershell -ExecutionPolicy Bypass -NoProfile -File check-command-contract.ps1 `
 #     -Contract <path> [-Script <path>] [-Evidence <path>]
 #
-# Checks (skills/source/body.md §6.5 + §12.5.5):
-#   C1  script extension matches confirmed runtime
-#   C2  PowerShell 5 target + non-ASCII .ps1 but no UTF-8 BOM
-#   C3  contract.command is not properly an argv list with a PowerShell invoker
-#   C4  PowerShell script lacks [Console]::OutputEncoding init
-#   C5  runtime executable not on PATH
-#   C6  stage log contains U+FFFD (mojibake sentinel)
-#
 # Exit codes:
-#   0: all checks passed
-#   1: one or more findings (fix before adopt)
+#   0: no fix-required findings (advisories may have been printed)
+#   1: one or more fix-required findings
 #   2: usage error / file not found
 
 param(
@@ -49,26 +51,27 @@ $RuntimeExtensions = @{
     'node'         = @('.js', '.mjs', '.cjs')
 }
 
-# PowerShell invokers for C3.
-$PowerShellInvokers = @('powershell', 'powershell.exe', 'pwsh', 'pwsh.exe')
+# Allowed invoker basenames per PowerShell runtime (case-insensitive match).
+$PowerShellInvokerBasenames = @{
+    'powershell-5' = @('powershell', 'powershell.exe')
+    'powershell-7' = @('pwsh', 'pwsh.exe')
+}
 
-# PowerShell stdout encoding init regex patterns for C4.
-$PsStdoutInitPatterns = @(
-    '\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8',
-    '\$OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8'
-)
+# PowerShell stdout init regex patterns.
+# Required (C4): [Console]::OutputEncoding = ... UTF8
+$PsRequiredStdoutPattern = '\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8'
+# Recommended (advisory only): $OutputEncoding = ... UTF8
+$PsRecommendedStdoutPattern = '\$OutputEncoding\s*=\s*\[System\.Text\.Encoding\]::UTF8'
 
 # U+FFFD replacement character literal (built from codepoint to keep this
 # script pure ASCII and BOM-independent).
 $ReplacementChar = [char]0xFFFD
 
-# Read text strictly, BOM tolerant.
 function Read-TextStrict {
     param([string]$Path)
     return [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($true))
 }
 
-# Detect UTF-8 BOM (first 3 bytes = EF BB BF).
 function Test-Utf8Bom {
     param([string]$Path)
     $bytes = [System.IO.File]::ReadAllBytes($Path)
@@ -76,7 +79,6 @@ function Test-Utf8Bom {
     return $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
 }
 
-# True iff string is ASCII-only.
 function Test-PureAscii {
     param([string]$Text)
     foreach ($ch in $Text.ToCharArray()) {
@@ -85,7 +87,6 @@ function Test-PureAscii {
     return $true
 }
 
-# Find runtime executable on PATH.
 function Find-RuntimeExecutable {
     param([string]$Runtime)
     $candidates = @{
@@ -103,15 +104,53 @@ function Find-RuntimeExecutable {
     return $null
 }
 
+function Get-ScriptPathFromCommand {
+    param($Contract)
+    if (-not $Contract.command -or -not ($Contract.command -is [System.Array])) { return $null }
+    $runtime = $Contract.runtime
+    if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $null }
+    for ($i = 0; $i -lt $Contract.command.Length - 1; $i++) {
+        if ($Contract.command[$i] -eq '-File') {
+            return [string]$Contract.command[$i + 1]
+        }
+    }
+    return $null
+}
+
+function Resolve-ScriptPath {
+    param($Contract, [string]$ScriptArg, [string]$ContractPath)
+    if (-not [string]::IsNullOrWhiteSpace($ScriptArg)) {
+        return $ScriptArg
+    }
+    $derived = Get-ScriptPathFromCommand -Contract $Contract
+    if (-not $derived) { return $null }
+    if ([System.IO.Path]::IsPathRooted($derived)) { return $derived }
+    # Try contract dir, then cwd.
+    $contractDir = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($ContractPath))
+    $tryDirs = @($contractDir, (Get-Location).Path)
+    foreach ($dir in $tryDirs) {
+        $candidate = Join-Path $dir $derived
+        if (Test-Path -LiteralPath $candidate) {
+            return [System.IO.Path]::GetFullPath($candidate)
+        }
+    }
+    return $derived
+}
+
 function Check-ExtensionRuntimeMatch {
-    param($Contract, $ScriptPath)
+    param($Contract, [string]$ScriptPath)
     $findings = @()
     $runtime = $Contract.runtime
     if (-not $runtime) {
         $findings += "C1: contract.runtime is not declared. Add a runtime field (e.g. 'powershell-5' / 'bash' / 'python' / 'node') to enable capability-based dispatch (body.md sec 12.5.5)."
         return $findings
     }
-    if (-not $ScriptPath) { return $findings }
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        if ($PowerShellInvokerBasenames.ContainsKey($runtime)) {
+            $findings += "C1: PowerShell script path could not be resolved. Provide -Script or ensure contract.command uses an explicit '-File <script>' form (body.md sec 6.5 PowerShell 5 rules)."
+        }
+        return $findings
+    }
     $expected = $RuntimeExtensions[$runtime]
     if ($expected -and -not ($expected -contains [System.IO.Path]::GetExtension($ScriptPath).ToLower())) {
         $findings += "C1: script extension '$([System.IO.Path]::GetExtension($ScriptPath))' does not match runtime '$runtime' (expected one of $($expected -join ', ')). Match the script extension to the confirmed runtime or change contract.runtime (body.md sec 12.5.5)."
@@ -120,9 +159,13 @@ function Check-ExtensionRuntimeMatch {
 }
 
 function Check-PowerShellBom {
-    param($Contract, $ScriptPath)
+    param($Contract, [string]$ScriptPath)
     $findings = @()
-    if ($Contract.runtime -ne 'powershell-5' -or -not $ScriptPath) { return $findings }
+    if ($Contract.runtime -ne 'powershell-5') { return $findings }
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        $findings += "C2: cannot check BOM because script path is unresolved (PowerShell 5 runtime requires a .ps1 path via -Script or contract.command's -File argument)."
+        return $findings
+    }
     if ([System.IO.Path]::GetExtension($ScriptPath).ToLower() -ne '.ps1') { return $findings }
     if (-not (Test-Path -LiteralPath $ScriptPath)) {
         $findings += "C2: PowerShell script not found: $ScriptPath"
@@ -137,68 +180,98 @@ function Check-PowerShellBom {
 }
 
 function Check-PowerShellArgv {
-    param($Contract)
+    param($Contract, [string]$ScriptPath)
     $findings = @()
     $runtime = $Contract.runtime
-    if ($runtime -ne 'powershell-5' -and $runtime -ne 'powershell-7') { return $findings }
+    if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $findings }
     $command = $Contract.command
     if (-not ($command -is [System.Array]) -or $command.Count -eq 0) {
         $findings += "C3: contract.command is not a non-empty list. For verification_type=command, contract.command must be the argv as a list (body.md sec 6.5 step 4)."
         return $findings
     }
-    $first = [string]$command[0]
-    $matched = $false
-    foreach ($invoker in $PowerShellInvokers) {
-        if ($first.ToLower().Contains($invoker)) { $matched = $true; break }
+
+    # First arg: invoker basename exact match (case-insensitive).
+    $allowedInvokers = $PowerShellInvokerBasenames[$runtime]
+    $firstBasename = ([System.IO.Path]::GetFileName([string]$command[0])).ToLower()
+    if (-not ($allowedInvokers -contains $firstBasename)) {
+        $findings += "C3: contract.command[0] basename = '$firstBasename' is not a recognized invoker for runtime '$runtime' (expected one of $($allowedInvokers -join ', ')). PowerShell runtimes require an explicit invoker as the first argv element. See body.md sec 6.5 PowerShell 5 rules."
     }
-    if (-not $matched) {
-        $findings += "C3: contract.command[0] = '$first' does not look like a PowerShell invoker. .ps1 cannot be executed directly as the first argv item; you need: ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', '<script.ps1>']. See body.md sec 6.5 PowerShell 5 rules."
-        return $findings
-    }
+
+    # Required flags.
     $required = @('-NoLogo', '-NoProfile', '-NonInteractive')
+    if ($runtime -eq 'powershell-5') {
+        $required += '-ExecutionPolicy'
+        $required += 'Bypass'
+    }
     $missing = $required | Where-Object { $command -notcontains $_ }
     if ($missing.Count -gt 0) {
-        $findings += "C3: PowerShell argv is missing recommended flags ($($missing -join ', ')). These flags ensure deterministic execution (no profile load, no interactive prompt). See body.md sec 6.5."
+        $findings += "C3: PowerShell argv is missing required flags ($($missing -join ', ')). These flags ensure deterministic execution (no profile load, no interactive prompt, no policy ambiguity). See body.md sec 6.5."
+    }
+
+    # -File presence and consistency.
+    $fileIdx = [Array]::IndexOf($command, '-File')
+    if ($fileIdx -lt 0) {
+        $findings += "C3: PowerShell argv is missing '-File <script.ps1>'. .ps1 must be invoked via -File explicitly (not via positional argument or shell association). See body.md sec 6.5."
+        return $findings
+    }
+    if ($fileIdx + 1 -ge $command.Count) {
+        $findings += "C3: '-File' is the last argv element, but a script path is required immediately after. See body.md sec 6.5."
+        return $findings
+    }
+    $fileArg = [string]$command[$fileIdx + 1]
+    if ($fileArg.StartsWith('-')) {
+        $findings += "C3: argv item after '-File' is '$fileArg', which looks like another flag. Expected a script path. See body.md sec 6.5."
+    } elseif (-not [string]::IsNullOrWhiteSpace($ScriptPath)) {
+        # Compare -File argument with -Script we resolved.
+        $fileBasename = [System.IO.Path]::GetFileName($fileArg)
+        $scriptBasename = [System.IO.Path]::GetFileName($ScriptPath)
+        if ([System.IO.Path]::IsPathRooted($fileArg)) {
+            $fileFull = [System.IO.Path]::GetFullPath($fileArg)
+            $scriptFull = [System.IO.Path]::GetFullPath($ScriptPath)
+            if ($fileFull -ne $scriptFull) {
+                $findings += "C3: contract.command -File argument '$fileArg' does not match -Script '$ScriptPath'. The skill should invoke exactly the script under review."
+            }
+        } elseif ($fileBasename -ne $scriptBasename) {
+            $findings += "C3: contract.command -File argument basename '$fileBasename' does not match -Script basename '$scriptBasename'."
+        }
     }
     return $findings
 }
 
 function Check-PowerShellStdoutInit {
-    param($Contract, $ScriptPath)
+    param($Contract, [string]$ScriptPath)
     $findings = @()
     $runtime = $Contract.runtime
-    if (($runtime -ne 'powershell-5' -and $runtime -ne 'powershell-7') -or -not $ScriptPath) {
+    if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $findings }
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        $findings += "C4: cannot check [Console]::OutputEncoding init because script path is unresolved (PowerShell runtime requires a .ps1 path)."
         return $findings
     }
     if ([System.IO.Path]::GetExtension($ScriptPath).ToLower() -ne '.ps1') { return $findings }
     if (-not (Test-Path -LiteralPath $ScriptPath)) { return $findings }
     $text = Read-TextStrict -Path $ScriptPath
-    $matched = $false
-    foreach ($pat in $PsStdoutInitPatterns) {
-        if ($text -match $pat) { $matched = $true; break }
-    }
-    if (-not $matched) {
-        $findings += "C4: PowerShell script '$ScriptPath' does not initialize [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 (or `$OutputEncoding equivalent). Without this, stdout may use system code page (cp932 on Japanese Windows), causing qgb's UTF-8 decode to produce U+FFFD characters. See body.md sec 6.5 + sec 12.5.5 PowerShell checklist."
+    if (-not ($text -match $PsRequiredStdoutPattern)) {
+        $findings += "C4: PowerShell script '$ScriptPath' does not set [Console]::OutputEncoding = [System.Text.Encoding]::UTF8. This is required; `$OutputEncoding alone is insufficient (it only affects child-process pipelines, not qgb's read of PowerShell's own stdout). Without [Console]::OutputEncoding, stdout may use system code page (cp932 on Japanese Windows), causing qgb's UTF-8 decode to produce U+FFFD characters. See body.md sec 6.5 + sec 12.5.5 PowerShell checklist."
     }
     return $findings
 }
 
 function Check-RuntimeAvailable {
     param($Contract)
-    $findings = @()
+    $advisories = @()
     $runtime = $Contract.runtime
-    if (-not $runtime) { return $findings }
+    if (-not $runtime) { return @(), $advisories }
     $resolved = Find-RuntimeExecutable -Runtime $runtime
     if (-not $resolved) {
-        $findings += "C5: runtime '$runtime' executable not found on PATH. Either install the runtime, or change contract.runtime to one available in the target environment. (This check runs in the skill's local env; the user environment may differ -- verify with the user.)"
+        $advisories += "C5 (advisory): runtime '$runtime' executable not found on this host's PATH. This is the skill-agent's local environment; the target user environment may differ. Verify availability on the user's host before relying on this contract."
     }
-    return $findings
+    return @(), $advisories
 }
 
 function Check-EvidenceMojibake {
     param([string]$EvidencePath)
     $findings = @()
-    if (-not $EvidencePath) { return $findings }
+    if ([string]::IsNullOrWhiteSpace($EvidencePath)) { return $findings }
     if (-not (Test-Path -LiteralPath $EvidencePath)) {
         $findings += "C6: evidence/stage log '$EvidencePath' not found. Run ``python -m qgb check`` first, then re-run this lint with -Evidence <path-to-stage-log>."
         return $findings
@@ -209,6 +282,21 @@ function Check-EvidenceMojibake {
         $findings += "C6: stage log '$EvidencePath' contains $count U+FFFD (replacement character) occurrence(s). This indicates command stdout/stderr was not valid UTF-8 (likely cp932 or another encoding). Fix script's output encoding (e.g. set [Console]::OutputEncoding = UTF8 for PowerShell, PYTHONUTF8=1 for Python). See body.md sec 6.5 kappa mojibake sentinel."
     }
     return $findings
+}
+
+function Check-OutputEncodingAdvisory {
+    param($Contract, [string]$ScriptPath)
+    $advisories = @()
+    $runtime = $Contract.runtime
+    if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $advisories }
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) { return $advisories }
+    if (-not (Test-Path -LiteralPath $ScriptPath)) { return $advisories }
+    if ([System.IO.Path]::GetExtension($ScriptPath).ToLower() -ne '.ps1') { return $advisories }
+    $text = Read-TextStrict -Path $ScriptPath
+    if (-not ($text -match $PsRecommendedStdoutPattern)) {
+        $advisories += "advisory (PowerShell recommended): script '$ScriptPath' does not set `$OutputEncoding = [System.Text.Encoding]::UTF8. While not required by C4, it is recommended when the script pipes output to child processes that expect UTF-8."
+    }
+    return $advisories
 }
 
 # --- main ---
@@ -231,21 +319,35 @@ if ($contractObj.verification_type -ne 'command') {
     exit 0
 }
 
-$allFindings = @()
-$allFindings += Check-ExtensionRuntimeMatch -Contract $contractObj -ScriptPath $Script
-$allFindings += Check-PowerShellBom         -Contract $contractObj -ScriptPath $Script
-$allFindings += Check-PowerShellArgv        -Contract $contractObj
-$allFindings += Check-PowerShellStdoutInit  -Contract $contractObj -ScriptPath $Script
-$allFindings += Check-RuntimeAvailable      -Contract $contractObj
-$allFindings += Check-EvidenceMojibake      -EvidencePath $Evidence
+$resolvedScript = Resolve-ScriptPath -Contract $contractObj -ScriptArg $Script -ContractPath $Contract
 
-if ($allFindings.Count -eq 0) {
-    Write-Output "OK: all checks passed."
+$findings = @()
+$advisories = @()
+
+$findings += Check-ExtensionRuntimeMatch -Contract $contractObj -ScriptPath $resolvedScript
+$findings += Check-PowerShellBom         -Contract $contractObj -ScriptPath $resolvedScript
+$findings += Check-PowerShellArgv        -Contract $contractObj -ScriptPath $resolvedScript
+$findings += Check-PowerShellStdoutInit  -Contract $contractObj -ScriptPath $resolvedScript
+$runtimeFindings, $runtimeAdvisories = Check-RuntimeAvailable -Contract $contractObj
+$findings += $runtimeFindings
+$advisories += $runtimeAdvisories
+$findings += Check-EvidenceMojibake      -EvidencePath $Evidence
+$advisories += Check-OutputEncodingAdvisory -Contract $contractObj -ScriptPath $resolvedScript
+
+if ($advisories.Count -gt 0) {
+    [Console]::Error.WriteLine("NOTE: $($advisories.Count) advisory note(s):")
+    for ($i = 0; $i -lt $advisories.Count; $i++) {
+        [Console]::Error.WriteLine("  ($($i+1)) $($advisories[$i])")
+    }
+}
+
+if ($findings.Count -eq 0) {
+    Write-Output "OK: all fix-required checks passed."
     exit 0
 }
 
-[Console]::Error.WriteLine("FAIL: $($allFindings.Count) finding(s):")
-for ($i = 0; $i -lt $allFindings.Count; $i++) {
-    [Console]::Error.WriteLine("  [$($i+1)] $($allFindings[$i])")
+[Console]::Error.WriteLine("FAIL: $($findings.Count) fix-required finding(s):")
+for ($i = 0; $i -lt $findings.Count; $i++) {
+    [Console]::Error.WriteLine("  [$($i+1)] $($findings[$i])")
 }
 exit $ExitFix

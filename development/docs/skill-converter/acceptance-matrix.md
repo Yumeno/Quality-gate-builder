@@ -13,7 +13,8 @@ Step 5.a-0 で確定する成果物受け入れ条件。5.b 実装 + 5.b-ci CI +
 | **install ガイド** | `dist/skills/full/claude/INSTALL.md` 同梱、`~/.claude/skills/qgb/` への配置手順 | `dist/skills/split/claude/INSTALL.md`、配置手順 + helper files の関係説明 | `dist/skills/full/codex/INSTALL.md`、`~/.agents/skills/qgb/` への配置手順 | 同 (split 用) |
 | **golden fixture** | `tools/_golden/claude/full/` 配下に期待生成物全件、`tools/build_skill.py` 出力と byte 一致 | `tools/_golden/claude/split/` 配下、同 | `tools/_golden/codex/full/` 配下、同 | `tools/_golden/codex/split/` 配下、同 |
 | **manual smoke** | 配置 → 利用者 prompt 「qgb 入れて」で skill 起動確認 → SKILL.md 内容が Claude に読まれている確認 (深 dogfood で完全な対話を実施) | 同 + helper files が必要な依頼 (例: 「契約段階の設計やって」) で `workflow.md` / `prompts/design-stages.md` が参照される確認 (深 dogfood) | 配置 → smoke (`/skills` で qgb が一覧に出る + 起動成功) のみ。深 dogfood は不要 (案 ii) | 同 (smoke のみ) |
-| **hook (任意)** | `dist/skills/full/claude/hooks/settings.example.json` 同梱、INSTALL.md で opt-in 手順説明 | 同 | `dist/skills/full/codex/hooks/hooks.example.json` 同梱、INSTALL.md で opt-in 手順説明 | 同 |
+| **hook (任意)** | `dist/skills/full/claude/hooks/settings.example.json` + `scripts/check-relevance.ps1` + `README.md` 同梱、INSTALL.md で opt-in 手順説明 | 同 | `dist/skills/full/codex/hooks/hooks.example.json` + `scripts/check-relevance.ps1` + `README.md` 同梱、INSTALL.md で opt-in 手順説明 | 同 |
+| **lint (Step 5.a-2-4 で追加)** | `dist/skills/full/claude/lint/check-command-contract.{py,ps1}` + `README.md` 同梱、INSTALL.md で「skill agent が verification_type=command 契約を起草した直後に自動実行する旨」を説明 | 同 | `dist/skills/full/codex/lint/check-command-contract.{py,ps1}` + `README.md` 同梱、INSTALL.md で同様の説明 | 同 |
 | **build mode 整合性** | full モードは body.md include marker 内容を本文に embedded、外部 helper ファイル参照ゼロ (helper は `skills/source/` には authored source として存在しない、A1' = body.md 単一正本) | split モードは body.md 骨子 + helper files (body.md include marker から converter が機械生成) で参照、marker 通りに本文が切り出されている | full / split / agent 別の整合性確認は build_skill.py + golden fixture で機械検証、`source_files` (= `[body.md]`) と marker 名の集合分離も検証 | 同 |
 
 ## 検証時期
@@ -64,18 +65,19 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 2. `metadata.schema.json` 全体 (schema 変更で validate 挙動が変わるため)
 3. `metadata.yaml#source_files` に列挙された authored source 文書 (現状 `[body.md]` のみ、将来追加された場合も含む)
 4. 同梱対象の hook 関連ファイル (`skills/source/hooks/**/*.json` + `skills/source/hooks/**/*.ps1` + `skills/source/hooks/**/*.md` + `skills/source/hooks/**/*.sh` 等、`AGENT_TO_HOOK_DIRNAME` mapping で target_agents に対応する dir のみ)
-5. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` 全体 (converter が status / frontmatter キー / hook_support 等を読むため、変更で build 挙動が変わる)
-6. **converter 実装自身**: `tools/build_skill.py` (single file の場合) または `tools/build_skill/**/*.py` (package の場合) の全 source code (K=2 r4 spec fix #2 反映、`converter_version` 文字列のみでは version bump 忘れで build 挙動変化を捉えられない問題を構造的に解消)
-7. **環境変数**: `SOURCE_DATE_EPOCH` の値 (設定されていれば、digest に含めることで K=2 r4 spec fix #3 反映 — release CI build で日時を埋め込むケースでも digest と build 結果が一致)。未設定なら manifest に `SOURCE_DATE_EPOCH: unset` と記録
+5. **同梱対象の lint 関連ファイル** (`skills/source/lint/**/*.py` + `skills/source/lint/**/*.ps1` + `skills/source/lint/**/*.md`、agent 非依存で全 agent の dist に同 copy、K=2 r1 fix #5 で Step 5.a-2-4 追加分を正本化)
+6. `target_agents` の各 agent について `development/docs/skill-converter/agent-{name}.md` 全体 (converter が status / frontmatter キー / hook_support 等を読むため、変更で build 挙動が変わる)
+7. **converter 実装自身**: `tools/build_skill.py` (single file の場合) または `tools/build_skill/**/*.py` (package の場合) の全 source code (K=2 r4 spec fix #2 反映、`converter_version` 文字列のみでは version bump 忘れで build 挙動変化を捉えられない問題を構造的に解消)
+8. **環境変数**: `SOURCE_DATE_EPOCH` の値 (設定されていれば、digest に含めることで K=2 r4 spec fix #3 反映 — release CI build で日時を埋め込むケースでも digest と build 結果が一致)。未設定なら manifest に `SOURCE_DATE_EPOCH: unset` と記録
 
-**ファイル列挙の canonical 順**: 上記 1〜6 の各カテゴリ内で、相対 path の **辞書順 ASCII sort** (locale 非依存)。カテゴリ間順序は上記の番号順 (= manifest 構造順) を固定。カテゴリ 7 は単一 key-value なので順序問題なし。
+**ファイル列挙の canonical 順**: 上記 1〜7 の各カテゴリ内で、相対 path の **辞書順 ASCII sort** (locale 非依存)。カテゴリ間順序は上記の番号順 (= manifest 構造順) を固定。カテゴリ 8 は単一 key-value なので順序問題なし。
 
 #### digest 計算手順
 
 1. 上記 canonical manifest を構築
 2. 各 input file を **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済、digest 対象は `.md` / `.json` / `.yaml` / `.yml` / `.ps1` / `.sh` / `.py`)
-3. 連結フォーマット: 各 input について `<categorical id (1〜7)>\n<file path as UTF-8 bytes>\n<file content bytes>\n` を生成、全体を 1 byte stream に連結
-   - カテゴリ 7 (環境変数) は `7\nSOURCE_DATE_EPOCH\n<value or unset>\n` の形 (file content ではなく文字列直接)
+3. 連結フォーマット: 各 input について `<categorical id (1〜8)>\n<file path as UTF-8 bytes>\n<file content bytes>\n` を生成、全体を 1 byte stream に連結
+   - カテゴリ 8 (環境変数) は `8\nSOURCE_DATE_EPOCH\n<value or unset>\n` の形 (file content ではなく文字列直接)
 4. sha256 を計算、16 進 lowercase で表現
 5. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `build_input_digest: 0123456789abcdef`
 
@@ -83,9 +85,9 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 
 #### 設計上の主張
 
-- **同一 build 入力 → 同一 digest**: 7 カテゴリの input (metadata / schema / source_files / 同梱 hook / agent docs / converter 実装 / `SOURCE_DATE_EPOCH` 値) のいずれが変わっても digest が変化、**それ以外** (HEAD / build 時刻 / それ以外の環境変数等) では変化しない
+- **同一 build 入力 → 同一 digest**: 8 カテゴリの input (metadata / schema / source_files / 同梱 hook / 同梱 lint / agent docs / converter 実装 / `SOURCE_DATE_EPOCH` 値) のいずれが変わっても digest が変化、**それ以外** (HEAD / build 時刻 / それ以外の環境変数等) では変化しない
 - **build 入力 1 byte 変更 → digest 完全変化** (binary diffuse な hash の特性)
-- **golden fixture は build 入力同期で更新**: 上記 7 カテゴリのいずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
+- **golden fixture は build 入力同期で更新**: 上記 8 カテゴリのいずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
 - **build 入力外の変化は digest を変えない**: 例えば `development/docs/journal/` の追記、利用者プロジェクト側の変更、CI 設定の変更等は digest に影響しない (= golden 比較も影響しない)
 - **`SOURCE_DATE_EPOCH` 設定時の挙動**: 環境変数値が digest カテゴリ 7 に含まれるため、設定値が異なれば digest も異なる。通常 build (未設定) と release build (epoch 値設定) は別 digest 系統で扱う (golden fixture も 2 系統 — 通常 build 系統が standard、release CI 系統は release artifact 検証用、運用は 5.b / 5.c で具体化)
 
