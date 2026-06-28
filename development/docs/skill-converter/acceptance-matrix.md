@@ -9,7 +9,7 @@ Step 5.a-0 で確定する成果物受け入れ条件。5.b 実装 + 5.b-ci CI +
 | **生成ファイル** | `SKILL.md` 単独 (本文に philosophy/stage-design/examples 全て埋め込み) | `SKILL.md` + `workflow.md` + `references.md` + `prompts/design-stages.md` + `prompts/review-policy.md` | `SKILL.md` 単独 (構造は Claude full と同等の本文、frontmatter 差分のみ) | `SKILL.md` + helper files (Claude split と同型) |
 | **frontmatter** | `name: qgb` + `description` + `allowed-tools` + 他 (`agent-claude.md` 参照) | 同 (full / split で frontmatter 同一) | `name: qgb` + `description` (Codex CLI で確認済キーのみ) | 同 |
 | **構文検証** | YAML frontmatter parse 成功 + Markdown parse 成功 | 同 + helper files も Markdown parse 成功 | 同 (Codex 側で `name`/`description` が読める) | 同 + helper files Markdown parse |
-| **生成物 header** | 全成果物先頭に generator comment (converter version + source commit hash + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時は埋め込まない** (下記「deterministic build 契約」参照) | 同 | 同 | 同 |
+| **生成物 header** | 全成果物先頭に generator comment (converter version + source content digest + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時 / source commit hash は埋め込まない** (下記「deterministic build 契約」参照、commit hash は golden 自己参照問題を構造的に回避) | 同 | 同 | 同 |
 | **install ガイド** | `dist/skills/full/claude/INSTALL.md` 同梱、`~/.claude/skills/qgb/` への配置手順 | `dist/skills/split/claude/INSTALL.md`、配置手順 + helper files の関係説明 | `dist/skills/full/codex/INSTALL.md`、`~/.agents/skills/qgb/` への配置手順 | 同 (split 用) |
 | **golden fixture** | `tools/_golden/claude/full/` 配下に期待生成物全件、`tools/build_skill.py` 出力と byte 一致 | `tools/_golden/claude/split/` 配下、同 | `tools/_golden/codex/full/` 配下、同 | `tools/_golden/codex/split/` 配下、同 |
 | **manual smoke** | 配置 → 利用者 prompt 「qgb 入れて」で skill 起動確認 → SKILL.md 内容が Claude に読まれている確認 (深 dogfood で完全な対話を実施) | 同 + helper files が必要な依頼 (例: 「契約段階の設計やって」) で `workflow.md` / `prompts/design-stages.md` が参照される確認 (深 dogfood) | 配置 → smoke (`/skills` で qgb が一覧に出る + 起動成功) のみ。深 dogfood は不要 (案 ii) | 同 (smoke のみ) |
@@ -43,18 +43,40 @@ golden fixture との byte 一致を成り立たせるため、converter は **�
 ### 含める要素 (再現可能な情報)
 
 - `converter_version` (`tools/build_skill.py` の semver、source 同梱)
-- `source_commit_hash` (`git rev-parse HEAD` の結果、下記「dirty tree / archive / 非 Git 環境」規則あり)
-- `source_files` の hash (sha256、入力の完全性証跡)
+- `source_content_digest` (`skills/source/` 配下の authored source 群を canonical 順で連結した sha256 hex digest、下記「source content digest の構成」参照)
 - 「これは生成物。`skills/source/body.md` を編集すること」固定文言
 
-### `source_commit_hash` の各種環境での挙動
+**`source_commit_hash` は生成物に埋め込まない** (Codex K=2 r2 spec fix #1 反映):
 
-| 環境 | 挙動 |
-|---|---|
-| clean Git tree | `git rev-parse HEAD` の出力をそのまま埋め込み |
-| dirty Git tree (uncommitted 変更あり) | header に `<hash>-dirty` を埋め込み + stderr に warn 出力。CI build では dirty tree を **error** で reject (golden 比較の前提が崩れる) |
-| Git archive (`git archive` で抽出した tarball 等、`.git` なし) | `git archive` の `export-subst` で埋め込まれた hash を使用 (`.gitattributes` で `export-subst` 宣言、`tools/build_skill.py` が読み取り)。`.gitattributes` 未設定環境は `unknown-archive` を埋め込み + stderr warn |
-| 非 Git 環境 (zip 解凍等) | `unknown-no-git` を埋め込み + stderr warn |
+- 旧設計では `git rev-parse HEAD` を埋め込もうとしていた
+- しかし golden fixture 更新 commit で HEAD が変わるため、golden 内の hash が自己参照になり、byte 一致を維持できない
+- 代わりに **source tree の content hash (`source_content_digest`)** を埋め込む。これは入力の完全性証跡として `source_commit_hash` と同等の trust を提供し、HEAD に依存しない (commit 前後で source 内容が同じなら同じ digest)
+
+### `source_content_digest` の構成 (deterministic input hash)
+
+converter は以下の手順で digest を生成:
+
+1. `metadata.yaml#source_files` (= `[body.md]` 等) を入力ファイル一覧として取得
+2. ファイル名で **辞書順 ASCII sort** (locale 非依存)
+3. 各ファイルを **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済)
+4. 連結フォーマット: `<file path as UTF-8 bytes>\n<file content bytes>\n` を各ファイルについて生成、全体を 1 byte stream に連結
+5. sha256 を計算、16 進 lowercase で表現
+6. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `source_content_digest: 0123456789abcdef`
+
+この設計により:
+
+- **同一 source 内容 → 同一 digest** (clean Git / dirty Git / Git archive / 非 Git 環境すべて同じ digest)
+- **source 1 byte 変更 → digest 完全変化** (binary diffuse な hash の特性)
+- **golden fixture は source 同期で更新**: source 変更 → golden 再生成 + commit (1 commit 内で source と digest が一致する状態を維持)
+
+### 利用者向け「どの commit で build されたか」の参照
+
+利用者運用で「この生成物はどの commit でビルドされたか」を知りたい場合、以下のいずれかを採用:
+
+- **release tag に hash を明示**: GitHub Releases の release notes / tag message に build 元 commit hash を記載 (人間可読の release metadata、生成物には埋め込まない)
+- **`SOURCE_DATE_EPOCH` 経由のタイムスタンプ**: 下節参照、CI build で `git log -1 --format=%ct` 等から固定値を導出して generator header に埋め込み可能 (deterministic、golden 比較は維持される)
+
+生成物に commit hash を直接埋め込まないことで、golden fixture と HEAD の自己参照問題を構造的に回避する。
 
 ### タイムスタンプを生成物に含めたい場合 (将来の選択肢)
 

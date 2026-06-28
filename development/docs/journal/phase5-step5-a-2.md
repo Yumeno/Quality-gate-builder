@@ -104,6 +104,17 @@ Step 5.a-2-3 (hooks テンプレ実装) commit `a7234e6` の後、5.a 全体完�
 | 21 | `skill-converter/agent-codex.md` line 168-172 (commit `c416345`) | hook 提供を「判断点」「暫定方針」と古い記述、`hooks.example.json` 内の `matcher` フィールド | Step 5.a-2-3 で実装済の状態を反映 (commit `a7234e6` + K=2 r1 fix #3 PowerShell script) + Codex `UserPromptSubmit` matcher silently ignored + stdin filtering + `/hooks` trust review の運用知見を追加 | K=2 r1 推奨 #1: agent-codex.md を最新化 |
 | 22 | 本 journal §6.3 marker grammar 仕様 (commit `acbd64f`) | marker syntax の基本のみ明文化 | **完全固定**: helper_end 行頭完全一致 (末尾空白なし) / CRLF/LF 許容 / Unicode NFC normalization 後重複検出 / marker 内本文の先頭末尾空行を converter が trim せず保存 / symlink/hardlink/外部 path 経由の出力先逸脱防止 (`os.path.realpath` 確認) を追加 | K=2 r1 推奨 #2: marker grammar 完全固定 (golden fixture 作成前の必須確定) |
 
+### 2.5 K=2 r2 横断レビュー反映 (2026-06-28、4 件)
+
+K=2 r2 横断レビュー (Codex `codex_ctx_p5_step5a_completion_kappa2_r2_20260628-182541.txt`) で K=2 未達と判定、新規 spec finding 4 件を受領:
+
+| # | 旧記述の場所 | 旧記述 (要約) | 訂正後 | 訂正理由 (K=2 r2 source) |
+|---|---|---|---|---|
+| 23 | `acceptance-matrix.md` deterministic build 契約 (commit `dd58cd6`) | 生成物 header に `source_commit_hash` (`git rev-parse HEAD`) を埋め込み + golden byte 一致を要求 | **`source_commit_hash` は生成物に埋め込まない**、代わりに `source_content_digest` (`skills/source/` 配下 authored source の sha256 hex digest) を埋め込み | K=2 r2 spec fix #1: golden 更新 commit で HEAD が変わると hash が自己参照になり byte 一致を維持できない問題を構造的に回避。「どの commit で build されたか」は release notes / SOURCE_DATE_EPOCH 経由で提供 |
+| 24 | 本 journal §6.3 step 11 (commit `dd58cd6`) | 「`skills/source/hooks/<agent>/*` を `dist/skills/{full,split}/<agent>/hooks/` に copy」 | `<agent>` (= `claude` / `codex`) と source の hook dir 名 (= `claude-code` / `codex`) のずれを **`AGENT_TO_HOOK_DIRNAME = {"claude": "claude-code", "codex": "codex"}` mapping** で明示 | K=2 r2 spec fix #2: target agent 名と実 hook dir 名の不一致を converter 実装契約として明確化 |
+| 25 | 本 journal §6.3 step 5 marker grammar (commit `dd58cd6`) | symlink / hardlink 防御を `os.path.realpath` で実現 | symlink 防御は realpath で OK、**hardlink 防御は別経路**: (a) clean build を default 採用 (`dist/.../` を build 冒頭で rmtree + 新規作成)、(b) 書き込み直前の `os.stat().st_nlink == 0` sanity check | K=2 r2 spec fix #3: `os.path.realpath` は hardlink の別名関係を検出できない事実を反映。clean build (K=2 r1 spec fix #2 step 14) と統合 |
+| 26 | `skill-converter/README.md` line 43 + line 66 (commit `c416345`) | line 43: `dist/skills/{claude,codex}/full/` 旧順序 / line 66: 「Codex CLI 用 hook は 5.a-0 後の判断、Phase 5 後送りも可」 | line 43: `dist/skills/full/{claude,codex}/` 正順序に訂正 / line 66: 「Step 5.a-2-3 (commit `a7234e6`) + K=2 r1 fix #3 で Claude Code + Codex CLI 両方の hook テンプレを実装済」と現状反映 | K=2 r2 spec fix #4: 段階 5 不可分 commit + Step 5.a-2-3 + K=2 r1 fix の累積結果と converter README の旧記述の不整合を解消 |
+
 ## 3. Step 5.a-2 の作業成果 (commit chronology)
 
 ### 3.1 body.md final 状態 (commit `c416345`)
@@ -142,6 +153,7 @@ Step 5.a-2-3 (hooks テンプレ実装) commit `a7234e6` の後、5.a 全体完�
 | r1 (段階 3 後) | `codex_ctx_p5_step5a-2-2c_review_r1_20260628-105714.txt` | 必須 code fix 5 件 + 推奨 2 件 + spec fix 3 件 | 段階 3.5 / 4 / 4.5 / 段階 5 で全件反映 |
 | r2 (段階 5 前) | `codex_ctx_p5_step5a-2-2_review_r2_20260628-131141.txt` | 追加必須 4 件 (C1 / S1 / S2 / S3 / S4) + 推奨 S5 | 段階 5 不可分 commit で全件反映、5.b 必須契約 (marker parser コメント内例示除外) は 5.b 着手時に反映予定 |
 | K=2 r1 (5.a 全体完結 = 5.a-0 + 5.a-1 + 5.a-2 + 5.a-2-3) | `codex_ctx_p5_step5a_completion_kappa2_r1_20260628-172902.txt` | 必須 code fix 2 + 必須 spec fix 5 + 推奨 2 | K=2 r1 fix commit 群で全件反映 (本 §3.2 commit chronology 末尾参照)。`#3` PowerShell script + matcher 非対応対策、`#6` 5.b 責務 16 項目化、`#1` Gemini 残ドリフト、`#5` deterministic build、`#7` fail-closed、`#9` marker grammar 等を集約 |
+| K=2 r2 (K=2 r1 fix 反映後の整合性確認) | `codex_ctx_p5_step5a_completion_kappa2_r2_20260628-182541.txt` | 新規 spec fix 4 件 (K=2 未達判定) | K=2 r2 fix commit で全件反映: `#1` source_commit_hash 自己参照問題 → source_content_digest に置換、`#2` hook agent 名 mapping 明示、`#3` hardlink 防御を clean build + sanity check に分離、`#4` skill-converter/README.md 旧 path + 旧 hook 方針残存訂正。本 §2.5 旧→新対応表 #23〜#26 参照 |
 | 設計再検討 (K=2 r1 fix 進行中、user 提起) | `codex_ctx_p5_step5a-2-x_jp-docs-design_review_20260628-180821.txt` | 「日本語文書執筆プロジェクトの .ps1 契約」を append 章でなく構造的に解決すべき、と user 指摘 → Codex 推奨 `(η改) = θ command authoring protocol + ι capability-based dispatch + β-lite + ζ + γ-lite + κ mojibake sentinel` | 既存 K=2 r1 fix 完了後、別 Step `5.a-2-4` で θ/ι 設計判断を独立実装する方針確定 (Codex「混ぜるな」指摘)。本 Step の影響は body.md §6/§12 構造変更 (中〜大)、examples/japanese-docs-pwsh 新設 (中)、qgb core/schema 改修なし |
 
 ## 4. 機械検証実績 (段階 4.5 / 段階 5 / 全 Step)
@@ -195,15 +207,23 @@ A1' 確定 + Codex K=2 r1 必須 / 推奨 fix 反映により build_skill.py の
    - marker name の path 安全性 (`..` / `./` / 連続 `//` / 先頭末尾スラッシュ / バックスラッシュ拒否、schema regex と同等)
    - marker name と `source_files` の集合分離 (collision detection で fail-closed)
    - marker 内容の先頭末尾空行は **converter が trim せずそのまま保存** (helper 単独利用時の Markdown 構造を保つ、Codex K=2 r1 推奨 #2)
-   - **symlink / hardlink / 外部 path を介した出力先逸脱防止**: helper file path は dist root 配下に正規化、`os.path.realpath` で確認 (Codex K=2 r1 推奨 #2)
+   - **symlink / hardlink / 外部 path を介した出力先逸脱防止** (Codex K=2 r1 推奨 #2 + K=2 r2 spec fix #3):
+     - **path traversal 防御**: helper file path を `os.path.normpath` で正規化、dist root 配下に収まることを literal path compare で確認
+     - **symlink 防御**: `os.path.realpath` で symlink を解決後、dist root の `realpath` の prefix 配下にあることを確認 (symlink で外部 path を指すケースを reject)
+     - **hardlink 防御**: `os.path.realpath` では hardlink の別名関係は **検出できない**ため、別経路で対処:
+       (a) **clean build を default 採用**: 各 build run の冒頭で `dist/skills/{mode}/{agent}/` を `shutil.rmtree` + `os.makedirs` で完全に作り直し、既存ファイル (hardlink 含む) を削除してから新規作成。これにより既存 hardlink 経由で外部 inode が書き換わる経路を構造的に潰す (K=2 r1 spec fix #2 step 14 「stale output 除去 or clean build」と統合)
+       (b) **追加 sanity check**: 書き込み直前に target path の親 dir に `os.stat().st_nlink == 0` (新規 inode) であることを確認、それ以外なら error (clean build が機能していない兆候)
 6. **full モード生成**: marker tag (start / end コメント行 2 行) を converter が除去、marker 内本文はそのまま `SKILL.md` 本文として埋め込み
 7. **split モード生成**: marker 内本文を helper file (`workflow.md` / `references.md` / `prompts/<name>.md`) に切り出し、本体 (`SKILL.md`) には marker 1 組の位置に **正確に 1 行 `@see <helper-path>`** という置換行を残す (Codex K=2 r1 spec fix #3、`<helper-path>` は marker name そのまま)
 8. agent 別変換:
    - Claude Code: SKILL.md frontmatter (`allowed-tools` 等を追加)、`~/.claude/skills/qgb/` 配置想定
    - Codex CLI: SKILL.md frontmatter (Agent Skills 標準準拠、`agent-codex.md` の確定キーのみ)、`~/.agents/skills/qgb/` 配置想定
-9. **生成物 header の埋め込み**: 全成果物の先頭に generator comment (converter_version + source_commit_hash + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時は埋め込まない** (deterministic build 規律、Codex K=2 r1 spec fix #1)
+9. **生成物 header の埋め込み**: 全成果物の先頭に generator comment (`converter_version` + `source_content_digest` (sha256 短縮表記) + 「これは生成物。`skills/source/body.md` を編集すること」)。**生成日時と source commit hash は埋め込まない** (deterministic build 規律 + golden 自己参照問題回避、Codex K=2 r1 spec fix #1 + K=2 r2 spec fix #1)。`source_content_digest` 構成は `acceptance-matrix.md` 「source_content_digest の構成」節を参照
 10. **`INSTALL.md` 生成**: 各 `dist/skills/{mode}/{agent}/INSTALL.md` を converter が生成 (配置 path / 任意 hook 有効化手順を含む、Codex K=2 r1 spec fix #2)
-11. **hooks の成果物同梱**: `skills/source/hooks/<agent>/*` を `dist/skills/{full,split}/<agent>/hooks/` 配下に **そのまま copy** (Codex K=2 r1 spec fix #2)
+11. **hooks の成果物同梱**: `skills/source/hooks/<hook-dirname>/*` を `dist/skills/{full,split}/<agent>/hooks/` 配下に **そのまま copy** (Codex K=2 r1 spec fix #2 + K=2 r2 spec fix #2)。**`<hook-dirname>` は `<agent>` と異なる**ため明示 mapping が必要:
+    - `agent=claude` → `<hook-dirname>=claude-code` (`skills/source/hooks/claude-code/` を `dist/skills/{full,split}/claude/hooks/` へ copy)
+    - `agent=codex` → `<hook-dirname>=codex` (`skills/source/hooks/codex/` を `dist/skills/{full,split}/codex/hooks/` へ copy)
+    - converter は内部に `AGENT_TO_HOOK_DIRNAME = {"claude": "claude-code", "codex": "codex"}` mapping を持ち、source の hook dir 構造 (`agent-claude.md` 等の docs 命名と一致した「Claude Code」「Codex CLI」風の dir 名) と target_agents の短縮名 (`claude` / `codex`) のずれを吸収する
 12. **構文検証**: 生成された SKILL.md の YAML frontmatter parse 成功 + Markdown parse 成功 (helper file も同様、Codex K=2 r1 spec fix #2)
 13. **deterministic ordering / encoding / newline**:
     - 出力 encoding: **UTF-8 BOM なし**、改行 **LF 固定**

@@ -40,7 +40,7 @@
 - Codex CLI: <https://developers.openai.com/codex/skills> (`.agents/skills/<name>/SKILL.md`、progressive disclosure)
 - 標準: <https://agentskills.io>
 
-両 agent が共通の SKILL.md 形式を使っているため、qgb スキルの中間表現を 1 つ書けば **同じ `SKILL.md` を両方の `dist/skills/{claude,codex}/full/` に置ける可能性が高い** (frontmatter キーの細部に違いはあるが、共通核 = `name` / `description` は同型)。
+両 agent が共通の SKILL.md 形式を使っているため、qgb スキルの中間表現を 1 つ書けば **同じ `SKILL.md` を両方の `dist/skills/full/{claude,codex}/` に置ける可能性が高い** (frontmatter キーの細部に違いはあるが、共通核 = `name` / `description` は同型)。
 
 ただし以下に違いがある:
 
@@ -63,7 +63,7 @@
 - Claude Code: `settings.json` の `hooks` キー、5 種類 (`command` / `http` / `mcp_tool` / `prompt` / `agent`)、40+ lifecycle events
 - Codex CLI: `~/.codex/hooks.json` or `[hooks]` in `config.toml`、`command` 型中心、lifecycle events は Claude Code と同型 (SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop 等)
 
-設定 file 場所が違うため hook テンプレは agent ごとに別ファイル (`skills/source/hooks/{claude-code,codex}/`) で持つが、内容は同型化可能。**Phase 5 では Claude Code 用 hook を確定、Codex CLI 用 hook は 5.a-0 後の判断**で Phase 5 後送りも可。
+設定 file 場所が違うため hook テンプレは agent ごとに別ファイル (`skills/source/hooks/{claude-code,codex}/`) で持つが、内容は同型化可能。**Phase 5 Step 5.a-2-3 (commit `a7234e6`) + K=2 r1 fix #3 で Claude Code + Codex CLI 両方の hook テンプレを実装済** (`settings.example.json` / `hooks.example.json` + Windows native PowerShell script `scripts/check-relevance.ps1` + `README.md`)。UserPromptSubmit event の matcher フィールドが両 agent で silently ignored であるため、script 内部で stdin JSON の `.prompt` を正規表現判定する設計。
 
 ## 保守原則
 
