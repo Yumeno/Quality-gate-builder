@@ -250,15 +250,42 @@ function Check-PowerShellArgv {
         $findings += "C3: '-File' appears $fileCount times in contract.command; exactly one occurrence is required. PowerShell would use the first, but the duplicate is misleading. See body.md sec 6.5."
     }
 
-    # -Command / -EncodedCommand are mutually exclusive with -File. If any
-    # execution-mode option appears alongside -File, PowerShell runs the
-    # -Command body and treats -File + path as string arguments to that
-    # command -- the target script is never executed but exit code is 0.
-    # This is a silent failure mode that must be detected.
-    $exclusiveWithFile = @('-command', '-encodedcommand')
-    foreach ($excl in $exclusiveWithFile) {
-        if ($commandLower -contains $excl) {
-            $findings += "C3: contract.command contains '$excl' alongside '-File'. These options are mutually exclusive in PowerShell host invocation: '-Command' / '-EncodedCommand' specifies an execution-mode body, and PowerShell would silently treat '-File' and its path as string arguments to that command, never executing the target script (exit 0 with stdout showing the command output, not the script output). Choose exactly one execution mode. For verification_type=command contracts that invoke .ps1, use -File only. See body.md sec 6.5."
+    # Strict host-option grammar for argv positions BEFORE -File.
+    # Allowlist of canonical names + accepted abbreviations. Any '-' or '/'
+    # prefixed token before -File that is not on this list is rejected.
+    # -Command / -c / -EncodedCommand / -ec are intentionally excluded
+    # because they are mutually exclusive with -File: PowerShell would run
+    # the command body and treat -File + path as string arguments (script
+    # not executed, exit 0, wrong stdout).
+    $allowedHostOptionsPreFile = @(
+        '-nologo', '-nol',
+        '-noprofile', '-nop',
+        '-noninteractive', '-noni',
+        '-noexit', '-noe',
+        '-executionpolicy', '-ex', '-ep',
+        '-windowstyle', '-w',
+        '-version',
+        '-mta',
+        '-sta',
+        '-psconsolefile', '-psc',
+        '-inputformat', '-inp', '-if',
+        '-outputformat', '-out', '-of',
+        '-configurationname', '-config',
+        '-help', '-?', '/?'
+    )
+    $execModeOptions = @('-command', '-c', '-encodedcommand', '-ec')
+
+    # Walk argv positions [1, fileIdx) and validate each '-' / '/' prefixed token.
+    for ($i = 1; $i -lt $fileIdx; $i++) {
+        $tokenLower = $commandLower[$i]
+        $tokenOrig = $commandStr[$i]
+        if ($tokenLower.StartsWith('-') -or $tokenLower.StartsWith('/')) {
+            if ($execModeOptions -contains $tokenLower) {
+                $findings += "C3: contract.command contains '$tokenOrig' at position $i, which is a PowerShell execution-mode option (-Command / -c / -EncodedCommand / -ec). It is mutually exclusive with -File: PowerShell would run the command body and treat -File + path as string arguments, never executing the target script (exit 0 with the wrong stdout). Choose exactly one execution mode. For verification_type=command contracts that invoke .ps1, use -File only. See body.md sec 6.5."
+            } elseif (-not ($allowedHostOptionsPreFile -contains $tokenLower)) {
+                $allowedList = ($allowedHostOptionsPreFile | Sort-Object) -join ', '
+                $findings += "C3: contract.command contains '$tokenOrig' at position $i (before -File), which is not a recognized PowerShell host option. PowerShell either errors on this or silently misinterprets it. Allowed host options (and their accepted abbreviations): $allowedList. See body.md sec 6.5."
+            }
         }
     }
 

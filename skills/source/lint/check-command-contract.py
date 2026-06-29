@@ -397,27 +397,89 @@ def check_powershell_argv(
             "first, but the duplicate is misleading. See body.md §6.5."
         )
 
-    # -Command / -EncodedCommand are mutually exclusive with -File. If
-    # any execution-mode option appears alongside -File, PowerShell runs
-    # the -Command body and treats -File + path as string arguments to
-    # that command — the target script is never executed but the contract
-    # still appears to exit 0. This is a silent failure mode that must
-    # be detected. See:
-    #   https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
-    exclusive_with_file = {"-command", "-encodedcommand"}
-    for excl in exclusive_with_file:
-        if excl in command_lower:
-            findings.append(
-                f"C3: contract.command contains '{excl}' alongside '-File'. "
-                "These options are mutually exclusive in PowerShell host "
-                "invocation: '-Command' / '-EncodedCommand' specifies an "
-                "execution-mode body, and PowerShell would silently treat "
-                "'-File' and its path as string arguments to that command, "
-                "never executing the target script (exit 0 with stdout "
-                "showing the command output, not the script output). "
-                "Choose exactly one execution mode. For verification_type=command "
-                "contracts that invoke .ps1, use -File only. See body.md §6.5."
-            )
+    # Strict host-option grammar for argv positions BEFORE -File.
+    # We enforce an allowlist: any token that starts with '-' and appears
+    # before -File must be on the allowed list (full name or accepted
+    # abbreviation). This catches two classes of silent failure:
+    #   (a) execution-mode options (-Command / -c / -EncodedCommand / -ec)
+    #       that are mutually exclusive with -File: PowerShell runs the
+    #       command body and treats -File + path as string arguments,
+    #       never executing the target script (exit 0 + wrong stdout).
+    #   (b) unknown / typo'd options before -File that PowerShell either
+    #       errors on or silently misinterprets.
+    # See: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+    #
+    # PowerShell host options (canonical names, case-insensitive) and their
+    # accepted abbreviations. PowerShell's parser accepts any unambiguous
+    # prefix; we enumerate the documented abbreviations rather than allow
+    # arbitrary prefixes (the latter is locale/version-sensitive and
+    # invites collisions with future option additions).
+    allowed_host_options_pre_file = {
+        "-nologo", "-nol",
+        "-noprofile", "-nop",
+        "-noninteractive", "-noni",
+        "-noexit", "-noe",
+        "-executionpolicy", "-ex", "-ep",
+        "-windowstyle", "-w",
+        "-version",
+        "-mta",
+        "-sta",
+        "-psconsolefile", "-psc",
+        "-inputformat", "-inp", "-if",
+        "-outputformat", "-out", "-of",
+        "-configurationname", "-config",
+        "-help", "-?", "/?",
+        # Note: -command / -c / -encodedcommand / -ec / -file / -f are
+        # intentionally EXCLUDED from the allowlist before -File. -File
+        # itself is handled separately; execution-mode options are mutually
+        # exclusive with -File and produce silent failures.
+    }
+    # Execution-mode options that are mutually exclusive with -File.
+    # Detection of these in the pre-File range produces a more specific
+    # finding than the generic allowlist failure.
+    exec_mode_options = {
+        "-command", "-c",
+        "-encodedcommand", "-ec",
+    }
+    # -File option full name + accepted abbreviation. Used to detect the
+    # boundary between host options and script arguments. -F is also a
+    # documented abbreviation; we accept it here for prefix detection
+    # but the primary -File matching elsewhere uses the canonical "-file".
+    file_option_tokens = {"-file", "-f"}
+
+    # Walk argv positions [1, file_idx) and validate each '-'-prefixed token.
+    # We also need to skip option values: -ExecutionPolicy is followed by
+    # 'Bypass', -WindowStyle by 'Hidden', etc. To keep this simple and
+    # conservative, we treat any non-flag token as a value of the preceding
+    # flag; this matches PowerShell's positional-argument convention.
+    i = 1
+    while i < file_idx:
+        token_lower = command_lower[i]
+        token_orig = command_str[i]
+        if token_lower.startswith("-") or token_lower.startswith("/"):
+            if token_lower in exec_mode_options:
+                findings.append(
+                    f"C3: contract.command contains '{token_orig}' at "
+                    f"position {i}, which is a PowerShell execution-mode "
+                    "option (-Command / -c / -EncodedCommand / -ec). It is "
+                    "mutually exclusive with -File: PowerShell would run "
+                    "the command body and treat -File + path as string "
+                    "arguments, never executing the target script "
+                    "(exit 0 with the wrong stdout). Choose exactly one "
+                    "execution mode. For verification_type=command "
+                    "contracts that invoke .ps1, use -File only. "
+                    "See body.md §6.5."
+                )
+            elif token_lower not in allowed_host_options_pre_file:
+                findings.append(
+                    f"C3: contract.command contains '{token_orig}' at "
+                    f"position {i} (before -File), which is not a "
+                    "recognized PowerShell host option. PowerShell either "
+                    "errors on this or silently misinterprets it. "
+                    "Allowed host options (and their accepted abbreviations): "
+                    f"{sorted(allowed_host_options_pre_file)}. See body.md §6.5."
+                )
+        i += 1
 
     # Structure: all host options must appear BEFORE -File. Anything after
     # -File is the script path or script-side arguments, not host options.
