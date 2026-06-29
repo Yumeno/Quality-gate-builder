@@ -401,51 +401,84 @@ def check_powershell_argv(
     # We enforce an allowlist: any token that starts with '-' and appears
     # before -File must be on the allowed list (full name or accepted
     # abbreviation). This catches two classes of silent failure:
-    #   (a) execution-mode options (-Command / -c / -EncodedCommand / -ec)
+    #   (a) execution-mode options (-Command / -EncodedCommand / variants)
     #       that are mutually exclusive with -File: PowerShell runs the
     #       command body and treats -File + path as string arguments,
     #       never executing the target script (exit 0 + wrong stdout).
     #   (b) unknown / typo'd options before -File that PowerShell either
     #       errors on or silently misinterprets.
-    # See: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+    # See:
+    #   PS5: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+    #   PS7: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_pwsh
     #
-    # PowerShell host options (canonical names, case-insensitive) and their
-    # accepted abbreviations. PowerShell's parser accepts any unambiguous
-    # prefix; we enumerate the documented abbreviations rather than allow
-    # arbitrary prefixes (the latter is locale/version-sensitive and
-    # invites collisions with future option additions).
-    allowed_host_options_pre_file = {
-        "-nologo", "-nol",
-        "-noprofile", "-nop",
-        "-noninteractive", "-noni",
-        "-noexit", "-noe",
-        "-executionpolicy", "-ex", "-ep",
-        "-windowstyle", "-w",
-        "-version",
-        "-mta",
-        "-sta",
-        "-psconsolefile", "-psc",
-        "-inputformat", "-inp", "-if",
-        "-outputformat", "-out", "-of",
-        "-configurationname", "-config",
-        "-help", "-?", "/?",
-        # Note: -command / -c / -encodedcommand / -ec / -file / -f are
-        # intentionally EXCLUDED from the allowlist before -File. -File
-        # itself is handled separately; execution-mode options are mutually
-        # exclusive with -File and produce silent failures.
+    # Runtime-separated tables. PowerShell's parser is case-insensitive on
+    # option names and on values like Bypass; we enumerate documented
+    # abbreviations rather than allow arbitrary prefixes (prefix-matching is
+    # locale/version-sensitive and invites collisions with future options).
+    #
+    # NOTE: help-mode options (-Help / -? / /?) are intentionally EXCLUDED
+    # from the allowlist: they are mutually exclusive with -File in practice
+    # (PowerShell prints help and exits without running the script).
+    allowed_host_options_by_runtime = {
+        "powershell-5": {
+            "-nologo", "-nol",
+            "-noprofile", "-nop",
+            "-noninteractive", "-noni",
+            "-noexit", "-noe",
+            "-executionpolicy", "-ex", "-ep",
+            "-windowstyle", "-w",
+            "-version", "-v",
+            "-mta",
+            "-sta",
+            "-psconsolefile", "-psc",
+            "-inputformat", "-inp", "-if",
+            "-outputformat", "-out", "-of",
+            "-configurationname", "-config",
+            "-encodedarguments", "-encodedargs",
+        },
+        "powershell-7": {
+            "-nologo", "-nol",
+            "-noprofile", "-nop",
+            "-noninteractive", "-noni",
+            "-noexit", "-noe",
+            "-noprofileloadtime", "-noprofileloadtim",
+            "-executionpolicy", "-ex", "-ep",
+            "-windowstyle", "-w",
+            "-version", "-v",
+            "-mta",
+            "-sta",
+            "-inputformat", "-inp", "-if",
+            "-outputformat", "-o", "-of",
+            "-interactive", "-i",
+            "-login", "-l",
+            "-configurationname", "-config",
+            "-configurationfile",
+            "-custompipename",
+            "-settingsfile", "-settings",
+            "-sshservermode", "-sshs",
+            "-workingdirectory", "-wd", "-wo",
+        },
     }
     # Execution-mode options that are mutually exclusive with -File.
     # Detection of these in the pre-File range produces a more specific
     # finding than the generic allowlist failure.
-    exec_mode_options = {
-        "-command", "-c",
-        "-encodedcommand", "-ec",
+    exec_mode_options_by_runtime = {
+        "powershell-5": {
+            "-command", "-c",
+            "-encodedcommand", "-ec",
+            # help-mode also runs to completion without -File:
+            "-help", "-?", "/?",
+        },
+        "powershell-7": {
+            "-command", "-c",
+            "-encodedcommand", "-e", "-ec",
+            "-commandwithargs", "-cwa",
+            # help-mode also runs to completion without -File:
+            "-help", "-?", "/?",
+        },
     }
-    # -File option full name + accepted abbreviation. Used to detect the
-    # boundary between host options and script arguments. -F is also a
-    # documented abbreviation; we accept it here for prefix detection
-    # but the primary -File matching elsewhere uses the canonical "-file".
-    file_option_tokens = {"-file", "-f"}
+    allowed_host_options_pre_file = allowed_host_options_by_runtime.get(runtime, set())
+    exec_mode_options = exec_mode_options_by_runtime.get(runtime, set())
 
     # Walk argv positions [1, file_idx) and validate each '-'-prefixed token.
     # We also need to skip option values: -ExecutionPolicy is followed by

@@ -251,29 +251,73 @@ function Check-PowerShellArgv {
     }
 
     # Strict host-option grammar for argv positions BEFORE -File.
-    # Allowlist of canonical names + accepted abbreviations. Any '-' or '/'
-    # prefixed token before -File that is not on this list is rejected.
-    # -Command / -c / -EncodedCommand / -ec are intentionally excluded
-    # because they are mutually exclusive with -File: PowerShell would run
-    # the command body and treat -File + path as string arguments (script
-    # not executed, exit 0, wrong stdout).
-    $allowedHostOptionsPreFile = @(
-        '-nologo', '-nol',
-        '-noprofile', '-nop',
-        '-noninteractive', '-noni',
-        '-noexit', '-noe',
-        '-executionpolicy', '-ex', '-ep',
-        '-windowstyle', '-w',
-        '-version',
-        '-mta',
-        '-sta',
-        '-psconsolefile', '-psc',
-        '-inputformat', '-inp', '-if',
-        '-outputformat', '-out', '-of',
-        '-configurationname', '-config',
-        '-help', '-?', '/?'
-    )
-    $execModeOptions = @('-command', '-c', '-encodedcommand', '-ec')
+    # Runtime-separated allowlist of canonical names + accepted abbreviations.
+    # Any '-' or '/' prefixed token before -File that is not on the runtime's
+    # allowlist is rejected. Execution-mode options (-Command / -EncodedCommand
+    # and PS7-only -CommandWithArgs, plus help-mode -?, -Help, /?) are
+    # intentionally placed in $execModeOptions: PowerShell would run a body
+    # other than the target script and exit 0, masking the failure.
+    #
+    # See:
+    #   PS5: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe
+    #   PS7: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_pwsh
+    $allowedHostOptionsByRuntime = @{
+        'powershell-5' = @(
+            '-nologo', '-nol',
+            '-noprofile', '-nop',
+            '-noninteractive', '-noni',
+            '-noexit', '-noe',
+            '-executionpolicy', '-ex', '-ep',
+            '-windowstyle', '-w',
+            '-version', '-v',
+            '-mta',
+            '-sta',
+            '-psconsolefile', '-psc',
+            '-inputformat', '-inp', '-if',
+            '-outputformat', '-out', '-of',
+            '-configurationname', '-config',
+            '-encodedarguments', '-encodedargs'
+        )
+        'powershell-7' = @(
+            '-nologo', '-nol',
+            '-noprofile', '-nop',
+            '-noninteractive', '-noni',
+            '-noexit', '-noe',
+            '-noprofileloadtime', '-noprofileloadtim',
+            '-executionpolicy', '-ex', '-ep',
+            '-windowstyle', '-w',
+            '-version', '-v',
+            '-mta',
+            '-sta',
+            '-inputformat', '-inp', '-if',
+            '-outputformat', '-o', '-of',
+            '-interactive', '-i',
+            '-login', '-l',
+            '-configurationname', '-config',
+            '-configurationfile',
+            '-custompipename',
+            '-settingsfile', '-settings',
+            '-sshservermode', '-sshs',
+            '-workingdirectory', '-wd', '-wo'
+        )
+    }
+    $execModeOptionsByRuntime = @{
+        'powershell-5' = @(
+            '-command', '-c',
+            '-encodedcommand', '-ec',
+            '-help', '-?', '/?'
+        )
+        'powershell-7' = @(
+            '-command', '-c',
+            '-encodedcommand', '-e', '-ec',
+            '-commandwithargs', '-cwa',
+            '-help', '-?', '/?'
+        )
+    }
+    $allowedHostOptionsPreFile = $allowedHostOptionsByRuntime[$runtime]
+    $execModeOptions = $execModeOptionsByRuntime[$runtime]
+    if (-not $allowedHostOptionsPreFile) { $allowedHostOptionsPreFile = @() }
+    if (-not $execModeOptions) { $execModeOptions = @() }
 
     # Walk argv positions [1, fileIdx) and validate each '-' / '/' prefixed token.
     for ($i = 1; $i -lt $fileIdx; $i++) {
