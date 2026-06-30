@@ -194,7 +194,7 @@ function Check-PowerShellBom {
 }
 
 function Check-PowerShellArgv {
-    param($Contract, [string]$ScriptPath, [string]$ContractPath)
+    param($Contract, [string]$ScriptPath, [string]$ContractPath, [bool]$ScriptExplicitlyProvided = $false)
     $findings = @()
     $runtime = $Contract.runtime
     if (-not $PowerShellInvokerBasenames.ContainsKey($runtime)) { return $findings }
@@ -222,15 +222,32 @@ function Check-PowerShellArgv {
         $findings += "C3: contract.command[0] basename = '$firstBasename' is not a recognized invoker for runtime '$runtime' (expected one of $($allowedInvokers -join ', ')). PowerShell runtimes require an explicit invoker as the first argv element. See body.md sec 6.5 PowerShell 5 rules."
     }
 
-    # Required flags (case-insensitive).
-    $required = @('-nologo', '-noprofile', '-noninteractive')
+    # Required flags. Each may be satisfied by its canonical name OR any
+    # documented abbreviation (PowerShell parser accepts either).
+    $requiredFlagSynonyms = @(
+        @('-nologo', '-nol'),
+        @('-noprofile', '-nop'),
+        @('-noninteractive', '-noni')
+    )
     if ($runtime -eq 'powershell-5') {
-        $required += '-executionpolicy'
-        $required += 'bypass'
+        $requiredFlagSynonyms += , @('-executionpolicy', '-ex', '-ep')
+        $requiredFlagSynonyms += , @('bypass')
     }
-    $missing = $required | Where-Object { $commandLower -notcontains $_ }
+    $missing = @()
+    foreach ($group in $requiredFlagSynonyms) {
+        $satisfied = $false
+        foreach ($synonym in $group) {
+            if ($commandLower -contains $synonym) {
+                $satisfied = $true
+                break
+            }
+        }
+        if (-not $satisfied) {
+            $missing += $group[0]
+        }
+    }
     if ($missing.Count -gt 0) {
-        $findings += "C3: PowerShell argv is missing required flags ($($missing -join ', ')) (case-insensitive). These flags ensure deterministic execution (no profile load, no interactive prompt, no policy ambiguity). See body.md sec 6.5."
+        $findings += "C3: PowerShell argv is missing required flags ($($missing -join ', ')) (case-insensitive; abbreviations also accepted). These flags ensure deterministic execution (no profile load, no interactive prompt, no policy ambiguity). See body.md sec 6.5."
     }
 
     # Locate -File (case-insensitive, first occurrence).
@@ -345,13 +362,14 @@ function Check-PowerShellArgv {
         }
     }
 
-    # Duplicate -ExecutionPolicy check.
+    # Duplicate -ExecutionPolicy check (incl. abbreviations -ex / -ep).
+    $epAliases = @('-executionpolicy', '-ex', '-ep')
     $epIndices = @()
     for ($i = 0; $i -lt $commandLower.Count; $i++) {
-        if ($commandLower[$i] -eq '-executionpolicy') { $epIndices += $i }
+        if ($epAliases -contains $commandLower[$i]) { $epIndices += $i }
     }
     if ($epIndices.Count -gt 1) {
-        $findings += "C3: '-ExecutionPolicy' appears $($epIndices.Count) times in contract.command; exactly one occurrence is required (the duplicate would silently apply a non-deterministic value). See body.md sec 6.5."
+        $findings += "C3: '-ExecutionPolicy' (or abbreviation -ex / -ep) appears $($epIndices.Count) times in contract.command; exactly one occurrence is required (the duplicate would silently apply a non-deterministic value). See body.md sec 6.5."
     }
 
     # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass.
@@ -360,7 +378,8 @@ function Check-PowerShellArgv {
         $nextArgLower = if ($epIdx + 1 -lt $commandLower.Count) { $commandLower[$epIdx + 1] } else { $null }
         if ($nextArgLower -ne 'bypass') {
             $actual = if ($epIdx + 1 -lt $commandStr.Count) { $commandStr[$epIdx + 1] } else { $null }
-            $findings += "C3: '-ExecutionPolicy' must be immediately followed by 'Bypass' (case-insensitive), but the next argv element is '$actual'. The current argv would set a different policy, defeating the deterministic-execution intent. See body.md sec 6.5."
+            $epForm = $commandStr[$epIdx]
+            $findings += "C3: '$epForm' must be immediately followed by 'Bypass' (case-insensitive), but the next argv element is '$actual'. The current argv would set a different policy, defeating the deterministic-execution intent. See body.md sec 6.5."
         }
     }
 
@@ -384,7 +403,13 @@ function Check-PowerShellArgv {
     # comparison: full-path equality when either side is absolute, basename
     # equality otherwise. Stronger same-path verification belongs in 5.b
     # dogfooding against a real fixture project.
-    if (-not [string]::IsNullOrWhiteSpace($ScriptPath)) {
+    #
+    # Only compare when -Script was EXPLICITLY provided by the user; when
+    # it was derived from -File, the comparison is tautological and the
+    # derived value may have been resolved against a base dir different
+    # from the user's project layout, producing spurious mismatches
+    # (Codex K=2 r6-post real-fixture test caught this).
+    if (-not [string]::IsNullOrWhiteSpace($ScriptPath) -and $ScriptExplicitlyProvided) {
         $fileIsAbsolute = [System.IO.Path]::IsPathRooted($fileArg)
         $scriptIsAbsolute = [System.IO.Path]::IsPathRooted($ScriptPath)
         if ($fileIsAbsolute -or $scriptIsAbsolute) {
@@ -497,13 +522,14 @@ if ($contractObj.verification_type -ne 'command') {
 }
 
 $resolvedScript = Resolve-ScriptPath -Contract $contractObj -ScriptArg $Script -ContractPath $Contract
+$scriptExplicit = -not [string]::IsNullOrWhiteSpace($Script)
 
 $findings = @()
 $advisories = @()
 
 $findings += Check-ExtensionRuntimeMatch -Contract $contractObj -ScriptPath $resolvedScript
 $findings += Check-PowerShellBom         -Contract $contractObj -ScriptPath $resolvedScript
-$findings += Check-PowerShellArgv        -Contract $contractObj -ScriptPath $resolvedScript -ContractPath $Contract
+$findings += Check-PowerShellArgv        -Contract $contractObj -ScriptPath $resolvedScript -ContractPath $Contract -ScriptExplicitlyProvided $scriptExplicit
 $findings += Check-PowerShellStdoutInit  -Contract $contractObj -ScriptPath $resolvedScript
 $runtimeResult = Check-RuntimeAvailable -Contract $contractObj
 $findings += $runtimeResult.Findings

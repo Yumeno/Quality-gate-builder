@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "stage_id": "S1",
+  "req_id": "REQ-FIXTURE-001",
+  "verification_type": "command",
+  "runtime": "powershell-5",
+  "command": [
+    "powershell.exe",
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/ok-greeter.ps1"
+  ],
+  "expected_exit_code": 0,
+  "timeout_seconds": 30
+}

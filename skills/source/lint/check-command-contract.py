@@ -307,6 +307,7 @@ def check_powershell_argv(
     contract: dict,
     script_path: Optional[Path],
     contract_path: Path,
+    script_explicitly_provided: bool = False,
 ) -> list[str]:
     """C3: PowerShell argv が完全明示か.
 
@@ -358,21 +359,32 @@ def check_powershell_argv(
         )
         # Continue: remaining checks may still surface issues.
 
-    # Required flags (case-insensitive presence check).
-    required_flags = [
-        "-nologo",
-        "-noprofile",
-        "-noninteractive",
+    # Required flags. Each required flag may be satisfied by its canonical
+    # name OR any of its documented abbreviations. PowerShell's parser
+    # accepts either form. We model this as a list of synonym groups.
+    required_flag_synonyms = [
+        ("-nologo", "-nol"),
+        ("-noprofile", "-nop"),
+        ("-noninteractive", "-noni"),
     ]
     if runtime == "powershell-5":
-        required_flags.extend(["-executionpolicy", "bypass"])
-    missing = [flag for flag in required_flags if flag not in command_lower]
+        required_flag_synonyms.extend(
+            [
+                ("-executionpolicy", "-ex", "-ep"),
+                ("bypass",),  # value is case-insensitive; only canonical form valid
+            ]
+        )
+    missing = []
+    for group in required_flag_synonyms:
+        if not any(synonym in command_lower for synonym in group):
+            # Report the canonical (first) name.
+            missing.append(group[0])
     if missing:
         findings.append(
             f"C3: PowerShell argv is missing required flags {missing} "
-            "(case-insensitive). These flags ensure deterministic "
-            "execution (no profile load, no interactive prompt, no "
-            "policy ambiguity). See body.md §6.5."
+            "(case-insensitive; abbreviations also accepted). These "
+            "flags ensure deterministic execution (no profile load, "
+            "no interactive prompt, no policy ambiguity). See body.md §6.5."
         )
 
     # Locate -File (case-insensitive, first occurrence).
@@ -540,16 +552,17 @@ def check_powershell_argv(
                 "See body.md §6.5."
             )
 
-    # Duplicate -ExecutionPolicy check.
+    # Duplicate -ExecutionPolicy check (incl. abbreviations -ex / -ep).
+    ep_aliases = {"-executionpolicy", "-ex", "-ep"}
     ep_indices = [
-        i for i, lower in enumerate(command_lower) if lower == "-executionpolicy"
+        i for i, lower in enumerate(command_lower) if lower in ep_aliases
     ]
     if len(ep_indices) > 1:
         findings.append(
-            f"C3: '-ExecutionPolicy' appears {len(ep_indices)} times in "
-            "contract.command; exactly one occurrence is required (the "
-            "duplicate would silently apply a non-deterministic value). "
-            "See body.md §6.5."
+            f"C3: '-ExecutionPolicy' (or abbreviation -ex / -ep) appears "
+            f"{len(ep_indices)} times in contract.command; exactly one "
+            "occurrence is required (the duplicate would silently apply a "
+            "non-deterministic value). See body.md §6.5."
         )
 
     # PS 5: -ExecutionPolicy must be IMMEDIATELY followed by Bypass.
@@ -558,8 +571,9 @@ def check_powershell_argv(
         next_arg = command_lower[ep_idx + 1] if ep_idx + 1 < len(command_lower) else None
         if next_arg != "bypass":
             actual = command_str[ep_idx + 1] if ep_idx + 1 < len(command_str) else None
+            ep_form = command_str[ep_idx]
             findings.append(
-                f"C3: '-ExecutionPolicy' must be immediately followed by "
+                f"C3: '{ep_form}' must be immediately followed by "
                 f"'Bypass' (case-insensitive), but the next argv element is "
                 f"{actual!r}. The current argv would set a different "
                 "policy, defeating the deterministic-execution intent. "
@@ -581,7 +595,14 @@ def check_powershell_argv(
         )
         return findings
 
-    # If --script was provided, compare -File argument to it.
+    # If --script was EXPLICITLY provided by the user, compare -File argument
+    # to it. When script_path was derived from contract.command's -File
+    # value (because --script was omitted), comparing the two is tautological:
+    # they came from the same place. Worse, the derived path was resolved
+    # against contract_dir or cwd which may differ from the user's actual
+    # project layout — comparing it back against the raw -File arg produces
+    # spurious mismatches (Codex K=2 r5 fix #1 noted base-dir mismatch).
+    #
     # Both -File and --script can be relative paths, but they are interpreted
     # against different base directories at runtime:
     #   -File: relative to the user's project working dir (cwd at `qgb run`)
@@ -593,7 +614,7 @@ def check_powershell_argv(
     # Basename equality is intentionally weak; the proposal author is
     # expected to keep -File and --script aligned. Stronger checks belong
     # in 5.b dogfooding (a real `qgb check` against a fixture project).
-    if script_path is not None:
+    if script_path is not None and script_explicitly_provided:
         file_path_obj = Path(file_arg) if "\\" not in file_arg else PureWindowsPath(file_arg)
         either_absolute = (
             file_path_obj.is_absolute() or script_path.is_absolute()
@@ -768,6 +789,7 @@ def run_checks(
     evidence_path: Optional[Path],
 ) -> int:
     """Run all checks, print findings + advisories, return exit code."""
+    script_explicitly_provided = script_path_arg is not None
     try:
         contract = json.loads(read_text_strict(contract_path))
     except FileNotFoundError:
@@ -793,7 +815,14 @@ def run_checks(
 
     findings.extend(check_extension_runtime_match(contract, script_path))
     findings.extend(check_powershell_bom(contract, script_path))
-    findings.extend(check_powershell_argv(contract, script_path, contract_path))
+    findings.extend(
+        check_powershell_argv(
+            contract,
+            script_path,
+            contract_path,
+            script_explicitly_provided=script_explicitly_provided,
+        )
+    )
     findings.extend(check_powershell_stdout_init(contract, script_path))
     runtime_findings, runtime_advisories = check_runtime_available(contract)
     findings.extend(runtime_findings)
