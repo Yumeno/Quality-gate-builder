@@ -354,13 +354,14 @@ qgb の責務分離 (command runner / 異常時責務分離 / process tree parti
 
 ### 10.1 「qgb がない」「python -m qgb で動かない」
 
-利用者プロジェクトに qgb が installed されていない可能性。**qgb は利用者プロジェクトに同梱されない、別途インストール**:
+利用者プロジェクトに qgb が installed されていない可能性。**qgb は利用者プロジェクトに同梱されず、PyPI にも公開されていない。** リポジトリを取得して editable install する:
 
 ```bash
-pip install quality-gate-builder
-# または開発版:
-pip install -e /path/to/qgb-repo
+git clone https://github.com/Yumeno/Quality-gate-builder.git
+pip install -e ./Quality-gate-builder
 ```
+
+`pip install quality-gate-builder` は**実行しない** (PyPI 未公開のため、同名パッケージが存在した場合それは qgb ではない)。将来 PyPI 公開された場合は本節を更新する。
 
 ### 10.2 「`.quality-system/` が既にあるが内容が古い」
 
@@ -710,7 +711,7 @@ python -m qgb design-stages --json
 skill が `verification_type=command` の contract を起草した直後、`skills/source/lint/check-command-contract.{ps1,py}` (Step 5.a-2-4 段階 4 で実装) を実行:
 
 1. 確定 runtime と script 拡張子の整合 (例: PowerShell 5 確定なのに `.sh` を指定していたら error)
-2. 上記 checklist の必須項目 (BOM / shebang / encoding / argv / exit code) のうち、機械検査可能な項目を chcek
+2. 上記 checklist の必須項目 (BOM / shebang / encoding / argv / exit code) のうち、機械検査可能な項目を check
 3. `qgb check` 実行後の stage log で `U+FFFD` を grep
 
 これは **proposal adopt 前の skill 内部 lint**、qgb 本体機能ではない (philosophy P9 + framework-shape §5 境界遵守、qgb 本体は contract に書かれたものを実行するだけ)。
