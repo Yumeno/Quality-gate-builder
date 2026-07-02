@@ -1,8 +1,9 @@
 # PS5.1 real-execution fixture runner for skills/source/lint/check-command-contract.
 #
 # Runs each fixture contract through:
-#   1. The lint script (Python implementation; PowerShell sibling parity
-#      assumed verified separately).
+#   1. BOTH lint implementations (Python + PowerShell sibling), asserting
+#      each against the shared expectations AND that their exit codes agree
+#      (cross-implementation parity).
 #   2. The actual PowerShell 5.1 invocation specified by contract.command,
 #      observing real stdout and exit code.
 # Compares (1) lint judgement and (2) real-execution behaviour against the
@@ -26,7 +27,8 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 # Resolve paths relative to this script's location.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir '..\..\..')).Path
-$LintScript = Join-Path $RepoRoot 'skills\source\lint\check-command-contract.py'
+$LintScript   = Join-Path $RepoRoot 'skills\source\lint\check-command-contract.py'
+$LintScriptPs = Join-Path $RepoRoot 'skills\source\lint\check-command-contract.ps1'
 $ContractsDir = Join-Path $ScriptDir 'contracts'
 
 # Expectations table for each fixture.
@@ -155,6 +157,30 @@ function Invoke-Lint {
     }
 }
 
+function Invoke-LintPs {
+    param([string]$ContractPath, [string]$WorkingDir)
+    Push-Location $WorkingDir
+    try {
+        # Run the PowerShell sibling lint with the same temp-file stderr
+        # separation pattern used by Invoke-Lint to avoid PS5 ErrorRecord
+        # wrapping of native-command stderr lines.
+        $tmpErr = [System.IO.Path]::GetTempFileName()
+        try {
+            $stdout = & powershell.exe -ExecutionPolicy Bypass -NoProfile `
+                -File $LintScriptPs -Contract $ContractPath 2>$tmpErr | Out-String
+            $stderr = [System.IO.File]::ReadAllText($tmpErr)
+            return @{
+                ExitCode = $LASTEXITCODE
+                Output   = $stdout + $stderr
+            }
+        } finally {
+            Remove-Item -LiteralPath $tmpErr -Force -ErrorAction SilentlyContinue
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
 function Invoke-RealRun {
     param([string[]]$Command, [string]$WorkingDir)
     Push-Location $WorkingDir
@@ -215,8 +241,9 @@ function Test-Contains {
 
 Write-Output ('=' * 80)
 Write-Output "PS5.1 lint+real-execution fixture runner"
-Write-Output "Lint script: $LintScript"
-Write-Output "Contracts:   $ContractsDir"
+Write-Output "Lint (py): $LintScript"
+Write-Output "Lint (ps): $LintScriptPs"
+Write-Output "Contracts: $ContractsDir"
 Write-Output ('=' * 80)
 
 $results = @()
@@ -228,18 +255,41 @@ foreach ($exp in $Expectations) {
     Write-Output ''
     Write-Output "[$name] $($exp.notes)"
 
-    # 1) Lint (run with cwd = fixture root so contract.command's relative
-    #    -File path resolves to the bundled script)
+    # 1a) Lint -- Python implementation (run with cwd = fixture root so
+    #     contract.command's relative -File path resolves to the bundled script)
     $lint = Invoke-Lint -ContractPath $contractPath -WorkingDir $ScriptDir
     $lintExitOk = ($lint.ExitCode -eq $exp.lintExpectedExit)
     $lintCheck = Test-Contains -Output $lint.Output -Required $exp.lintMustContain -Forbidden $exp.lintMustNotContain
     $lintPass = $lintExitOk -and ($lintCheck.Missing.Count -eq 0) -and ($lintCheck.Unwanted.Count -eq 0)
     $lintStatus = if ($lintPass) { 'PASS' } else { 'FAIL' }
-    Write-Output "  lint:  exit=$($lint.ExitCode) expected=$($exp.lintExpectedExit)  $lintStatus"
+    Write-Output "  lint-py: exit=$($lint.ExitCode) expected=$($exp.lintExpectedExit)  $lintStatus"
     if (-not $lintPass) {
         if (-not $lintExitOk) { Write-Output "    exit mismatch" }
         if ($lintCheck.Missing.Count -gt 0)  { Write-Output "    missing: $($lintCheck.Missing -join ', ')" }
         if ($lintCheck.Unwanted.Count -gt 0) { Write-Output "    unwanted: $($lintCheck.Unwanted -join ', ')" }
+    }
+
+    # 1b) Lint -- PowerShell implementation (same cwd convention as 1a)
+    $lintPs = Invoke-LintPs -ContractPath $contractPath -WorkingDir $ScriptDir
+    $lintPsExitOk = ($lintPs.ExitCode -eq $exp.lintExpectedExit)
+    $lintPsCheck = Test-Contains -Output $lintPs.Output -Required $exp.lintMustContain -Forbidden $exp.lintMustNotContain
+    $lintPsPass = $lintPsExitOk -and ($lintPsCheck.Missing.Count -eq 0) -and ($lintPsCheck.Unwanted.Count -eq 0)
+    $lintPsStatus = if ($lintPsPass) { 'PASS' } else { 'FAIL' }
+    Write-Output "  lint-ps: exit=$($lintPs.ExitCode) expected=$($exp.lintExpectedExit)  $lintPsStatus"
+    if (-not $lintPsPass) {
+        if (-not $lintPsExitOk) { Write-Output "    exit mismatch" }
+        if ($lintPsCheck.Missing.Count -gt 0)  { Write-Output "    missing: $($lintPsCheck.Missing -join ', ')" }
+        if ($lintPsCheck.Unwanted.Count -gt 0) { Write-Output "    unwanted: $($lintPsCheck.Unwanted -join ', ')" }
+        $psHead = ($lintPs.Output -split "`n" | Select-Object -First 5) -join "`n      "
+        Write-Output "    lint-ps output (first 5 lines):"
+        Write-Output "      $psHead"
+    }
+
+    # Cross-implementation assertion: Python and PowerShell exit codes must agree.
+    $parityPass = $true
+    if ($lint.ExitCode -ne $lintPs.ExitCode) {
+        $parityPass = $false
+        Write-Output "  PARITY FAIL: py exit=$($lint.ExitCode) != ps exit=$($lintPs.ExitCode)"
     }
 
     # 2) Real PS5.1 run (only if realExpectedExit is set)
@@ -271,11 +321,13 @@ foreach ($exp in $Expectations) {
     }
 
     $results += @{
-        Name = $name
-        LintPass = $lintPass
-        RealPass = $realPass
-        LintStatus = $lintStatus
-        RealStatus = $realStatus
+        Name       = $name
+        LintPass   = $lintPass
+        LintPsPass = $lintPsPass -and $parityPass
+        RealPass   = $realPass
+        LintStatus   = $lintStatus
+        LintPsStatus = if ($lintPsPass -and $parityPass) { 'PASS' } else { 'FAIL' }
+        RealStatus   = $realStatus
     }
 }
 
@@ -287,12 +339,14 @@ Write-Output ('=' * 80)
 $totalPass = 0
 $totalFail = 0
 foreach ($r in $results) {
-    $line = "  {0,-40}  lint={1,-4}  real={2,-4}" -f $r.Name, $r.LintStatus, $r.RealStatus
+    $line = "  {0,-40}  lint-py={1,-4}  lint-ps={2,-4}  real={3,-4}" -f $r.Name, $r.LintStatus, $r.LintPsStatus, $r.RealStatus
     Write-Output $line
-    if ($r.LintPass -and $r.RealPass) { $totalPass++ } else { $totalFail++ }
+    if ($r.LintPass -and $r.LintPsPass -and $r.RealPass) { $totalPass++ } else { $totalFail++ }
 }
 Write-Output ''
-Write-Output "Total: $totalPass passed / $totalFail failed (of $($results.Count) fixtures)"
+$totalJudgments = $results.Count * 3
+Write-Output "Total fixtures: $($results.Count) passed / $totalFail failed (of $($results.Count) fixtures)"
+Write-Output "Total judgments: lint-py + lint-ps + real = $totalJudgments expected, all PASS"
 
 if ($totalFail -gt 0) {
     exit 1
