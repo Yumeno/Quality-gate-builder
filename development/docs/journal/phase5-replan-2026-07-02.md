@@ -116,9 +116,9 @@
 **切替後の最初のセッションで読むべきもの (順)**:
 1. 本書 (`phase5-replan-2026-07-02.md`)
 2. `phase5-fable5-cross-review.md` Part F (アクション一覧) — 詳細根拠が必要なら該当 Part
-3. `phase5-step5-a-2-4-progress.md` (compact 跨ぎ journal、現在地の確認)
+3. ~~`phase5-step5-a-2-4-progress.md`~~ **Track 1 完結時 (2026-07-02) に削除済み** — 現在地は `phase5-step5-a-2-4.md` §1.6 (完結判定の根拠) を読む
 
-**動作確認を兼ねた最初のタスク**: Track 1-1 (D-2)。理由: (a) スコープが 1 ファイルに閉じている、(b) 完了基準が機械的 (21 判定 PASS)、(c) 実機 PowerShell 操作 + Edit + expectations 調整という質の異なる操作を含むため、Opus 4.7 の作業成立性の確認材料として適切。
+**動作確認を兼ねた最初のタスク**: ~~Track 1-1 (D-2)~~ **Track 1 は 2026-07-02 に Fable 5 指揮 + sonnet subagent 実装の編成で消化済み** (commit `a65c6c5` / `44159cd` / 完結 commit)。残タスクは Track 2 (user 判断待ち) と Track 3 (5.b)。
 
 **注意事項の引き継ぎ**:
 - pytest の Bash/PowerShell 背景化問題 (memory `pytest-bash-bg-pattern`)

@@ -1,6 +1,6 @@
 # Phase 5 Step 5.a-2-4 完結ジャーナル: command authoring protocol + capability-based dispatch
 
-完結日: 2026-06-28
+完結日: 2026-07-02 (実機 fixture 検証 + Fable 5 横断レビュー反映を完結前 fix として合流、最終確定)
 着手前判断: `phase5-step5-a-2-4-prejournal.md` (commit `07de0c7`)
 前提: Step 5.a 全体 K=2 達成 (commit `ebee96f`)
 着手契機: K=2 r1 fix 進行中の user 提起 (日本語文書執筆プロジェクトの .ps1 契約 + PowerShell 5 + 日本語 encoding 問題への構造的解決)
@@ -75,6 +75,33 @@ Codex 視点転換の中核: ユーザー提起の論点は **日本語文書執
 
 この視点転換により、本 Step で確立した protocol / checklist は将来の他 runtime (Ruby / Perl / 独自 binary 等) にも同型に適用可能な拡張可能設計となった。
 
+### 1.6 完結判定の根拠: 机上 K=2 から実機 fixture 検証への転換
+
+本 Step の完結判定は「Codex 机上 K=2 の達成」ではなく「実機 fixture による運用基準達成」を根拠とする。この判断経緯と論理を恒久記録として残す。
+
+#### 机上 K=2 の収束不能
+
+Codex 横断レビューは r1〜r6 の 6 ラウンドを要し、finding 系列は 5→5→4→1→2→2 と収束しなかった。r4 以降は finding 数こそ 1〜2 件に減少したが、r5・r6 でそれぞれ新たな実装上の欠陥 (位置依存ロジックの false positive、PS7 略形の見落とし) が発見されており、「次のラウンドで 0 件になる」という見通しが立てられない状態だった。これは lint script が位置依存・runtime 分岐・略形対応を多く含む複雑な実装であることに起因する。
+
+#### 実機 fixture 検証への転換
+
+user 判断により、机上レビューを継続する代わりに `tests/fixtures/lint_command_contract/` を新設して実際に PS5.1 上で実行する方針に転換した。この 1 ラウンドで、机上 6 ラウンドが見逃していた lint bug を複数捕捉した:
+
+- `script_explicitly_provided` flag 欠如による derive 経由 path 比較 false positive
+- `required_flag_synonyms` 未定義による省略形が required_flags を通らない問題
+- `ep_aliases` 未定義による EP 重複・隣接検査の省略形対応漏れ
+- PS5.1 test runner 固有の罠 (null array・ErrorRecord 化・stdout+stderr 混合)
+
+実機 PS 5.1.26100 で 7 fixture すべてが PASS したことで「運用上問題ない」基準を機械的証跡として担保した。
+
+#### Fable 5 横断レビュー指摘の合流
+
+Fable 5 横断レビュー (`phase5-fable5-cross-review.md`) の指摘 D-1/D-2/D-3 は、完結前 fix として本 Step に合流させた。D-2 (PS 実装の fixture 未検証) は「実機で担保」を宣言した完結判定の根拠の穴そのものであり、完結処理の前提に昇格した。D-1 (body.md §10.1 の `pip install quality-gate-builder` — 供給網リスク) および D-3 (typo) は同一 commit で修正した (commit `44159cd`)。D-2 対応として lint Python・PS 両実装を 21 判定全 PASS まで拡張した (commit `a65c6c5`)。
+
+#### philosophy との整合
+
+この完結判定の切替は philosophy P6 (LLM 主観評価を ALLOW の単独根拠にしない) および P7 (監査可能性・再現性) に忠実な判断である。Codex 机上レビューは advisory であり、それが何ラウンド続いても「再現可能な機械的証跡」の代替にはならない。実機 fixture が示す 21 判定全 PASS こそが P7 の要求する監査可能証跡である。この判断パターンは auto-memory `review-process` に「実機 fixture 先行の原則」として一般化済みである。
+
 ## 2. Step 5.a-2 完結 journal §2 旧→新対応表への追記 (Step 5.a-2-4 反映)
 
 Step 5.a-2-4 で発生した修正は **既存 spec drift の訂正ではなく新規追加** が中心で、5.a-2 完結 journal §2 旧→新対応表に追記する形より、本書 §1 で **新規確立した境界** として記録。
@@ -98,6 +125,9 @@ Step 5.a-2-4 で発生した修正は **既存 spec drift の訂正ではなく�
 | K=2 r4 fix commit | 段階 8 K=2 r4 fix | -Command / -EncodedCommand と -File の排他チェック追加: PowerShell 仕様で `-Command` / `-EncodedCommand` は実行モードを指定する別 host parameter、`-File` と一緒に渡すと -Command 本体が実行され -File 以降は文字列引数扱い (script は実行されず exit 0、silent failure)。両者が argv に共存したら C3 finding。実機確認で `-Command "Write-Output COMMAND_RAN" -File script.ps1` で `COMMAND_RAN -File script.ps1` が出力 + script 不実行 + exit 0 を確認。Python + PowerShell + README + 完結 journal を同期 |
 | K=2 r5 fix commit | 段階 8 K=2 r5 fix | (a) **排他判定を -File より前の位置に限定**: r4 実装は `-Command` が argv のどこにあっても排他 finding を出すため、`-File script.ps1 -Command value` (script 引数として渡る `-Command`) で false positive。fix: 最初の -File より前の位置に出現した execution-mode option のみ排他 finding (Python + PS) (b) **PowerShell 省略形 (-c / -ec) も検出**: 実機 PS5.1 で `-c "..." -File script.ps1` も silent failure 経路。fix: allowlist 方式に変更、-File より前は許可 host option (展開済の略形一覧 -nol/-nop/-noni/-noe/-ex/-ep/-w 等) と未承認 token を区別、execution-mode option (`-command` / `-c` / `-encodedcommand` / `-ec`) は専用の排他 finding、それ以外の未承認 token は generic allowlist failure。Python + PS + README + 完結 journal を同期 |
 | K=2 r6 fix commit | 段階 8 K=2 r6 fix | (a) **PS7 exec-mode 略形を追加**: r5 まで PS5/7 共通の exec-mode set だったため PS7 公式の `-e` (EncodedCommand 略形) と `-CommandWithArgs`/`-cwa` を見逃していた。fix: `exec_mode_options_by_runtime` を runtime 別 dict 化、PS5 = {-command/-c/-encodedcommand/-ec}、PS7 = PS5 セット + {-e/-commandwithargs/-cwa}。help-mode (-help/-?//?) も exec-mode 相当として両 runtime で排他扱い (b) **allowlist を PS5/7 runtime 別公式 host option 網羅**: r5 までの allowlist は PS5/PS7 共通だったため、PS5 の `-EncodedArguments`、PS7 の `-Interactive`/`-i`、`-Login`/`-l`、`-ConfigurationFile`、`-CustomPipeName`、`-NoProfileLoadTime`、`-SettingsFile`/`-settings`、`-SSHServerMode`/`-sshs`、`-WorkingDirectory`/`-wd`/`-wo`、`-Version`/`-v` を未知扱いして false positive。fix: `allowed_host_options_by_runtime` を runtime 別 dict 化、PS5/PS7 公式 docs (about_powershell_exe / about_pwsh) を網羅。help-mode は exec-mode 側に移動 (-File と両立しない実運用に整合)。PS7 の -OutputFormat 略形 -o/-of 化、-Version の略形 -v 追加。Python + PS sibling parity 確認 (PS5 -EncodedArguments / PS7 -e / PS7 -Login -WorkingDirectory / 既存 example S1 と -c 略形回帰、全 ok) |
+| `b29ceef` | 段階 9 実機 fixture | PS5.1 実機 fixture テスト追加 + 実機発見 lint bug 修正 (7 fixture、lint Python 側の derive path 比較 false positive / required_flag_synonyms / ep_aliases を修正、7/7 PASS) |
+| `44159cd` | 段階 10 Track 1-2 | Track 1-2: body.md pip install 供給網リスク修正 + typo (Fable 5 レビュー D-1/D-3) |
+| `a65c6c5` | 段階 11 Track 1-1 | Track 1-1: fixture runner を lint 両実装 parity 検証に拡張、21 判定全 PASS (Fable 5 レビュー D-2) |
 
 ## 4. 機械検証実績
 
