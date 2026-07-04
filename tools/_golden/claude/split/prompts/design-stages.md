@@ -2,7 +2,7 @@
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: 14924a4088439977
+  build_input_digest: a9597890ff883282
 -->
 
 # 段階設計プロンプト (qgb design-stages、パターン B / C)
@@ -291,6 +291,7 @@ python -m qgb design-stages --json
 | UTF-8 mode | `python -X utf8 <script.py>` (Python 3.7+) または `PYTHONUTF8=1` 環境変数 (Windows 日本語環境で必須、Linux でも安全) |
 | stdout reconfigure | script 冒頭で `import sys; sys.stdout.reconfigure(encoding='utf-8', errors='strict')` (Python 3.7+、errors='strict' で誤 encode を fail-fast) |
 | argv | `python -X utf8 <script.py>` (UTF-8 mode 明示) |
+| argv[0] path 区切り | **OS ネイティブ区切り**で書く (Windows: `.venv\Scripts\python.exe`)。Windows CreateProcess は `/` 区切りの相対 path を解決しない (実測: `./.venv/Scripts/python.exe` は起動失敗) |
 | exit code | `sys.exit(0)` / `sys.exit(1)` を明示 |
 | 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep + `sys.stdout.reconfigure(errors='strict')` で encode 失敗を捕捉 |
 

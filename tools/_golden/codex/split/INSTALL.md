@@ -2,7 +2,7 @@
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: 14924a4088439977
+  build_input_digest: a9597890ff883282
 -->
 # qgb skill インストールガイド (codex / split)
 
@@ -22,7 +22,7 @@
 
 ### (A) 推奨: 同梱 setup script を実行
 
-このディレクトリに同梱されている `setup-qgb.ps1` / `setup-qgb.sh` を対象プロジェクトのルートにコピーし、実行してください。`.venv` を作成 (既存の `.venv` があれば温存) し、タグ固定 (`skill-v0.1.1` -- このスキルと同じバージョンにビルドされたタグ) で `git+` install した後、`qgb --version` で動作確認まで行います。
+このディレクトリに同梱されている `setup-qgb.ps1` / `setup-qgb.sh` を対象プロジェクトのルートにコピーし、実行してください。`.venv` を作成 (既存の `.venv` があれば温存) し、タグ固定 (`skill-v0.1.2` -- このスキルと同じバージョンにビルドされたタグ) で `git+` install した後、`qgb --version` で動作確認まで行います。
 
 Windows (PowerShell):
 
@@ -43,16 +43,16 @@ bash setup-qgb.sh
 ```powershell
 py -3 -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.1"
+pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.2"
 ```
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.1"
+pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.2"
 ```
 
-`skill-v0.1.1` はこのスキルの build と同じバージョン (`metadata.yaml#version`) から機械的に導出されたタグです。別バージョンのスキルを使う場合はそのスキルの INSTALL.md が焼き込む別タグを使ってください。
+`skill-v0.1.2` はこのスキルの build と同じバージョン (`metadata.yaml#version`) から機械的に導出されたタグです。別バージョンのスキルを使う場合はそのスキルの INSTALL.md が焼き込む別タグを使ってください。
 
 **信頼境界の注記**: `git+` install は指定タグの repo をclone して実行するのと同等の信頼を要求します (pip install 中に任意コードが実行され得る)。`--require-hashes` はこの install 経路には使えません (NF-011)。
 

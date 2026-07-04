@@ -97,7 +97,7 @@ qgb の利用者は幅広い。IT エンジニアも非エンジニアも、qgb 
 
 - 相手の語彙・発話の粒度・ペースを観察し、それに追従する。相手が使った言葉 (「テストみたいなもの?」) はまず受けて肯定し、必要なら少しずつ正確な言葉に置き換える。訂正から入らない
 - qgb 用語 (REQ / contract / stage / gate / ALLOW / DENY / waiver 等) は、相手が先に使わない限り、初出時に一言の日常語の言い換えを添える (例: 「REQ — このプロジェクトで守りたい約束を 1 枚に書いたもの」)
-- 詳しい相手には冗長な解説をしない。相手の理解が速いと分かったら説明の解像度を上げる — 見くびりも失礼にあたる
+- 詳しい相手には冗長な解説をしない。相手の理解が速いと分かったら説明の解像度を上げる — 見くびりも失礼にあたる。ただし理解度の観察は人物単位でなく**話題単位**で行う — 対象領域の専門家が qgb や品質保証の概念にも詳しいとは限らず、その逆もある
 
 **進め方:**
 
@@ -105,6 +105,11 @@ qgb の利用者は幅広い。IT エンジニアも非エンジニアも、qgb 
 - 相手の発話が曖昧・矛盾を含むときは、推測で走らず、噛み砕いた言い換えで確認する (「いま仰ったのは○○という理解で合っていますか」)。分からないことは分からないと言って問い直す
 - 節目ごとに「いま何が決まり、次に何を決めるか」を短く要約する
 - 相手が沈黙・停滞したら、詰めずに、より小さい質問か具体例に切り替える
+
+**決定の所有権 (説明の深さの適応と混同しない):**
+
+- 相手に合わせて変えてよいのは**説明の深さ・語彙・ペース**であって、**決定の所有権**ではない。設計の分岐点 (段階構成、検査観点の取捨、waiver の採否、評価機の方式) は、自分の案に自信があっても**必ず提示して相手に選ばせる**
+- 専門家相手に説明を省くのは正しい適応だが、決定の代行は適応ではない。既成事実を積み上げてから承認関門で「はい」を求める進め方は、関門で形式上停止していても、理解なき承認 (ゴム印) と同じ構造になる
 
 **憲章との接続 (これが本節の「なぜ」):**
 
@@ -204,6 +209,7 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
    - 各段階で実行する機械検査 (verification_type: command / file_exists / substring_match / json_schema)
    - **`command` の場合は必ず §6.5「command authoring protocol」を適用**する (任意の文字列を書けるが、runtime 規律を組み込まないと環境依存で動かない / 文字化けする / 利用者プロジェクトで運用上問題が起きる)
    - LLM レビューは `manual_check` 段階に分離、ALLOW 判定の根拠にしない (P6)
+   - 設計分岐で判断が発生したら §6.6 の記録トリガに従い knowledge.jsonl に理由を残す
 5. **`python -m qgb validate-policy REQ-XXX-NNN`** で機械検証
 6. **`python -m qgb check REQ-XXX-NNN`** でリハーサル実行
    - `artifacts/REQ-XXX-NNN/checks/<ts>/` に揮発出力
@@ -270,6 +276,7 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
      - bash: `bash <script.sh>` (shebang + executable bit を依存しない、portable)
      - Python: `python -X utf8 <script.py>` (Python 3.7+ で UTF-8 mode、Windows 日本語環境で `PYTHONUTF8=1` 推奨)
      - Node: `node --input-type=module <script.mjs>` 等、Node version を意識
+   - argv[0] (実行ファイルの path) は **OS ネイティブの path 区切り**で書く (例: Windows では `.venv\Scripts\python.exe`)。Windows の CreateProcess は `/` 区切りの相対 path を実行ファイルとして解決しない
 5. **runtime-specific preflight (= ι capability-based dispatch、§12 参照)**
    - 確定 runtime に対応する checklist を §12「段階設計プロンプト」の capability-based dispatch checklist から読み込んで適用
    - PowerShell 5 + 非 ASCII なら BOM 必須 / `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` 設定必須 等
@@ -320,6 +327,21 @@ ASCII safe alternative (pure ASCII + Unicode escape) は `skills/source/hooks/{c
 5. `qgb check` の log に `U+FFFD` がある
 
 dist build 時に converter が `dist/skills/{full,split}/<agent>/lint/` 配下に copy。
+
+### 6.6 記録の規律: knowledge.jsonl は利用者プロジェクトの journal
+
+gate.json が「**何が通ったか**」を残す (P7) のに対し、knowledge.jsonl は「**なぜそう決めたか**」を残す。評価系 (段階構成・contract・waiver) は設計物であり (P12)、その設計判断の理由は機械証跡には写らない。knowledge.jsonl はその置き場 — 次にこのプロジェクトを触る人間・agent への引き継ぎ資料である。
+
+**記録トリガ (このどれかが起きたら 1 エントリ):**
+
+1. **設計分岐の選択**: 段階構成・検査方式・被覆範囲で複数案から選んだとき、採らなかった案と理由ごと記録する (例: 「表記ゆれ検査は禁止リスト照合方式。LLM 評価機 (P12 経路) は規模に比して過剰なので不採用」)
+2. **実地トラブルと回避**: 環境固有の問題を踏んで回避したとき (例: argv[0] の path 区切り、encoding 問題)。同じ穴に二度落ちないための恒久化
+3. **外部情報の取り込み**: §3.4 の P8 既存規律 (source-index.json とセット)
+4. **waiver**: `qgb add-waiver` が自動記録する (追加作業不要)
+
+**比例原則:** 記録するのは判断が発生したときだけ。ルーチン作業 (scaffold、通常の check / run、機械的な修正) にエントリは不要。官僚的記録を強いるための仕組みではない — 「3 ヶ月後にこのプロジェクトを触る者 (人間でも agent でも) がこの判断の理由を必要とするか」で判定する。
+
+記入は `python -m qgb add-knowledge <file>` 経由 (§6.4 参照、直接編集しない)。entry 形式の例はレビュー観点プロンプト §5 を参照 (full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)。
 
 <!-- split:helper_end -->
 
@@ -717,6 +739,7 @@ python -m qgb design-stages --json
 | UTF-8 mode | `python -X utf8 <script.py>` (Python 3.7+) または `PYTHONUTF8=1` 環境変数 (Windows 日本語環境で必須、Linux でも安全) |
 | stdout reconfigure | script 冒頭で `import sys; sys.stdout.reconfigure(encoding='utf-8', errors='strict')` (Python 3.7+、errors='strict' で誤 encode を fail-fast) |
 | argv | `python -X utf8 <script.py>` (UTF-8 mode 明示) |
+| argv[0] path 区切り | **OS ネイティブ区切り**で書く (Windows: `.venv\Scripts\python.exe`)。Windows CreateProcess は `/` 区切りの相対 path を解決しない (実測: `./.venv/Scripts/python.exe` は起動失敗) |
 | exit code | `sys.exit(0)` / `sys.exit(1)` を明示 |
 | 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep + `sys.stdout.reconfigure(errors='strict')` で encode 失敗を捕捉 |
 
