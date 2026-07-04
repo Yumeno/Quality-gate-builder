@@ -91,9 +91,10 @@ def test_failed_curated_write_preserves_previous_latest(
     assert curated.is_dir()
     assert (curated / "gate.json").is_file()
     surviving = json.loads((curated / "gate.json").read_text(encoding="utf-8"))
-    assert surviving["run_id"] == first_run_id, (
-        "atomic 書き込みなら curated 失敗時の latest は前回のまま残るはず"
-    )
+    assert (surviving["timestamp_utc"], surviving["run_id"]) == (
+        first_gate["timestamp_utc"],
+        first_run_id,
+    ), "atomic 書き込みなら curated 失敗時の latest は前回のまま残るはず"
     # 旧 stage logs も残る (stages 空にされていない)。
     stages_dir = curated / "stages"
     assert stages_dir.is_dir()
@@ -248,7 +249,14 @@ def test_recover_from_orphan_old_dir_when_latest_missing(tmp_path: Path) -> None
     )
     assert curated.is_dir()
     new_gate = json.loads((curated / "gate.json").read_text(encoding="utf-8"))
-    assert new_gate["run_id"] != first_run_id
+    # run_id は同一秒内でしか一意でない (evidence._reserve_run_dir: 秒が変わると
+    # r0001 から再スタート)。run の同一性は (timestamp_utc, run_id) のペア
+    # (= run_dir 名) で判定する。run_id 単独比較は 2 回の run が秒境界を
+    # 跨いだときに両方 r0001 になり偽陽性で fail する (CI 実測 2026-07-04)。
+    assert (new_gate["timestamp_utc"], new_gate["run_id"]) != (
+        first_gate["timestamp_utc"],
+        first_run_id,
+    )
 
     # 復元時の orphan は最終的に掃除される (latest.old-* が残らない)。
     leftovers = [
@@ -310,9 +318,10 @@ def test_swap_rename_failure_restores_previous_latest(
     # 既存 latest/ は前回 (= 1 回目の run_id) のまま残る。
     assert curated.is_dir()
     surviving = json.loads((curated / "gate.json").read_text(encoding="utf-8"))
-    assert surviving["run_id"] == first_run_id, (
-        f"tmp→final 失敗時に latest が復元されていない: got {surviving['run_id']}"
-    )
+    assert (surviving["timestamp_utc"], surviving["run_id"]) == (
+        first_gate["timestamp_utc"],
+        first_run_id,
+    ), f"tmp→final 失敗時に latest が復元されていない: got {surviving['run_id']}"
 
 
 def test_atomic_swap_removes_old_stage_logs(tmp_path: Path) -> None:
