@@ -1,0 +1,17 @@
+{
+  "$comment_top": "qgb skill optional hook for Codex CLI (Windows native PowerShell). See README.md for opt-in / dry-run / validate / non-destructive merge instructions. DO NOT replace ~/.codex/hooks.json with this file; merge the hooks.UserPromptSubmit entry into your existing hooks file (or [hooks] table in ~/.codex/config.toml, but not both). The {{QGB_SCRIPT_PATH}} placeholder MUST be replaced with the absolute path to scripts/check-relevance.ps1 at install time (see README step 3).",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "$comment_matcher_note": "matcher is silently ignored for UserPromptSubmit in Codex CLI. Filtering happens inside the script (stdin JSON .prompt regex check). The matcher field is intentionally omitted so install-time merge tools do not surface a noisy diff against an unused field.",
+        "hooks": [
+          {
+            "$comment_hook": "PowerShell script reads stdin (Codex UserPromptSubmit JSON), regex-matches .prompt against the qgb keyword pattern, and emits a plain-text nudge only on match. Codex injects stdout as additional context for the matched prompt. Non-match returns empty stdout + exit 0. No filesystem or network side effects. {{QGB_SCRIPT_PATH}} must be an absolute path to scripts/check-relevance.ps1 (see README.md step 3).",
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File \"{{QGB_SCRIPT_PATH}}\""
+          }
+        ]
+      }
+    ]
+  }
+}
