@@ -7,9 +7,9 @@ description: |
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.3
+  skill_version: 0.1.4
   converter_version: 0.1.1
-  build_input_digest: 8297056c361259ee
+  build_input_digest: 615b17206d93a251
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
@@ -219,6 +219,8 @@ qgb の責務分離 (command runner / 異常時責務分離 / process tree parti
 `pip install quality-gate-builder` は**実行しない** (PyPI 未公開のため、同名パッケージが存在した場合それは qgb ではない)。将来 PyPI 公開された場合は本節を更新する。
 
 `git+` install はタグ先の repo を clone するのと同等の信頼を要求する (`--require-hashes` は VCS install に使えない、NF-011)。venv を使わないグローバル install は分かっている利用者向けの非推奨経路として残るが、既定は venv。
+
+**バージョンの読み方**: `python -m qgb --version` が返すのは **qgb CLI (Python パッケージ) の版**。skill 自体の版は SKILL.md 冒頭の生成ヘッダ `skill_version` を見る。リリースタグから install していれば両者は同じ番号に揃う (release CI が機械検証) が、別空間の版号である。ヘッダの `converter_version` は変換ツールの版でさらに別物。
 
 ### 10.2 「`.quality-system/` が既にあるが内容が古い」
 

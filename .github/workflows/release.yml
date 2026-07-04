@@ -103,6 +103,8 @@ jobs:
       # versa) would publish zips whose contents reference a different
       # tag than the release they are attached to. Fail before building.
       # Dry-run (workflow_dispatch) has no tag, so the check is tag-only.
+      #
+      # Since v0.1.4 the qgb Python package version (pyproject.toml) is bumped in lockstep with skill releases so 'qgb --version' matches the installed tag.
       - name: Verify tag matches metadata.yaml version
         if: startsWith(github.ref, 'refs/tags/skill-v')
         shell: bash
@@ -114,6 +116,12 @@ jobs:
             exit 1
           fi
           echo "OK: tag ${GITHUB_REF_NAME} matches metadata.yaml version ${META_VER}"
+          PYPROJECT_VER="$(python -c "import re; print(re.search(r'^version *= *\"([^\"]+)\"', open('pyproject.toml', encoding='utf-8').read(), re.M).group(1))")"
+          if [[ "${PYPROJECT_VER}" != "${META_VER}" ]]; then
+            echo "::error::pyproject.toml version ${PYPROJECT_VER} does not match metadata.yaml version ${META_VER} (lockstep policy since v0.1.4)."
+            exit 1
+          fi
+          echo "OK: pyproject.toml version ${PYPROJECT_VER} matches metadata.yaml"
 
       # Lineage (a): SOURCE_DATE_EPOCH-unset build must byte-match the
       # committed tools/_golden/ tree. Reuses the existing golden test

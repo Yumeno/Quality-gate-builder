@@ -1,8 +1,8 @@
 # GENERATED FILE - DO NOT EDIT.
 # This is a generated artifact. Edit skills/source/body.md instead.
-# skill_version: 0.1.3
+# skill_version: 0.1.4
 # converter_version: 0.1.1
-# build_input_digest: 8297056c361259ee
+# build_input_digest: 615b17206d93a251
 param(
     [string]$FromPath = ""
 )
@@ -77,8 +77,8 @@ if ($FromPath -ne "") {
     Write-Step "Step 3: installing qgb from local path (editable): $FromPath"
     & $venvPython -m pip install -e $FromPath
 } else {
-    Write-Step "Step 3: installing qgb from git+https://github.com/Yumeno/Quality-gate-builder.git (tag skill-v0.1.3)..."
-    & $venvPython -m pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.3"
+    Write-Step "Step 3: installing qgb from git+https://github.com/Yumeno/Quality-gate-builder.git (tag skill-v0.1.4)..."
+    & $venvPython -m pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.4"
 }
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[setup-qgb] ERROR: pip install failed (exit $LASTEXITCODE)."

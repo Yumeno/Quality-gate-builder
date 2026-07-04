@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.3
+  skill_version: 0.1.4
   converter_version: 0.1.1
-  build_input_digest: 8297056c361259ee
+  build_input_digest: 615b17206d93a251
 -->
 
 # 段階設計プロンプト (qgb design-stages、パターン B / C)
@@ -109,17 +109,25 @@ python -m qgb design-stages propose-context --out .quality-system/_proposal_inpu
 
 - `.quality-system/knowledge/project-context.md` (人間正本、自然言語の設計意図)
 - `.quality-system/knowledge/knowledge.jsonl` (waiver / 外部知識記録、必要な範囲だけ)
-- `examples/<example>/design-notes.md` + `policy.json` (few-shot 参照、本文 §7.2 に一覧がある 6 例から自分で選ぶ)
-- `philosophy.md` (P5〜P12 原文、本文 §3 の 4 原則サマリで足りなければ直接参照)
+- `examples/<example>/design-notes.md` + `policy.json` — **qgb repo を参照できる環境でのみ** few-shot として読む (skill 配布 zip / pip パッケージには同梱されない)。参照できなくても §5 の設計指針だけで自力設計してよい (設計は成立する)
+- `philosophy.md` — 同じく qgb repo 内の資料。参照できない環境では本文 §3 の 4 原則サマリと本プロンプトの記述で足りる設計になっている
 
 ### 3.2 段階案の起草 (LLM 責務)
 
-LLM (本スキル) は context を読んで段階案を JSON で起草する。最低限の構造:
+LLM (本スキル) は context を読んで段階案を JSON で起草する。**起草前に、インストール済み qgb パッケージ同梱の `proposal.schema.json` を Read して最新の形式を確認する** (schema の場所: `python -c "import qgb, os; print(os.path.join(os.path.dirname(qgb.__file__), 'schemas'))"`)。以下の例は説明用であり、**スキーマが正**:
 
 ```json
 {
-  "proposal_version": "1.0",
+  "schema_version": "1.0",
+  "proposal_type": "policy_stages",
   "policy_id": "default",
+  "source_metadata": {
+    "generator": "claude-code",
+    "basis": [
+      {"type": "philosophy", "ref": "P10", "rationale": "段階の可変性を尊重、対象に応じて 2 段階に絞った"},
+      {"type": "project_context", "ref": ".quality-system/project-context.json#purpose", "rationale": "purpose = '入力検証 + 変換' から S1〜S2 を導出"}
+    ]
+  },
   "stages": [
     {
       "id": "S1",
@@ -137,20 +145,21 @@ LLM (本スキル) は context を読んで段階案を JSON で起草する。�
       "verification_type": "json_schema",
       "required_contract_fields": ["target", "schema"]
     }
-  ],
-  "basis": [
-    {"type": "example", "ref": "examples/python-cli-pytest/", "rationale": "Python CLI の典型段階構造として参照"},
-    {"type": "philosophy", "ref": "P10", "rationale": "段階の可変性を尊重、対象に応じて 4 段階に絞った"},
-    {"type": "project_context", "ref": ".quality-system/project-context.json#purpose", "rationale": "purpose = '入力検証 + 変換' から S1〜S4 を導出"}
-  ],
-  "human_reviewed": false,
-  "notes": "S4 (異常系) を分離した理由: 不正入力の安全な拒否を別段階で保証 (P1 一要求一外部化)"
+  ]
 }
 ```
 
+形式の要点:
+
+- トップレベルは `schema_version` / `proposal_type` (`"policy_stages"` 固定) / `stages[]` が必須。**それ以外の未知キーは拒否される** (`additionalProperties: false` — 外部入力境界なので未知キーは typo か smuggled content とみなす、NF-007)
+- 設計根拠 (採用した example / philosophy / project-context への参照と理由) は **`source_metadata` に載せる** (自由形式、adopt 結果 JSON に verbatim で引き継がれる P7 provenance)
+- **`stages[]` は既存 `policy.json#stages` の全置換** (差分追加ではない)。既存段階を残す場合も proposal に全段階を含めること
+
 ### 3.3 人間承認
 
-LLM は `human_reviewed: false` のまま proposal を出す (P8 違反になるため自動 true 化禁止)。利用者が proposal を読んで承認したら `human_reviewed: true` に書き換える (手動編集 or 確認 UI 経由)。
+proposal そのものに承認フラグのフィールドは無い。**承認とは、利用者が段階案 (各段階の responsibility / 採らなかった案とその理由) の説明を受けて理解した上で、adopt の実行を許可する手続きそのもの** (本文 §3.5「対話の姿勢」の決定の所有権。本プロンプト自身の §3.5 とは別)。LLM は利用者の明示承認を得るまで adopt を実行してはならない。承認に至る設計根拠は proposal の `source_metadata` に、判断の経緯は必要に応じて knowledge.jsonl (§6.6 トリガ 1) に残す。
+
+なお `project-context.json` の `human_reviewed` はこれとは別物 (プロジェクト自己定義を人間が確認済みかのフラグ)。false のままだと `propose-context` が advisory warning を出す。利用者が内容を確認済みなら、このタイミングで true 化を利用者に確認する (立てる判断は利用者のもの。agent が編集を代行するのは利用者の明示承認発話を得た直後に限る — P8)。
 
 ### 3.4 adopt の実行
 
@@ -160,13 +169,11 @@ python -m qgb design-stages adopt .quality-system/_proposal_input.json
 
 qgb が以下を機械検証:
 
-- proposal schema 検証
-- `human_reviewed: true` の確認 (false なら error)
+- proposal schema 検証 (`additionalProperties: false` の外部入力境界)
+- `schema_version` / `proposal_type` のサポート判定 (未対応値は理由付き AdoptError)
 - DAG (循環なし)
 - stage id 一意
 - responsibility 非空
-- verification_type が定義済み列挙値
-- 既存 `policy.json` がある場合は変更差分を提示
 
 検証通過なら `policy.json#stages[]` に書き込み。**書き込みは atomic swap** (途中状態が残らない、Phase 2 規律)。
 
@@ -252,7 +259,7 @@ python -m qgb design-stages --json
 `verification_type=command` を選んだ時点で:
 
 1. 利用者環境の runtime を 1 つに **確定** する (PowerShell 5 vs 7、bash vs zsh 等の曖昧さを残さない)
-2. 確定した runtime に対応する下記 checklist の **全項目を proposal `basis[]` で言及** する (人間が承認するときの確認点)
+2. 確定した runtime に対応する下記 checklist の **全項目を proposal の `source_metadata` で言及**する (設計根拠の置き場、人間が承認するときの確認点)
 3. checklist に該当しない新 runtime (例: Ruby / Perl / 独自 binary 等) を採用する場合、design-notes.md に **新 runtime checklist** を追記して proposal に含める
 
 #### PowerShell 5 / 7 (Windows native)

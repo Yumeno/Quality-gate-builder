@@ -1,14 +1,16 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.3
+  skill_version: 0.1.4
   converter_version: 0.1.1
-  build_input_digest: 8297056c361259ee
+  build_input_digest: 615b17206d93a251
 -->
 
 ## 7. 参照集
 
 (本セクションは full モード: SKILL.md 内の埋め込み見出し / split モード: `references.md` 別ファイル。)
+
+> **注意**: 本節の `development/docs/` / `examples/` は **qgb repo (github.com/Yumeno/Quality-gate-builder) 内の資料**であり、skill 配布物 (zip / pip パッケージ) には同梱されない。参照できない環境では、本 SKILL.md 内の要約 (§3 の 4 原則、§12 の設計指針) で運用が成立する設計になっている。
 
 ### 7.1 qgb 本体の正本
 
@@ -21,7 +23,7 @@
 ### 7.2 利用者向け資料
 
 - `development/docs/phase1-manual.md` — Phase 1 で確立した利用者マニュアル
-- `examples/` — 6 例の設計パック
+- `examples/` — 6 例の設計パック (qgb repo 内のみ、配布物には同梱されない)
   - `generic-minimal/` (汎用最小、language-agnostic)
   - `python-cli-pytest/` (Python CLI + pytest)
   - `markdown-docs/` (ドキュメント群)

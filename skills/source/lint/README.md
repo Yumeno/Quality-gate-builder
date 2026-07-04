@@ -47,7 +47,7 @@ exit 1 → fix required (proposal を直す)。exit 2 → usage error。
 
 - **skill 内部の lint** であり qgb 本体機能ではない (philosophy P9 + framework-shape §5「対象判定を qgb 本体へ戻さない」境界遵守)
 - lint の役割は **proposal adopt 前の検査**、ALLOW 判定の根拠にはならない (philosophy P6)
-- 検査結果は `knowledge.jsonl` に `entry_type: review_note` + `source_type: llm_advisory` で記録可能 (advisory として、basis にしない)
+- 検査結果は `knowledge.jsonl` に `kind: inferred_fact` + `source_type: inferred` で記録可能 (advisory として、basis にしない)
 
 ## 制限
 

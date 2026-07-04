@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.3
+  skill_version: 0.1.4
   converter_version: 0.1.1
-  build_input_digest: 8297056c361259ee
+  build_input_digest: 615b17206d93a251
 -->
 
 ## 6. 作業手順
@@ -27,15 +27,22 @@
    - 利用者から目的 / 対象範囲 / 採用しない方式 / 参照文書を聞き取り、`.quality-system/knowledge/project-context.md` に Markdown で書く
    - 「言語判定」「フレームワーク判定」を agent が肩代わりしない (adapter 量産方針と同じ問題が再発する、Phase 3 Step 3.0 教訓)
 5. **`project-context.json` (機械正本) を補佐 Agent として起草**
+   - **起草前に同梱スキーマを Read する**: `python -c "import qgb, os; print(os.path.join(os.path.dirname(qgb.__file__), 'schemas'))"` で場所を確定し、`project-context.schema.json` を読む。散文の記憶で書かない (スキーマが正)
+   - md の箇条書きは json では構造化される点に注意: 「採用しない方式とその理由」は `non_adopted_methods: [{"method": ..., "reason": ...}]`、「参照文書」は `references: [{"kind": ..., "path": ...}]` — **文字列配列ではない**
    - `project-context.md` を読んで `.quality-system/project-context.json` に構造化
    - `source_metadata.generated_by: "agent-assisted"` を立てる
-   - `human_reviewed: true` は **人間のみが立てる** (P8 違反になる)、agent は `false` のまま
+   - `human_reviewed` は `false` のまま起草し、**利用者が内容を確認したら true 化を利用者に確認する** (立てる判断は利用者のもの。agent の無断 true 化は P8 違反。確認を経ずに false のまま進めると `propose-context` が advisory warning を出し続ける)
 6. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
    - `req/REQ-APP-001.md` + `req/REQ-APP-001.meta.json` + `contracts/REQ-APP-001/<stage>.json` のひな型
    - 利用者と要求内容を対話して `REQ-APP-001.md` 本文を埋める
 7. **`python -m qgb validate-policy` で機械検証**
    - `config.json` / `policy.json` の存在、契約の DAG、`manual_check`-only REQ の警告
    - blocker があれば修正して再実行
+
+8. **設計分岐の提示: 判定履歴の保存方針** (§3.5 決定の所有権の型で、初期化時に一度だけ)
+   - 機構の事実を開示する: `evidence/<REQ>/latest/` は次の `qgb run` で**上書き**され、`artifacts/` は揮発 (.gitignore + prune 対象)。過去の判定 — 特に DENY だった証跡 — を残したければ、上書き前にどこかへ固定する必要がある
+   - 残すか・どう残すか (git commit のタイミング規約 / 別の VCS / アーカイブ / 「latest だけで十分」) は**利用者の設計判断**。git の利用を前提にしない
+   - 選択した方針は §6.6 トリガ 1 (設計分岐の選択) として knowledge.jsonl に理由ごと記録する
 
 ### 6.2 REQ 設計フロー
 
@@ -183,5 +190,5 @@ gate.json が「**何が通ったか**」を残す (P7) のに対し、knowledge
 
 **比例原則:** 記録するのは判断が発生したときだけ。ルーチン作業 (scaffold、通常の check / run、機械的な修正) にエントリは不要。官僚的記録を強いるための仕組みではない — 「3 ヶ月後にこのプロジェクトを触る者 (人間でも agent でも) がこの判断の理由を必要とするか」で判定する。
 
-記入は `python -m qgb add-knowledge <file>` 経由 (§6.4 参照、直接編集しない)。entry 形式の例はレビュー観点プロンプト §5 を参照 (full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)。
+記入は `python -m qgb add-knowledge <file>` 経由 (§6.4 参照、直接編集しない)。**エントリ起草前に同梱 `knowledge.schema.json` を Read する** (§6.1 step 5 の要領。必須 field は `id` / `kind` / `title` / `source_type` / `created_at`)。entry 形式の例はレビュー観点プロンプト §5 を参照 (full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)。
 
