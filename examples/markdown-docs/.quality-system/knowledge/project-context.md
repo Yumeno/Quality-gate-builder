@@ -112,7 +112,7 @@ Phase 3 Step 3.0 で adapter 撤去後は contract literal の規約として
   「言語固有のヒューリスティック」を非コード対象に強引に適用しない
 - **stage 設計の小さな単位**: 3 stage / 3 verification_type の組合せが
   最小例として成立すること。利用者対象が複雑なら stage を増やすが、
-  philosophy P10 の推奨範囲 (3〜7 stage) を超えない
+  stage-design.md §9 の推奨範囲 (3〜7 stage、philosophy P10 の段階可変性に基づく) を超えない
 - **採用しない方式の明示**: `non_adopted_methods` は LLM が新 stage を
   提案するときの重要な制約。本 example の wordcount / spell-check 等
   の reject 理由を learn する

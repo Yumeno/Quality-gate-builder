@@ -44,6 +44,12 @@ qgb が固定するのは評価主体ではなく、評価が判定根拠にな�
 - 改訂案 2 (P6 根拠付け替え): 本 P12 と統合予定 (上記 §3)。P6 は「(a) 経路の規律 × (b) 独立性原則の交点」として再根拠化 (§1 論点 6)
 - 改訂案 3 (3〜7 レンジ降格): **方向合意 (2026-07-03)** — user「憲章というよりは推奨設計」。stage-design.md §9 (同内容既存) へ一本化し、P10 適用節からレンジを外す。改訂実行時に v2.0 へ同梱
 
-## 5. Track 2 の到達状態 (2026-07-03 時点)
+## 5. Track 2 の到達状態: **実行済み (2026-07-03)**
 
-3 件すべて方向確定。実行は「P12 追加 + P6 再根拠化 + P10 レンジ降格」を **philosophy v2.0 の 1 改訂 (Issue 1 本)** として、user の選ぶタイミングで §6 手続きにより実施する。文言は本草案 §2 を起点に user が最終化する。
+3 件すべて方向確定 → 同日、user の決裁 (「OK!」+ Issue 起票承認) を得て **philosophy v2.0 として実行完了**。
+
+- Issue: [#26](https://github.com/Yumeno/Quality-gate-builder/issues/26) (§6 手続き)
+- 文言: 本草案 §2 を Fable 5 が最終化し、user が承認決裁 (提案者と承認者の分離 = P12 自身のパターンを改訂プロセス自体に適用)
+- 影響先伝播: philosophy.md / stage-design.md (指揮役直接編集) + requirements §3.2 / body.md 2 節 / CLAUDE.md / examples 3 件のレンジ帰属修正 + markdown-docs の source_md_sha256 再ピン (sonnet subagent)
+- 検証: 全 suite 813 passed + build_skill --check で body.md marker 整合確認
+- **発見された既存 drift (本改訂スコープ外、5.b 段階 5 レビューで扱う)**: body.md が propose-context 出力に `philosophy_anchors` field を記載しているが、`qgb/core/proposal.py` の実装には存在しない (aspirational doc)。スキル利用者を誤導し得るため、5.b 段階 5 で code 追加 or doc 修正を判断

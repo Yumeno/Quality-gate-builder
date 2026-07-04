@@ -8,7 +8,7 @@ Phase 1 (Python CLI MVP) と Phase 2 ("編集を安全にする") は完結。**
 
 The authoritative documents in priority order:
 
-1. `development/docs/philosophy.md` — the 思想憲章 (philosophy charter, 11 不易). All other documents are subordinate.
+1. `development/docs/philosophy.md` — the 思想憲章 (philosophy charter, 12 不易). All other documents are subordinate.
 2. `development/docs/requirements_and_development.md` — 要件定義書・基本設計書 v0.3 (Phase 3 完結反映済み, §1.3 / §13 / §14).
 3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.29 as of 2026-06-26, Step 3.2 完結 + Phase 3 全体完結反映).
 4. `development/docs/framework-shape.md` — Layer 1〜4 境界 (Phase 3 Step 3.0 で Layer 3 スキル責務文言改訂、Step 3.1 で §4 command runner 動作契約節 + §7.4 異常時の責務分離を追加).
@@ -44,7 +44,7 @@ These are load-bearing decisions. Diverging from them silently will break the de
 
 - **Unset / undefined / missing → NOT_READY**, never silent pass. The only way to remove a check from judgment is an explicit `waived` entry with `reason` and `decided_by` recorded as evidence (philosophy F-007, Step 2.3 で `qgb add-waiver` 経路を確立).
 
-- **LLM review can never produce ALLOW alone** (philosophy P6, F-015, C-001). LLM output is an advisory signal only. This applies to both qgb's own development (CI / merge gates) and to user projects.
+- **LLM review can never produce ALLOW alone** (philosophy P6, F-015, C-001). LLM output is an advisory signal only. This applies to both qgb's own development (CI / merge gates) and to user projects. externalized/pinned/qualified evaluator programs (P12, charter v2.0) are NOT covered by this prohibition; the prohibition targets path-bypassing evaluation (the operating agent's own ad-hoc judgment).
 
 - **Minimum dependencies, supply-chain-aware.** Prefer the Python stdlib. Currently only `jsonschema` is a runtime dependency. Any external dependency requires the §6.6.2 checklist of `requirements_and_development.md`. PyPI itself is treated as untrusted infrastructure (NF-011). Phase 3 Step 3.2 で `requirements.lock` + `requirements-dev.lock` (`pip-compile --generate-hashes`, Windows × Python 3.10 生成、layered + `--allow-unsafe`) を repo commit、CI で `--require-hashes --only-binary :all:` install + `--no-build-isolation` editable install + `lock-integrity` job (committed lock seed + `tools/diff_locks.py` で header strip body 比較) を確立済。SBOM 生成 / vulnerability scan / lock artifact 保管は qgb 本体 CI 責務外 (利用者運用、`development/docs/ci-examples.md` 参考)。詳細運用契約は `SECURITY.md` "Dependency Lock Policy"。
 

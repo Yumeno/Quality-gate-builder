@@ -33,7 +33,7 @@ PowerShell 5 (Windows 同梱) は BOM なし `.ps1` を **system code page (cp93
 | S4 | 起点ファイル存在 + H1 | substring_match | - |
 
 S1-S3 は PowerShell 5 `.ps1` 契約、S4 は qgb 内蔵の substring_match (script 不要、軽量)。
-段階数 4 は本例の対象 (文書群) に対して適切 (philosophy P10、`policy.json` の 3-7 段階推奨範囲内)。
+段階数 4 は本例の対象 (文書群) に対して適切 (philosophy P10 の段階可変性、`stage-design.md` §9 の 3-7 段階推奨範囲内)。
 
 ## runtime assumptions (β-lite: project-context md に記録)
 

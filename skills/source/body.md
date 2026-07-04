@@ -55,7 +55,7 @@ LLM (qgb スキルを使う agent) は以下の依頼があったとき、対応
 
 ## 3. 絶対遵守の 4 原則 (philosophy の中核)
 
-これらは qgb の不易 (`philosophy.md` 11 原則のうち、スキル経由で破られやすい 4 つ)。LLM の自律判断より上位:
+これらは qgb の不易 (`philosophy.md` 12 原則のうち、スキル経由で破られやすい 4 つ)。LLM の自律判断より上位:
 
 ### 3.1 ALLOW の意味は限定 (P5)
 
@@ -305,7 +305,7 @@ dist build 時に converter が `dist/skills/{full,split}/<agent>/lint/` 配下�
 
 ### 7.1 qgb 本体の正本
 
-- `development/docs/philosophy.md` — 思想憲章 (11 不易、最上位)
+- `development/docs/philosophy.md` — 思想憲章 (12 不易、最上位)
 - `development/docs/requirements_and_development.md` — 要件定義書・基本設計書
 - `development/docs/detailed-design.md` — 詳細設計
 - `development/docs/framework-shape.md` — Layer 1〜4 境界
@@ -491,7 +491,7 @@ python -m qgb design-stages propose-context --out .quality-system/_proposal_inpu
 - `examples_index`: `examples/` 配下の `<example>/design-notes.md` / `policy.json` の pointer リスト (LLM が必要な例を Read で読む)
 - `existing_policy_json`: 既に `policy.json` があれば現状の `stages[]`
 - `knowledge_jsonl_summary`: knowledge entry の件数と種別
-- `philosophy_anchors`: P5 / P6 / P7 / P8 / P9 / P10 / P11 の id と一文サマリ
+- `philosophy_anchors`: P5 / P6 / P7 / P8 / P9 / P10 / P11 / P12 の id と一文サマリ
 
 ### 3.2 段階案の起草 (LLM 責務)
 
@@ -603,6 +603,8 @@ python -m qgb design-stages --json
 | 人間の目視確認 | `manual_check` (採用判定の根拠にできない、P6) |
 
 `manual_check` を含む段階を `required: true` で参照する REQ は `qgb run` で NOT_READY エラー。LLM レビューや人間目視は採用根拠から分離するのが philosophy の核 (「レビュー観点プロンプト」参照、full: SKILL.md 内の埋め込み見出し / split: `prompts/review-policy.md`)。
+
+**LLM/VLM を組み込んだ評価プログラムは `command` 型の判定機として採用できる** (philosophy P12)。ただし採用の規律を守る: モデル・プロンプト・集約手続き (多数決/平均/閾値)・判定基準の固定と版管理、実行ごとの証跡、校正記録 (人間ラベルとの一致率等)、人間による採用承認。評価主体は被評価物の生成者・本スキルを動かす agent と利害を共有しない構成が原則 (逸脱は理由付き宣言 + 評価機設計段階での人間の承認決裁が条件)。
 
 ### 5.3 depends_on の決め方
 
@@ -762,7 +764,7 @@ skill が `verification_type=command` の contract を起草した直後、`skil
 
 ## 8. 関連参照
 
-- `philosophy.md` P5 / P6 / P7 / P8 / P9 / P10 / P11
+- `philosophy.md` P5 / P6 / P7 / P8 / P9 / P10 / P11 / P12
 - `stage-design.md` 段階設計フェーズ仕様 v1.0 (本スキルの上位仕様)
 - `requirements_and_development.md` §6.4 (validation flow)
 - `examples/generic-minimal/`, `examples/python-cli-pytest/`, `examples/markdown-docs/`, `examples/python-fastapi-pytest/`, `examples/go-cli/`, `examples/node-cli-vitest/` (設計例パック、few-shot 用)
@@ -816,6 +818,8 @@ LLM が Web / 外部リポジトリ / 過去ログ / 利用者の `project-conte
 ### 2.4 自分の主観評価を他人に強制してはならない (P11)
 
 LLM レビューの結果は **「このプロジェクトでこう見えた」** にとどめる。「他プロジェクトと比較してこの品質水準だ」のような比較言明は P11 違反 (ALLOW の比較不可能性) になるため避ける。
+
+なお、**外部化・固定・校正された評価機 (LLM/VLM を内蔵する command 型判定機、philosophy P12) は本節の禁止対象ではない**。禁止対象は経路を通らない評価 — 本スキルを動かしている agent 自身のその場の主観評価 — である。評価機は CONTRACT id として `basis[]` に載る正当な機械検査であり、その採用には P12 の規律 (固定・版管理・校正・人間承認・利害独立の原則) が適用される。
 
 ## 3. やってよい LLM レビュー (advisory として)
 
