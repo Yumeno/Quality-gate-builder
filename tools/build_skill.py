@@ -66,7 +66,45 @@ LINT_SOURCE_DIRNAME = "lint"
 
 
 class BuildError(Exception):
-    """Raised for validation / parse failures (exit code 2)."""
+    """Raised for validation / parse / generation failures (exit code 2).
+
+    Distinct failure kinds get distinct subclasses below rather than being
+    told apart by message-grep (P9 precedent: cross-file integrity folded
+    into ``qgb validate`` was tried once in commit ``dccdf4a`` and rolled
+    back -- schema conformance and tree integrity are different failure
+    modes and deserve different fixes / different callers' handling).  The
+    CLI's top-level ``except BuildError`` still catches all of them, so
+    exit code 2 is unchanged for any subclass; callers that care about the
+    distinction can catch the specific subclass instead (F4, 2026-07-04
+    review Major).
+    """
+
+
+class SourceValidationError(BuildError):
+    """The authored source (metadata.yaml, body.md, schema, source_files,
+    agent docs, marker grammar / path-safety / collisions, BOM guard) is
+    invalid.  Raised during Stage 2 (VALIDATION + PARSE), before any
+    output is written.
+    """
+
+
+class GenerationVerificationError(BuildError):
+    """A generated artifact failed post-write syntax verification
+    (``verify_generated_skill_md`` / ``verify_text_artifact``).  The
+    artifact was rendered successfully but the rendered bytes themselves
+    are broken (unparsable YAML frontmatter, empty content, NUL bytes,
+    undecodable text, ...).
+    """
+
+
+class WritePolicyError(BuildError):
+    """The write path refused to write: containment escape, refusal to
+    overwrite an existing path (clean-build invariant), hardlink /
+    symlink defense trip, or a concurrent-create race.  Distinguishes
+    "the write path itself said no" from "the content was wrong"
+    (GenerationVerificationError) or "the source was wrong"
+    (SourceValidationError).
+    """
 
 
 class UsageError(Exception):
@@ -173,15 +211,15 @@ def _check_name_path_safety(name: str, line_no: int) -> None:
       source_files items).
     """
     if "\\" in name:
-        raise BuildError(
+        raise SourceValidationError(
             f"Line {line_no}: marker name contains backslash: {name!r}"
         )
     if name.startswith("/") or name.endswith("/"):
-        raise BuildError(
+        raise SourceValidationError(
             f"Line {line_no}: marker name starts or ends with '/': {name!r}"
         )
     if _RE_CONSEC_SLASH.search(name):
-        raise BuildError(
+        raise SourceValidationError(
             f"Line {line_no}: marker name contains consecutive '//': {name!r}"
         )
     # Check for .. segments: /../, /../.. at end, or ../ at start
@@ -190,17 +228,17 @@ def _check_name_path_safety(name: str, line_no: int) -> None:
         or name.startswith("..")
         or _RE_DOTDOT_SEG.search(name)
     ):
-        raise BuildError(
+        raise SourceValidationError(
             f"Line {line_no}: marker name contains '..' path segment: {name!r}"
         )
     if _RE_DOTSLASH.search(name) or name.startswith("./"):
-        raise BuildError(
+        raise SourceValidationError(
             f"Line {line_no}: marker name contains current-dir reference './': {name!r}"
         )
     # Final gate: full whitelist (same discipline as metadata.schema.json
     # source_files items pattern).
     if not _RE_NAME_WHITELIST.match(name):
-        raise BuildError(
+        raise SourceValidationError(
             f"Line {line_no}: marker name {name!r} does not match the "
             f"helper-name whitelist (path segments of "
             f"[A-Za-z0-9][A-Za-z0-9_-]* joined by '/', '.md' extension "
@@ -316,21 +354,21 @@ def parse_markers(text: str, source_files: list[str]) -> ParseResult:
             # Duplicate name check (NFC + casefold).
             norm_name = unicodedata.normalize("NFC", name).casefold()
             if norm_name in seen_names:
-                raise BuildError(
+                raise SourceValidationError(
                     f"Line {line_no}: duplicate marker name {name!r} "
                     f"(first seen at line {seen_names[norm_name]})"
                 )
 
             # Source/output collision check.
             if norm_name in source_set:
-                raise BuildError(
+                raise SourceValidationError(
                     f"Line {line_no}: marker name {name!r} collides with "
                     f"a source_files entry"
                 )
 
             # Nesting check.
             if open_block is not None:
-                raise BuildError(
+                raise SourceValidationError(
                     f"Line {line_no}: nested start marker {name!r} inside "
                     f"unclosed marker {open_block.name!r} "
                     f"(opened at line {open_block.start_line})"
@@ -347,14 +385,14 @@ def parse_markers(text: str, source_files: list[str]) -> ParseResult:
         elif m_end is not None:
             # --- End marker ---
             if open_block is None:
-                raise BuildError(
+                raise SourceValidationError(
                     f"Line {line_no}: end marker without a preceding "
                     f"start marker"
                 )
 
             # Empty-helper check.
             if len(open_block.content) == 0:
-                raise BuildError(
+                raise SourceValidationError(
                     f"Line {line_no}: empty helper block for marker "
                     f"{open_block.name!r} (zero content lines between "
                     f"start at line {open_block.start_line} and end)"
@@ -379,7 +417,7 @@ def parse_markers(text: str, source_files: list[str]) -> ParseResult:
 
     # After all lines: check for unclosed marker.
     if open_block is not None:
-        raise BuildError(
+        raise SourceValidationError(
             f"Unclosed start marker {open_block.name!r} "
             f"(opened at line {open_block.start_line}, no matching end found)"
         )
@@ -413,36 +451,40 @@ def validate_metadata(
     except ImportError:
         # Fallback: use the stdlib-only yaml subset if PyYAML is absent.
         # For Phase 5.b Stage 2 we require PyYAML; raise a clear error.
-        raise BuildError(
+        raise SourceValidationError(
             "PyYAML is required to parse metadata.yaml.  "
             "Install it with: pip install pyyaml"
         )
 
     meta_path = source_dir / "metadata.yaml"
     if not meta_path.exists():
-        raise BuildError(f"metadata.yaml not found: {meta_path}")
+        raise SourceValidationError(f"metadata.yaml not found: {meta_path}")
 
     try:
         raw = meta_path.read_text(encoding="utf-8-sig")
         metadata = yaml.safe_load(raw)
     except Exception as exc:  # noqa: BLE001
-        raise BuildError(f"Failed to read metadata.yaml: {exc}") from exc
+        raise SourceValidationError(f"Failed to read metadata.yaml: {exc}") from exc
 
     if not isinstance(metadata, dict):
-        raise BuildError("metadata.yaml must be a YAML mapping at the top level")
+        raise SourceValidationError(
+            "metadata.yaml must be a YAML mapping at the top level"
+        )
 
     # Resolve schema path.  The schema is a repo asset, not a per-source
     # file: default to this repo's skills/source/metadata.schema.json.
     if schema_path is None:
         schema_path = DEFAULT_SCHEMA_PATH
     if not schema_path.exists():
-        raise BuildError(f"metadata.schema.json not found: {schema_path}")
+        raise SourceValidationError(f"metadata.schema.json not found: {schema_path}")
 
     try:
         schema_text = schema_path.read_text(encoding="utf-8-sig")
         schema = json.loads(schema_text)
     except Exception as exc:  # noqa: BLE001
-        raise BuildError(f"Failed to read metadata.schema.json: {exc}") from exc
+        raise SourceValidationError(
+            f"Failed to read metadata.schema.json: {exc}"
+        ) from exc
 
     try:
         import jsonschema  # type: ignore[import]
@@ -454,14 +496,14 @@ def validate_metadata(
         if errors:
             # Report the first (and most significant) error.
             err = errors[0]
-            raise BuildError(
+            raise SourceValidationError(
                 f"metadata.yaml schema validation failed: {err.message} "
                 f"(path: {'/'.join(str(p) for p in err.absolute_path)})"
             )
     except BuildError:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise BuildError(
+        raise SourceValidationError(
             f"jsonschema validation error: {exc}"
         ) from exc
 
@@ -482,27 +524,30 @@ def check_converter_version(metadata: dict[str, Any]) -> None:
     """
     raw_min = metadata.get("converter_min_version", "")
     if not raw_min:
-        raise BuildError(
+        raise SourceValidationError(
             "metadata.yaml missing required field 'converter_min_version'"
         )
 
     try:
         min_ver = parse_semver(str(raw_min))
     except ValueError as exc:
-        raise BuildError(
+        raise SourceValidationError(
             f"converter_min_version is not a valid semver: {raw_min!r} ({exc})"
         ) from exc
 
     try:
         cur_ver = parse_semver(CONVERTER_VERSION)
     except ValueError as exc:  # pragma: no cover  (CONVERTER_VERSION is hardcoded)
+        # Not a SourceValidationError: this is a converter self-check bug
+        # (the hardcoded CONVERTER_VERSION constant), not a problem with
+        # the authored source being built.
         raise BuildError(
             f"CONVERTER_VERSION constant is not a valid semver: "
             f"{CONVERTER_VERSION!r} ({exc})"
         ) from exc
 
     if cur_ver < min_ver:
-        raise BuildError(
+        raise SourceValidationError(
             f"This build_skill.py ({CONVERTER_VERSION}) is older than "
             f"converter_min_version ({raw_min}).  "
             f"Update tools/build_skill.py to {raw_min} or newer."
@@ -532,7 +577,7 @@ def check_agent_docs(
     try:
         import yaml  # type: ignore[import]  # noqa: F401
     except ImportError as exc:
-        raise BuildError(
+        raise SourceValidationError(
             "PyYAML is required to parse agent doc front matter."
         ) from exc
 
@@ -541,7 +586,7 @@ def check_agent_docs(
     for agent_name in target_agents:
         doc_path = agent_docs_dir / f"agent-{agent_name}.md"
         if not doc_path.exists():
-            raise BuildError(
+            raise SourceValidationError(
                 f"Agent doc not found for target agent {agent_name!r}: "
                 f"{doc_path}"
             )
@@ -549,7 +594,7 @@ def check_agent_docs(
         try:
             doc_text = doc_path.read_text(encoding="utf-8-sig")
         except Exception as exc:  # noqa: BLE001
-            raise BuildError(
+            raise SourceValidationError(
                 f"Failed to read agent doc {doc_path}: {exc}"
             ) from exc
 
@@ -558,7 +603,7 @@ def check_agent_docs(
 
         status = front_matter.get("status", "")
         if status != "supported":
-            raise BuildError(
+            raise SourceValidationError(
                 f"Agent {agent_name!r} is not supported: "
                 f"agent doc {doc_path} has status: {status!r} "
                 f"(must be 'supported')"
@@ -570,12 +615,12 @@ def _extract_front_matter(text: str, path: Path) -> dict[str, Any]:
 
     The front matter is between the first '---' line and the next '---' line.
     Returns an empty dict if no front matter is found.
-    Raises BuildError on parse failure.
+    Raises SourceValidationError on parse failure.
     """
     try:
         import yaml  # type: ignore[import]
     except ImportError as exc:
-        raise BuildError("PyYAML is required.") from exc
+        raise SourceValidationError("PyYAML is required.") from exc
 
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -588,7 +633,7 @@ def _extract_front_matter(text: str, path: Path) -> dict[str, Any]:
             break
 
     if end_idx is None:
-        raise BuildError(
+        raise SourceValidationError(
             f"Agent doc {path}: front matter opened with '---' but never closed"
         )
 
@@ -596,12 +641,12 @@ def _extract_front_matter(text: str, path: Path) -> dict[str, Any]:
     try:
         parsed = yaml.safe_load(fm_text)
     except Exception as exc:  # noqa: BLE001
-        raise BuildError(
+        raise SourceValidationError(
             f"Agent doc {path}: YAML front matter parse failed: {exc}"
         ) from exc
 
     if not isinstance(parsed, dict):
-        raise BuildError(
+        raise SourceValidationError(
             f"Agent doc {path}: front matter must be a YAML mapping"
         )
     return parsed
@@ -618,15 +663,52 @@ def check_source_files(
 ) -> None:
     """Verify that every source_files entry exists under source_dir.
 
-    Raises BuildError if any entry is missing.
+    Raises SourceValidationError if any entry is missing.
     """
     source_files: list[str] = metadata.get("source_files", [])
     for rel in source_files:
         target = source_dir / rel
         if not target.exists():
-            raise BuildError(
+            raise SourceValidationError(
                 f"source_files entry not found: {rel!r} "
                 f"(expected at {target})"
+            )
+
+
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def check_source_files_bom(
+    metadata: dict[str, Any],
+    source_dir: Path,
+) -> None:
+    """Refuse authored source_files that start with a UTF-8 BOM (F7).
+
+    The digest (build_input_digest category 3) hashes these files' raw
+    bytes, and full/split rendering copies those bytes verbatim into
+    SKILL.md / helper files.  A BOM would ride along invisibly and land
+    inside the rendered output.  The repo's write discipline is already
+    BOM-less; this only makes violations fail closed instead of silently
+    corrupting output bytes.
+
+    Raises SourceValidationError if any entry's first 3 bytes are the
+    UTF-8 BOM (EF BB BF).  Assumes check_source_files() already confirmed
+    each entry exists.
+    """
+    source_files: list[str] = metadata.get("source_files", [])
+    for rel in source_files:
+        target = source_dir / rel
+        if not target.exists():
+            continue
+        with target.open("rb") as f:
+            head = f.read(3)
+        if head == _UTF8_BOM:
+            raise SourceValidationError(
+                f"source_files entry {rel!r} starts with a UTF-8 BOM "
+                f"(EF BB BF): {target}.  Save it BOM-less (utf-8, no "
+                f"signature) -- the BOM would be hashed into "
+                f"build_input_digest and copied verbatim into rendered "
+                f"output."
             )
 
 
@@ -685,6 +767,17 @@ def validate_and_parse(
     # Step 4: source files exist
     check_source_files(metadata, source_dir)
 
+    # Step 4b: BOM guard on authored source_files (F7, 2026-07-04 review low).
+    # Authored sources must be saved BOM-less: the digest (category 3) hashes
+    # the file's raw bytes, and those same bytes are what full/split mode
+    # renders verbatim into SKILL.md / helper files.  A BOM byte sequence
+    # silently riding along would corrupt the rendered output's first bytes
+    # (and, for full mode, land in the middle of the document at the
+    # marker's position) while looking invisible in an editor.  The repo's
+    # own write discipline is already BOM-less (see CLAUDE.md), so this is
+    # a fail-closed check on the *input* side, not a new constraint.
+    check_source_files_bom(metadata, source_dir)
+
     # Step 5: parse markers from body.md
     # Phase 5 Step 5.a-1' established body.md as the single authoritative
     # source.  We read only body.md for markers (the first source_files entry
@@ -694,12 +787,18 @@ def validate_and_parse(
     body_path = source_dir / body_rel
 
     try:
-        # Read with utf-8-sig (BOM-tolerant) and translate to universal newlines.
-        raw_text = body_path.read_text(encoding="utf-8-sig", newline="")
+        # Read with utf-8-sig (BOM-tolerant).  Path.read_text's `newline`
+        # kwarg is Python 3.13+ only (BuildError F1, 2026-07-04 CI-red
+        # Critical); the default universal-newline mode already
+        # translates \r\n and \r to \n, so no kwarg is needed here.  The
+        # explicit .replace() below is a harmless belt-and-suspenders
+        # guarantee that survives even if some future read path stops
+        # doing universal-newline translation.
+        raw_text = body_path.read_text(encoding="utf-8-sig")
         # Normalize line endings to \n for the parser.
         body_text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
     except Exception as exc:  # noqa: BLE001
-        raise BuildError(f"Failed to read {body_path}: {exc}") from exc
+        raise SourceValidationError(f"Failed to read {body_path}: {exc}") from exc
 
     parse_result = parse_markers(body_text, source_files)
 
@@ -763,8 +862,10 @@ def _source_date_epoch_to_iso_utc(epoch: int) -> str:
 #   7. converter source itself (tools/build_skill.py)
 #   8. SOURCE_DATE_EPOCH value (or "unset")
 #
-# Concat format per file: "<category id>\n<path utf-8>\n<content bytes>\n"
-# Category 8: "8\nSOURCE_DATE_EPOCH\n<value or unset>\n"
+# Concat format per file (F3, length-prefixed to make the manifest
+# injective -- see add_file()'s docstring comment for why):
+#   "<category id>\n<len(path_utf8_bytes)>\n<path>\n<len(content_bytes)>\n<content bytes>\n"
+# Category 8: "8\nSOURCE_DATE_EPOCH\n<len(value_utf8)>\n<value or unset>\n"
 # Within each category, relative paths are ASCII-sorted (lexicographic
 # bytewise) POSIX-style paths relative to the repo root.
 # ---------------------------------------------------------------------------
@@ -815,7 +916,21 @@ def compute_build_input_digest(
     chunks: list[bytes] = []
 
     def add_file(category: int, rel_path: str, content: bytes) -> None:
-        chunks.append(f"{category}\n{rel_path}\n".encode())
+        # Length-prefixed canonical format (F3, 2026-07-04 review Medium):
+        # "<cat>\n<len(path_utf8)>\n<path>\n<len(content)>\n<content bytes>\n".
+        # The old format ("<cat>\n<path>\n<content>\n") let a crafted
+        # content byte sequence forge a category/path/content boundary
+        # (verified: a single file whose content contained the right
+        # "\n<next-cat>\n<path>\n" bytes produced the same digest as two
+        # separate files split at that point).  Prefixing every path and
+        # every content blob with its own byte length makes the manifest
+        # injective: no content can ever be mistaken for a boundary,
+        # because the reader always knows exactly how many bytes to
+        # consume before the next delimiter is expected.
+        path_bytes = rel_path.encode("utf-8")
+        chunks.append(f"{category}\n{len(path_bytes)}\n".encode())
+        chunks.append(path_bytes)
+        chunks.append(f"\n{len(content)}\n".encode())
         chunks.append(content)
         chunks.append(b"\n")
 
@@ -871,8 +986,13 @@ def compute_build_input_digest(
     )
 
     # Category 8: SOURCE_DATE_EPOCH value or "unset" (not a file; literal).
+    # Same length-prefixed shape as add_file's content length prefix, for
+    # the same injectivity reason (F3): "8\nSOURCE_DATE_EPOCH\n<len(value)>\n<value>\n".
     epoch_value = "unset" if source_date_epoch is None else str(source_date_epoch)
-    chunks.append(f"8\nSOURCE_DATE_EPOCH\n{epoch_value}\n".encode())
+    epoch_bytes = epoch_value.encode("utf-8")
+    chunks.append(
+        f"8\nSOURCE_DATE_EPOCH\n{len(epoch_bytes)}\n".encode() + epoch_bytes + b"\n"
+    )
 
     digest = hashlib.sha256(b"".join(chunks)).hexdigest()
     return digest
@@ -1000,10 +1120,9 @@ def build_frontmatter(agent: str, metadata: dict[str, Any]) -> str:
 
     description comes from metadata.yaml's agent-neutral `description`.
     Returns the frontmatter block INCLUDING the leading/trailing '---' lines
-    and a trailing newline.
+    and a trailing newline.  Emission uses only the stdlib serializer
+    below (_dump_frontmatter) -- no PyYAML import needed here (F2).
     """
-    import yaml
-
     description = metadata.get("description", "")
     skill_id = metadata.get("skill_id", "")
 
@@ -1034,16 +1153,202 @@ def build_frontmatter(agent: str, metadata: dict[str, Any]) -> str:
     else:
         raise BuildError(f"No frontmatter spec for agent {agent!r}")
 
-    # Dump preserving declaration order (sort_keys=False), block style,
-    # literal-safe unicode, and a trailing newline collapse to keep output
-    # deterministic.
-    yaml_text = yaml.safe_dump(
-        fm,
-        sort_keys=False,
-        allow_unicode=True,
-        default_flow_style=False,
-    )
+    # Emission is stdlib-only BY DESIGN (F2, 2026-07-04 review lens-3
+    # Critical): yaml.safe_dump's byte output is a PyYAML-version-dependent
+    # detail (this repo has seen live drift: venv 6.0.2 vs lock-pinned
+    # 6.0.3), and build_input_digest / golden fixture byte-equality must
+    # not depend on which PyYAML happens to be installed.  _dump_frontmatter
+    # below is a small deterministic serializer this file owns; PyYAML
+    # remains in use elsewhere for PARSING inputs (metadata.yaml, agent doc
+    # front matter) and for the post-write verify roundtrip
+    # (verify_generated_skill_md), where "does this parse as valid YAML"
+    # is exactly the fail-closed property we want and toolchain version
+    # differences in a *parser* don't leak into emitted bytes.
+    yaml_text = _dump_frontmatter(fm)
     return f"---\n{yaml_text}---\n"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic stdlib frontmatter emission (F2)
+# ---------------------------------------------------------------------------
+
+def _yaml_plain_is_safe(value: str) -> bool:
+    """Return True if *value* can be emitted as an unquoted YAML plain scalar.
+
+    Conservative by design: only pure printable ASCII without any YAML
+    indicator characters, with no leading/trailing whitespace, and not
+    equal to a YAML boolean/null keyword spelling (so a plain string
+    "true" can't silently round-trip as a bool).  Anything else falls
+    back to double-quoted emission.  This whitelist may reject strings a
+    permissive YAML emitter would happily leave unquoted -- that is
+    intentional; false negatives just mean an extra pair of quotes in
+    the output, never an incorrect roundtrip.
+    """
+    if value == "":
+        return False
+    if value != value.strip():
+        return False
+    if value.strip("\t ") != value:
+        return False
+    stripped_lower = value.strip().lower()
+    if stripped_lower in (
+        "true", "false", "yes", "no", "on", "off", "null", "~", "none",
+    ):
+        return False
+    for ch in value:
+        if ch in "'\"[]{}:#,&*!|>%@`\t\n\r" or ord(ch) < 0x20:
+            return False
+    if value[0] in "-?" and (len(value) == 1 or value[1] == " "):
+        return False
+    if ": " in value or value.endswith(":"):
+        return False
+    if value.startswith("#"):
+        return False
+    # Pure ASCII only: non-ASCII is always safe to double-quote, and
+    # restricting plain style to ASCII keeps the whitelist easy to audit.
+    if not value.isascii():
+        return False
+    return True
+
+
+def _yaml_quote_scalar(value: str) -> str:
+    """Emit *value* as a double-quoted YAML scalar with minimal escaping.
+
+    Only backslash and double-quote need escaping inside a YAML
+    double-quoted scalar for the plain text this file ever emits (no
+    control characters are expected in metadata.yaml string fields).
+    """
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _yaml_emit_scalar(value: str) -> str:
+    """Emit a single-line string scalar: plain if safe, else double-quoted."""
+    if _yaml_plain_is_safe(value):
+        return value
+    return _yaml_quote_scalar(value)
+
+
+def _yaml_emit_block_description(key: str, value: str) -> str:
+    """Emit *value* under *key* as a YAML block scalar, roundtripping exactly.
+
+    Returns the complete chunk (including its own trailing newline(s));
+    the caller must concatenate chunks directly (not via a generic
+    ``"\\n".join`` over stripped lines), because for keep-chomping
+    (``|+``) the exact count of trailing newlines is semantically part
+    of the emitted bytes and must survive untouched.
+
+    Block style (``|``) preserves embedded newlines, leading spaces, colons
+    and quotes literally -- exactly what a multi-line human-authored
+    description needs, with no escaping.  The chomping indicator is chosen
+    so ``yaml.safe_load`` reconstructs *value* byte-for-byte:
+
+    - value ends with "\\n" and has no other trailing blank lines -> clip
+      (``|``): default single trailing newline.
+    - value has no trailing newline at all -> strip (``|-``): no
+      trailing newline is kept.
+    - value ends with 2+ newlines (blank line(s) at the end) -> keep
+      (``|+``): every trailing newline is preserved verbatim.
+
+    An explicit indentation indicator (``|2`` / ``|2-`` / ``|2+``) is
+    emitted whenever the first content line is empty or starts with a
+    space: without it, a YAML parser infers the block's indentation from
+    the first non-empty line, and a later, less-indented (but still
+    inside the 2-space frontmatter indent) line would be misread as
+    ending the block prematurely.
+
+    A value containing a line equal to just "..." / "---" at column 0
+    (which would be misread as a document marker) is rejected by raising
+    BuildError -- metadata.yaml's authored description is not expected to
+    hit this, and failing closed beats emitting a scalar that would not
+    round-trip.
+    """
+    if value == "":
+        # Empty string has no meaningful block-scalar spelling; emit as a
+        # quoted empty plain scalar instead (roundtrips exactly).
+        return f'{key}: ""\n'
+
+    lines = value.split("\n")
+    for ln in lines:
+        if ln in ("...", "---"):
+            raise BuildError(
+                f"frontmatter field {key!r}: a line equal to {ln!r} cannot "
+                f"be represented as a YAML block scalar (would be read as "
+                f"a document marker)"
+            )
+
+    if value.endswith("\n\n"):
+        chomp = "+"
+    elif value.endswith("\n"):
+        chomp = ""
+    else:
+        chomp = "-"
+
+    # split() on a string ending in "\n" yields a trailing "" element that
+    # is not a real content line (it is the boundary after the final "\n");
+    # drop exactly one such element when present so body_lines holds one
+    # entry per actual line (including intentional trailing blank lines
+    # for "+" chomping, which appear as extra "" entries before that final
+    # split artifact).
+    body_lines = lines[:-1] if value.endswith("\n") else lines[:]
+
+    indent_indicator = "2" if (not body_lines[0] or body_lines[0][0] == " ") else ""
+
+    out_lines = [f"{key}: |{indent_indicator}{chomp}"]
+    for ln in body_lines:
+        # Indent every line (including blank ones) by 2 spaces, block-scalar
+        # style; a blank line in the source becomes an empty indented line
+        # (equivalent to a bare blank line under YAML block scalar rules).
+        out_lines.append(f"  {ln}" if ln else "")
+    return "\n".join(out_lines) + "\n"
+
+
+def _dump_frontmatter(fm: dict[str, Any]) -> str:
+    """Serialize *fm* to a YAML mapping body using only the stdlib.
+
+    Supported value shapes (the only ones build_frontmatter ever passes):
+    string scalar (single-line -> plain/quoted scalar; any multi-line
+    string -> block scalar), list of strings, and bool.  Key order is
+    preserved exactly as given in *fm* (declaration order, never sorted)
+    -- callers rely on this for the "key order = declaration order
+    documented in the agent doc" contract enforced by
+    test_frontmatter_key_order_is_declaration_order.
+
+    Builds a list of self-contained chunks, each already ending in
+    exactly the right number of "\\n" characters, and concatenates them
+    directly (NOT via "\\n".join over stripped lines): a block-scalar
+    chunk under keep-chomping (``|+``) carries a semantically significant
+    trailing blank line that a generic strip-and-rejoin would destroy.
+    """
+    chunks: list[str] = []
+    for key, value in fm.items():
+        if isinstance(value, bool):
+            chunks.append(f"{key}: {'true' if value else 'false'}\n")
+        elif isinstance(value, str):
+            if "\n" in value:
+                chunks.append(_yaml_emit_block_description(key, value))
+            else:
+                chunks.append(f"{key}: {_yaml_emit_scalar(value)}\n")
+        elif isinstance(value, list):
+            if not value:
+                chunks.append(f"{key}: []\n")
+            else:
+                item_lines = [f"{key}:"]
+                for item in value:
+                    if not isinstance(item, str):
+                        raise BuildError(
+                            f"frontmatter field {key!r}: list items must be "
+                            f"strings, got {type(item).__name__}"
+                        )
+                    item_lines.append(f"- {_yaml_emit_scalar(item)}")
+                chunks.append("\n".join(item_lines) + "\n")
+        else:
+            raise BuildError(
+                f"frontmatter field {key!r}: unsupported value type "
+                f"{type(value).__name__} (only str, bool, list[str] are "
+                f"supported by the stdlib emitter)"
+            )
+    return "".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -1126,16 +1431,17 @@ def render_install_md(*, agent: str, mode: str, metadata: dict[str, Any]) -> str
 # ---------------------------------------------------------------------------
 
 
-def _safe_write_bytes(dist_root: Path, target: Path, data: bytes) -> None:
-    """Write *data* to *target* with layered path + TOCTOU defenses.
+def _check_write_containment(dist_root: Path, target: Path) -> None:
+    """Raise WritePolicyError unless *target* resolves under *dist_root*.
 
-    Defenses (Codex K=2 r1 recommendation #2 + K=2 r2/r3/r4 spec fixes, see
-    phase5-step5-a-2.md Sec.6.3 item 5):
-      1. normpath containment check against dist_root (literal prefix compare)
-      2. realpath containment check (symlink defense, final component)
-      3. os.lstat absence check before create
-      4. exclusive create (O_CREAT | O_EXCL [| O_NOFOLLOW on POSIX])
-      5. os.fstat(fd).st_nlink == 1 sanity check (hardlink defense, best-effort)
+    Extracted from _safe_write_bytes (F5, 2026-07-04 review Minor) so the
+    pure containment policy is independently testable and independently
+    reusable, without the write side effects.  Two checks, in order:
+      1. normpath containment check against dist_root (literal prefix
+         compare) -- catches ``../`` traversal in the given path string.
+      2. realpath containment check on the target's *parent* (symlink
+         defense) -- catches a same-named symlinked directory swapped in
+         under dist_root.
 
     Threat model: parent-directory symlink races are explicitly out of
     scope for Phase 5 (no openat() equivalent in Python's stdlib os.open());
@@ -1147,7 +1453,7 @@ def _safe_write_bytes(dist_root: Path, target: Path, data: bytes) -> None:
         target_norm == dist_root_norm
         or target_norm.startswith(dist_root_norm + os.sep)
     ):
-        raise BuildError(
+        raise WritePolicyError(
             f"Refusing to write outside dist root: {target} "
             f"(dist_root={dist_root})"
         )
@@ -1158,16 +1464,34 @@ def _safe_write_bytes(dist_root: Path, target: Path, data: bytes) -> None:
         target_parent_real == dist_root_real
         or target_parent_real.startswith(dist_root_real + os.sep)
     ):
-        raise BuildError(
+        raise WritePolicyError(
             f"Refusing to write outside dist root (realpath check failed): "
             f"{target} (dist_root={dist_root})"
         )
+
+
+def _safe_write_bytes(dist_root: Path, target: Path, data: bytes) -> None:
+    """Write *data* to *target* with layered path + TOCTOU defenses.
+
+    Defenses (Codex K=2 r1 recommendation #2 + K=2 r2/r3/r4 spec fixes, see
+    phase5-step5-a-2.md Sec.6.3 item 5):
+      1. containment check against dist_root (_check_write_containment)
+      2. os.lstat absence check before create
+      3. exclusive create (O_CREAT | O_EXCL [| O_NOFOLLOW on POSIX])
+      4. os.fstat(fd).st_nlink == 1 sanity check (hardlink defense, best-effort)
+
+    All refusals raise WritePolicyError (F4): the write path saying no is
+    a distinct failure kind from bad authored input
+    (SourceValidationError) or a broken rendered artifact
+    (GenerationVerificationError).
+    """
+    _check_write_containment(dist_root, target)
 
     target.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         os.lstat(str(target))
-        raise BuildError(
+        raise WritePolicyError(
             f"Refusing to overwrite existing path (clean build invariant "
             f"violated): {target}"
         )
@@ -1180,12 +1504,28 @@ def _safe_write_bytes(dist_root: Path, target: Path, data: bytes) -> None:
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
 
-    fd = os.open(str(target), flags, 0o644)
     try:
-        os.write(fd, data)
+        fd = os.open(str(target), flags, 0o644)
+    except FileExistsError as exc:
+        # F6(b): a concurrent create between the lstat check above and this
+        # os.open() call (TOCTOU race) must fail with the same exit-code-2
+        # contract as every other refusal in this function, not an
+        # unhandled OSError traceback.
+        raise WritePolicyError(
+            f"Refusing to write: path was created concurrently between "
+            f"the clean-build check and exclusive create (race): {target}"
+        ) from exc
+    try:
+        # F6(a): os.write() is not guaranteed to write the entire buffer
+        # in one call (POSIX allows a short write); loop until every byte
+        # is written rather than assuming a single call suffices.
+        view = memoryview(data)
+        total_written = 0
+        while total_written < len(view):
+            total_written += os.write(fd, view[total_written:])
         st = os.fstat(fd)
         if st.st_nlink != 1:
-            raise BuildError(
+            raise WritePolicyError(
                 f"Sanity check failed: newly-created file has st_nlink="
                 f"{st.st_nlink} (expected 1), possible hardlink attack: "
                 f"{target}"
@@ -1231,16 +1571,25 @@ def _copy_tree_verbatim(dist_root: Path, src_root: Path, dest_root: Path) -> lis
 def verify_generated_skill_md(text: str, *, expected_keys: set[str]) -> None:
     """Verify a generated SKILL.md: split frontmatter, YAML-parse it, sanity-check body.
 
-    Raises BuildError on any failure.
+    Raises GenerationVerificationError on any failure: the artifact was
+    successfully rendered, but the rendered bytes themselves fail this
+    post-write syntax check (a distinct failure kind from bad authored
+    input or a write-path refusal, F4).  Still uses PyYAML for PARSING --
+    build_frontmatter's *emission* is the stdlib-only side of F2; this
+    function's job is exactly "does this parse as valid YAML", so a
+    parser is the right tool and toolchain version differences in a
+    parser (accept/reject decisions) don't leak into emitted bytes.
     """
     import yaml
 
     if "\x00" in text:
-        raise BuildError("Generated SKILL.md contains NUL byte(s)")
+        raise GenerationVerificationError("Generated SKILL.md contains NUL byte(s)")
     if not text.strip():
-        raise BuildError("Generated SKILL.md is empty")
+        raise GenerationVerificationError("Generated SKILL.md is empty")
     if not text.startswith("---\n"):
-        raise BuildError("Generated SKILL.md does not start with frontmatter '---'")
+        raise GenerationVerificationError(
+            "Generated SKILL.md does not start with frontmatter '---'"
+        )
 
     lines = text.split("\n")
     end_idx = None
@@ -1249,38 +1598,48 @@ def verify_generated_skill_md(text: str, *, expected_keys: set[str]) -> None:
             end_idx = i
             break
     if end_idx is None:
-        raise BuildError("Generated SKILL.md frontmatter never closes with '---'")
+        raise GenerationVerificationError(
+            "Generated SKILL.md frontmatter never closes with '---'"
+        )
 
     fm_text = "\n".join(lines[1:end_idx])
     try:
         fm = yaml.safe_load(fm_text)
     except Exception as exc:  # noqa: BLE001
-        raise BuildError(f"Generated SKILL.md frontmatter failed to parse: {exc}") from exc
+        raise GenerationVerificationError(
+            f"Generated SKILL.md frontmatter failed to parse: {exc}"
+        ) from exc
 
     if not isinstance(fm, dict):
-        raise BuildError("Generated SKILL.md frontmatter did not parse to a mapping")
+        raise GenerationVerificationError(
+            "Generated SKILL.md frontmatter did not parse to a mapping"
+        )
 
     missing = expected_keys - set(fm.keys())
     if missing:
-        raise BuildError(
+        raise GenerationVerificationError(
             f"Generated SKILL.md frontmatter missing expected keys: {missing}"
         )
 
     body_after_fm = "\n".join(lines[end_idx + 1 :])
     if not body_after_fm.strip():
-        raise BuildError("Generated SKILL.md has no body content after frontmatter")
+        raise GenerationVerificationError(
+            "Generated SKILL.md has no body content after frontmatter"
+        )
 
 
 def verify_text_artifact(text: str, *, label: str) -> None:
     """Verify a helper file or INSTALL.md: UTF-8 decodable, non-empty, no NUL."""
     if "\x00" in text:
-        raise BuildError(f"{label}: contains NUL byte(s)")
+        raise GenerationVerificationError(f"{label}: contains NUL byte(s)")
     if not text.strip():
-        raise BuildError(f"{label}: is empty")
+        raise GenerationVerificationError(f"{label}: is empty")
     try:
         text.encode("utf-8")
     except UnicodeEncodeError as exc:  # pragma: no cover  (str is already unicode)
-        raise BuildError(f"{label}: failed to encode as UTF-8: {exc}") from exc
+        raise GenerationVerificationError(
+            f"{label}: failed to encode as UTF-8: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

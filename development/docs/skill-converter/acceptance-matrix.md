@@ -76,8 +76,9 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 
 1. 上記 canonical manifest を構築
 2. 各 input file を **byte 単位**で読み込み (decode せず)、改行は **LF に正規化済**であることを確認 (`.gitattributes` で LF 強制済、digest 対象は `.md` / `.json` / `.yaml` / `.yml` / `.ps1` / `.sh` / `.py`)
-3. 連結フォーマット: 各 input について `<categorical id (1〜8)>\n<file path as UTF-8 bytes>\n<file content bytes>\n` を生成、全体を 1 byte stream に連結
-   - カテゴリ 8 (環境変数) は `8\nSOURCE_DATE_EPOCH\n<value or unset>\n` の形 (file content ではなく文字列直接)
+3. 連結フォーマット (length-prefix 方式、2026-07-04 レビュー lens-1 finding 反映): 各 input について `<categorical id (1〜8)>\n<len(path の UTF-8 bytes)>\n<path>\n<len(content bytes)>\n<content bytes>\n` を生成、全体を 1 byte stream に連結
+   - カテゴリ 8 (環境変数) は `8\nSOURCE_DATE_EPOCH\n<len(value の UTF-8 bytes)>\n<value or unset>\n` の形 (file content ではなく文字列直接だが、同じ length-prefix 規律を適用)
+   - **length-prefix である理由**: 旧フォーマット (`<cat>\n<path>\n<content>\n`、path と content を素の区切り文字 `\n` だけで連結) は、1 ファイルの content が偶然「次のカテゴリ境界」と同じ byte 列を含むと、そのファイル 1 個が別ファイル 2 個に分割された manifest と **同一の byte 列に collision** し得た (実証済)。各 path / content の直前にその **byte 長を明示**することで、reader は次の区切りが来る前に消費すべき byte 数を常に把握できる = manifest が injective になり、どんな content もカテゴリ境界を偽装できなくなる
 4. sha256 を計算、16 進 lowercase で表現
 5. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `build_input_digest: 0123456789abcdef`
 
@@ -90,6 +91,7 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 - **golden fixture は build 入力同期で更新**: 上記 8 カテゴリのいずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
 - **build 入力外の変化は digest を変えない**: 例えば `development/docs/journal/` の追記、利用者プロジェクト側の変更、CI 設定の変更等は digest に影響しない (= golden 比較も影響しない)
 - **`SOURCE_DATE_EPOCH` 設定時の挙動**: 環境変数値が digest カテゴリ 8 に含まれるため、設定値が異なれば digest も異なる。通常 build (未設定) と release build (epoch 値設定) は別 digest 系統で扱う (golden fixture も 2 系統 — 通常 build 系統が standard、release CI 系統は release artifact 検証用、運用は 5.b / 5.c で具体化)
+- **digest はツールチェーン版数を含まない**: 出力レンダリング (frontmatter YAML 生成含む) は Python stdlib のみで行う構造のため、pyyaml / Python の版数は出力 byte に影響し得ない (pyyaml は metadata.yaml / agent doc front matter の **入力 parse** 専用、および生成後の syntax 検証 `verify_generated_skill_md` での roundtrip 確認専用で、出力の emission には一切使わない、2026-07-04 レビュー lens-3 Critical の構造的解消)。build_input_digest がツールチェーン版数を含まないことの正当性はこの構造そのものに由来する (別途バージョン文字列を digest に含めて追認する必要がない)
 
 #### 旧 source_content_digest との違い
 

@@ -30,6 +30,10 @@ if str(_TOOLS_DIR) not in sys.path:
 from build_skill import (  # noqa: E402
     CONVERTER_VERSION,
     BuildError,
+    GenerationVerificationError,
+    SourceValidationError,
+    WritePolicyError,
+    _check_write_containment,
     _safe_write_bytes,
     build_all,
     build_cell,
@@ -37,6 +41,7 @@ from build_skill import (  # noqa: E402
     build_generator_header,
     check_agent_docs,
     check_converter_version,
+    check_source_files_bom,
     compute_build_input_digest,
     parse_markers,
     parse_semver,
@@ -79,7 +84,9 @@ def test_valid_metadata_passes():
 
 
 def test_missing_skill_id_fails(tmp_path):
-    """metadata.yaml with no skill_id raises BuildError."""
+    """metadata.yaml with no skill_id raises the SourceValidationError
+    subclass (F4): a schema-validation failure is bad authored input, not
+    a write-path refusal or a post-write verification failure."""
     bad_yaml = textwrap.dedent("""\
         version: 0.1.0
         description: Missing skill_id field
@@ -92,7 +99,7 @@ def test_missing_skill_id_fails(tmp_path):
           - claude
     """)
     (tmp_path / "metadata.yaml").write_text(bad_yaml, encoding="utf-8")
-    with pytest.raises(BuildError, match="skill_id"):
+    with pytest.raises(SourceValidationError, match="skill_id"):
         validate_metadata(tmp_path, schema_path=_SCHEMA_PATH)
 
 
@@ -187,7 +194,7 @@ def test_fixture_duplicate_marker_fails():
     """duplicate-marker fixture raises BuildError (duplicate name rule)."""
     fixture_dir = _FIXTURES / "duplicate-marker"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     with pytest.raises(BuildError, match="duplicate"):
         parse_markers(body_text, source_files=["body.md"])
@@ -202,7 +209,7 @@ def test_fixture_unclosed_marker_fails():
     """unclosed-marker fixture raises BuildError (unclosed start marker)."""
     fixture_dir = _FIXTURES / "unclosed-marker"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     with pytest.raises(BuildError, match="[Uu]nclosed"):
         parse_markers(body_text, source_files=["body.md"])
@@ -214,12 +221,13 @@ def test_fixture_unclosed_marker_fails():
 
 
 def test_fixture_nested_marker_fails():
-    """nested-marker fixture raises BuildError (nesting forbidden)."""
+    """nested-marker fixture raises SourceValidationError (F4): marker
+    grammar violations are bad authored input (nesting forbidden)."""
     fixture_dir = _FIXTURES / "nested-marker"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
-    with pytest.raises(BuildError, match="nested"):
+    with pytest.raises(SourceValidationError, match="nested"):
         parse_markers(body_text, source_files=["body.md"])
 
 
@@ -232,7 +240,7 @@ def test_fixture_path_traversal_fails():
     """path-traversal fixture raises BuildError (.. in marker name)."""
     fixture_dir = _FIXTURES / "path-traversal"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     with pytest.raises(BuildError, match=r"\.\.|path"):
         parse_markers(body_text, source_files=["body.md"])
@@ -247,7 +255,7 @@ def test_fixture_case_collision_fails():
     """case-collision fixture raises BuildError (casefold duplicate)."""
     fixture_dir = _FIXTURES / "case-collision"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     with pytest.raises(BuildError, match="duplicate"):
         parse_markers(body_text, source_files=["body.md"])
@@ -262,7 +270,7 @@ def test_fixture_source_output_collision_fails():
     """source-output-collision fixture raises BuildError (collides with source_files)."""
     fixture_dir = _FIXTURES / "source-output-collision"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     with pytest.raises(BuildError, match="collides"):
         parse_markers(body_text, source_files=["body.md"])
@@ -277,7 +285,7 @@ def test_fixture_empty_helper_fails():
     """empty-helper fixture raises BuildError (zero content lines)."""
     fixture_dir = _FIXTURES / "empty-helper"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     with pytest.raises(BuildError, match="empty"):
         parse_markers(body_text, source_files=["body.md"])
@@ -319,7 +327,7 @@ def test_valid_minimal_parses_correctly():
     """valid-minimal fixture parses to exactly 3 markers; block-comment examples ignored."""
     fixture_dir = _FIXTURES / "valid-minimal"
     body_text = (fixture_dir / "body.md").read_text(
-        encoding="utf-8-sig", newline=""
+        encoding="utf-8-sig"
     ).replace("\r\n", "\n").replace("\r", "\n")
     result = parse_markers(body_text, source_files=["body.md"])
 
@@ -363,7 +371,7 @@ def test_valid_minimal_parses_correctly():
 def test_real_body_md_parses_four_markers():
     """Real skills/source/body.md parses to exactly 4 markers in declared order."""
     body_path = _SKILLS_SOURCE / "body.md"
-    body_text = body_path.read_text(encoding="utf-8-sig", newline="").replace(
+    body_text = body_path.read_text(encoding="utf-8-sig").replace(
         "\r\n", "\n"
     ).replace("\r", "\n")
 
@@ -789,6 +797,99 @@ def test_digest_changes_when_hook_file_byte_flipped(tmp_path):
     assert d_before != d_after
 
 
+def test_digest_length_prefix_resolves_old_format_collision(tmp_path):
+    """F3 (2026-07-04 review Medium): port the lens-1 repro.  Two crafted
+    manifests that collided under the OLD concat format
+    ("<cat>\\n<path>\\n<content>\\n", no length prefixes) must now produce
+    DIFFERENT digests under the length-prefixed format, because a
+    single file's content can no longer be crafted to forge a
+    category/path/content boundary and impersonate two separate files.
+
+    Scenario: source_files = ["a.md"] with content crafted to contain the
+    exact bytes that a second category-3 entry (path "b.md", some
+    content) would have produced under the old format, vs
+    source_files = ["a.md", "b.md"] with the content actually split
+    across two real files.  Under the OLD format these two source
+    dirs produced byte-identical category-3 manifest contributions
+    (verified separately); under the NEW length-prefixed format they
+    must differ.
+    """
+    import shutil as _shutil
+
+    def _build_repo_root(root: Path, source_files: list[str], contents: dict[str, bytes]):
+        src = root / "skills" / "source"
+        src.mkdir(parents=True)
+        for rel, data in contents.items():
+            (src / rel).write_bytes(data)
+        metadata_yaml = (
+            "skill_id: qgb\n"
+            "version: 0.1.0\n"
+            "description: test\n"
+            "converter_min_version: 0.1.0\n"
+            "source_files:\n"
+            + "".join(f"  - {rel}\n" for rel in source_files)
+            + "build_modes:\n  - full\n"
+            "target_agents:\n  - claude\n"
+        )
+        (src / "metadata.yaml").write_text(metadata_yaml, encoding="utf-8")
+        _shutil.copy2(_SCHEMA_PATH, src / "metadata.schema.json")
+
+        agent_docs = root / "development" / "docs" / "skill-converter"
+        agent_docs.mkdir(parents=True)
+        _shutil.copy2(_AGENT_DOCS_DIR / "agent-claude.md", agent_docs / "agent-claude.md")
+
+        tools_dir = root / "tools"
+        tools_dir.mkdir(parents=True)
+        _shutil.copy2(_TOOLS_DIR / "build_skill.py", tools_dir / "build_skill.py")
+        return src, agent_docs, tools_dir
+
+    # Under the OLD format ("<cat>\n<path>\n<content>\n"), a single
+    # category-3 entry with path "a.md" and this content is
+    # byte-identical to two entries (path "a.md" content "X", then
+    # path "b.md" content "Y") concatenated back to back.
+    forged_content = b"X\n3\nb.md\nY"
+
+    root_one = tmp_path / "one_file"
+    src_one, agent_docs_one, tools_one = _build_repo_root(
+        root_one, ["a.md"], {"a.md": forged_content}
+    )
+    metadata_one, _ = validate_and_parse(
+        src_one, agent_docs_dir=agent_docs_one, schema_path=src_one / "metadata.schema.json"
+    )
+    digest_one = compute_build_input_digest(
+        source_dir=src_one,
+        metadata=metadata_one,
+        schema_path=src_one / "metadata.schema.json",
+        agent_docs_dir=agent_docs_one,
+        converter_path=tools_one / "build_skill.py",
+        repo_root=root_one,
+        source_date_epoch=None,
+    )
+
+    root_two = tmp_path / "two_files"
+    src_two, agent_docs_two, tools_two = _build_repo_root(
+        root_two, ["a.md", "b.md"], {"a.md": b"X", "b.md": b"Y"}
+    )
+    metadata_two, _ = validate_and_parse(
+        src_two, agent_docs_dir=agent_docs_two, schema_path=src_two / "metadata.schema.json"
+    )
+    digest_two = compute_build_input_digest(
+        source_dir=src_two,
+        metadata=metadata_two,
+        schema_path=src_two / "metadata.schema.json",
+        agent_docs_dir=agent_docs_two,
+        converter_path=tools_two / "build_skill.py",
+        repo_root=root_two,
+        source_date_epoch=None,
+    )
+
+    assert digest_one != digest_two, (
+        "digest collision reproduced: the length-prefixed format (F3) "
+        "should make a single crafted file's content unable to forge a "
+        "category-3 file-boundary and impersonate two separate files"
+    )
+
+
 def test_digest_differs_with_source_date_epoch_set_vs_unset():
     """SOURCE_DATE_EPOCH set vs unset produces a different digest (category 8)."""
     metadata, _ = _valid_minimal_parse()
@@ -907,12 +1008,34 @@ def test_clean_build_removes_stale_file(tmp_path):
 
 
 def test_safe_write_bytes_rejects_target_outside_dist_root(tmp_path):
-    """_safe_write_bytes refuses a target outside the dist root."""
+    """_safe_write_bytes refuses a target outside the dist root, raising
+    WritePolicyError (F4): the write path itself said no, distinct from
+    bad authored input or a broken rendered artifact."""
     dist_root = tmp_path / "dist_skills"
     dist_root.mkdir()
     outside_target = tmp_path / "outside" / "evil.md"
-    with pytest.raises(BuildError, match="outside dist root"):
+    with pytest.raises(WritePolicyError, match="outside dist root"):
         _safe_write_bytes(dist_root, outside_target, b"evil content")
+
+
+def test_check_write_containment_rejects_target_outside_dist_root(tmp_path):
+    """_check_write_containment (F5: extracted pure containment policy)
+    raises WritePolicyError directly, with no write side effects."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    outside_target = tmp_path / "outside" / "evil.md"
+    with pytest.raises(WritePolicyError, match="outside dist root"):
+        _check_write_containment(dist_root, outside_target)
+    assert not outside_target.exists()
+
+
+def test_check_write_containment_accepts_target_inside_dist_root(tmp_path):
+    """_check_write_containment does not raise for an in-root target."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    target = dist_root / "sub" / "file.md"
+    target.parent.mkdir(parents=True)
+    _check_write_containment(dist_root, target)  # must not raise
 
 
 def test_safe_write_bytes_writes_inside_dist_root(tmp_path):
@@ -925,22 +1048,84 @@ def test_safe_write_bytes_writes_inside_dist_root(tmp_path):
 
 
 def test_safe_write_bytes_refuses_to_overwrite_existing_file(tmp_path):
-    """_safe_write_bytes refuses to write over an existing path (clean-build invariant)."""
+    """_safe_write_bytes refuses to write over an existing path (clean-build
+    invariant), raising WritePolicyError (F4)."""
     dist_root = tmp_path / "dist_skills"
     dist_root.mkdir()
     target = dist_root / "file.md"
     target.write_text("existing", encoding="utf-8")
-    with pytest.raises(BuildError):
+    with pytest.raises(WritePolicyError):
         _safe_write_bytes(dist_root, target, b"new content")
+
+
+def test_safe_write_bytes_refuses_hardlink_at_target(tmp_path):
+    """_safe_write_bytes refuses to write to a target path that is already a
+    hardlink to another file (F9 test blind spot): the pre-create os.lstat
+    absence check already refuses ANY existing path, hardlink or not, so
+    this exercises that the hardlink case specifically hits the same
+    clean-build-invariant refusal (not e.g. silently succeeding and
+    corrupting the other hardlinked name)."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    other = tmp_path / "other-file.md"
+    other.write_text("other content", encoding="utf-8")
+    target = dist_root / "file.md"
+    try:
+        os.link(str(other), str(target))
+    except OSError:
+        pytest.skip("os.link is not available/permitted on this filesystem")
+    with pytest.raises(WritePolicyError):
+        _safe_write_bytes(dist_root, target, b"new content")
+    # The other hardlinked name must be untouched by the refused write.
+    assert other.read_text(encoding="utf-8") == "other content"
+
+
+def test_safe_write_bytes_refuses_symlink_at_target(tmp_path):
+    """_safe_write_bytes refuses a target path that is a symlink (POSIX;
+    skipped where symlink creation is not permitted, e.g. Windows without
+    Developer Mode / elevation) -- F9 test blind spot."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    other = tmp_path / "other-file.md"
+    other.write_text("other content", encoding="utf-8")
+    target = dist_root / "file.md"
+    try:
+        os.symlink(str(other), str(target))
+    except OSError:
+        pytest.skip("os.symlink is not available/permitted on this platform")
+    with pytest.raises(WritePolicyError):
+        _safe_write_bytes(dist_root, target, b"new content")
+    assert other.read_text(encoding="utf-8") == "other content"
+
+
+# --- BOM guard on authored source_files (F7) ---------------------------------
+
+
+def test_check_source_files_bom_rejects_bom_prefixed_source(tmp_path):
+    """check_source_files_bom raises SourceValidationError when a
+    source_files entry starts with a UTF-8 BOM (EF BB BF)."""
+    (tmp_path / "body.md").write_bytes(b"\xef\xbb\xbfHello, this is BOM-prefixed.\n")
+    metadata = {"source_files": ["body.md"]}
+    with pytest.raises(SourceValidationError, match="BOM"):
+        check_source_files_bom(metadata, tmp_path)
+
+
+def test_check_source_files_bom_accepts_bom_less_source(tmp_path):
+    """check_source_files_bom does not raise for a BOM-less source file."""
+    (tmp_path / "body.md").write_bytes(b"Hello, no BOM here.\n")
+    metadata = {"source_files": ["body.md"]}
+    check_source_files_bom(metadata, tmp_path)  # must not raise
 
 
 # --- syntax verification -----------------------------------------------------
 
 
 def test_verify_generated_skill_md_catches_broken_frontmatter():
-    """verify_generated_skill_md raises BuildError on unparsable YAML frontmatter."""
+    """verify_generated_skill_md raises GenerationVerificationError (F4) on
+    unparsable YAML frontmatter: this is a post-write syntax verification
+    failure, distinct from bad authored input or a write-path refusal."""
     broken = "---\nname: [unclosed\n---\nBody content.\n"
-    with pytest.raises(BuildError):
+    with pytest.raises(GenerationVerificationError):
         verify_generated_skill_md(broken, expected_keys={"name"})
 
 

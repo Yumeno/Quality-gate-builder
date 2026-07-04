@@ -1,25 +1,23 @@
 ---
 name: qgb
-description: 'qgb (quality-gate-builder) を使って任意のプロジェクトに証跡ゲート
-
+description: |
+  qgb (quality-gate-builder) を使って任意のプロジェクトに証跡ゲート
   (REQ → contract → 機械検査 → ALLOW/DENY) を構築するスキル。
-
-  '
 allowed-tools:
 - Read
 - Glob
 - Grep
 - Write
 - Edit
-- Bash(python -m qgb *)
-- Bash(git *)
+- "Bash(python -m qgb *)"
+- "Bash(git *)"
 disable-model-invocation: false
 ---
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: fd3eb4afcb7b1c88
+  build_input_digest: fc0364db68ed8849
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
@@ -502,14 +500,20 @@ qgb は段階設計の進め方として **2 つの公式パターン** を提�
 python -m qgb design-stages propose-context --out .quality-system/_proposal_input.json
 ```
 
-出力には以下が含まれる:
+出力 (JSON) の実際のトップレベル key は以下の 9 個 (`qgb/core/proposal.py` の `build_proposal_context()` が正本、body.md はここで実装と同期を保つ):
 
-- `project_context_json`: `.quality-system/project-context.json` の中身
-- `project_context_md_excerpt`: `.quality-system/knowledge/project-context.md` の先頭部分 (LLM が全文を Read で読む前提)
-- `examples_index`: `examples/` 配下の `<example>/design-notes.md` / `policy.json` の pointer リスト (LLM が必要な例を Read で読む)
-- `existing_policy_json`: 既に `policy.json` があれば現状の `stages[]`
-- `knowledge_jsonl_summary`: knowledge entry の件数と種別
-- `philosophy_anchors`: P5 / P6 / P7 / P8 / P9 / P10 / P11 / P12 の id と一文サマリ
+- `document_kind` / `schema_version` / `intended_use` / `intended_use_note` / `contains_executable_instructions`: この文書が「外部 LLM ツールへの入力素材であり ALLOW/DENY 判定根拠ではない」ことを機械可読な形で明示するメタデータ (P6/P8 framing)
+- `project_context`: `.quality-system/project-context.json` の中身をそのまま (未整備なら `None`)
+- `policy`: 既存 `policy.json` の中身をそのまま (`stages[]` 抜粋ではなくファイル全体)
+- `reqs`: 各 REQ の `req_id` / `title` / `stages` (各 stage の `stage_id` / `required` / `waived`) の一覧、meta が読めない REQ は `load_error` 付きで記録
+- `constraints`: `verification_types` 一覧、`manual_check_rule`、`recommended_stage_count`、`stage_id_rule`、`contract_layout`、`existing_req_compatibility`、`project_context_role` 等の機械可読な制約サマリ
+
+**意図的に含まれないもの** (`build_proposal_context()` の docstring が理由を説明): `knowledge.jsonl` の中身、`project-context.md` の抜粋、`examples/` の pointer リスト、philosophy 原文の要約は **含まれない**。これらは Phase 3 Step 3.0 以降 deliberately minimal/stable な構造として除外されている。代わりに LLM (本スキル) は以下を **`Read` tool で直接読む**:
+
+- `.quality-system/knowledge/project-context.md` (人間正本、自然言語の設計意図)
+- `.quality-system/knowledge/knowledge.jsonl` (waiver / 外部知識記録、必要な範囲だけ)
+- `examples/<example>/design-notes.md` + `policy.json` (few-shot 参照、本文 §7.2 に一覧がある 6 例から自分で選ぶ)
+- `philosophy.md` (P5〜P12 原文、本文 §3 の 4 原則サマリで足りなければ直接参照)
 
 ### 3.2 段階案の起草 (LLM 責務)
 
