@@ -33,8 +33,11 @@ from build_skill import (  # noqa: E402
     GenerationVerificationError,
     SourceValidationError,
     WritePolicyError,
+    _check_delete_containment,
     _check_write_containment,
+    _clean_cell_dir,
     _safe_write_bytes,
+    _source_date_epoch_to_iso_utc,
     build_all,
     build_cell,
     build_frontmatter,
@@ -449,6 +452,68 @@ def test_cli_exit_code_64_on_usage_error(tmp_path):
     )
 
 
+# --- argparse-origin usage errors (Codex cross-review round 2 must-fix #3) --
+
+
+def test_cli_unknown_option_exits_64_not_2():
+    """An unrecognized CLI option is an argparse-origin usage error.  Before
+    this fix, argparse's default error() exited 2, colliding with
+    BuildError's own exit code 2 and making a CLI typo indistinguishable
+    from a real build failure.  It must exit 64 (same convention as
+    qgb.cli.QgbArgumentParser, reused here)."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_TOOLS_DIR / "build_skill.py"),
+            "--not-an-option",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 64, (
+        f"Expected exit code 64, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def test_cli_bad_option_value_exits_64():
+    """An argparse value error (e.g. an option requiring a value that gets
+    none) also exits 64, not argparse's default 2."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_TOOLS_DIR / "build_skill.py"),
+            "--source-dir",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 64, (
+        f"Expected exit code 64, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def test_cli_help_still_exits_0():
+    """--help must keep exiting 0 (argparse's help action calls
+    self.exit(0) directly, never self.error()); the exit-64 override for
+    error() must not accidentally affect it."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_TOOLS_DIR / "build_skill.py"),
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"Expected exit code 0, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "usage" in result.stdout.lower()
+
+
 # ---------------------------------------------------------------------------
 # 20. test_cli_bare_build_succeeds_and_writes_dist_dir
 # ---------------------------------------------------------------------------
@@ -484,6 +549,40 @@ def test_cli_bare_build_succeeds_and_writes_dist_dir(tmp_path):
     assert "BUILD OK" in result.stdout
     skill_md = dist_dir / "full" / "claude" / "SKILL.md"
     assert skill_md.exists()
+
+
+def test_cli_build_with_max_source_date_epoch_end_to_end(tmp_path):
+    """End-to-end regression for Codex cross-review round 2 must-fix #2:
+    SOURCE_DATE_EPOCH=253402300799 (the new upper bound, 9999-12-31T23:59:59Z)
+    must build successfully (exit 0) on every supported platform, including
+    Windows where the old fromtimestamp-based conversion would have failed
+    far below this value.  Asserts the generated header's build_date_utc
+    line matches the exact ISO format build_generator_header emits."""
+    fixture_dir = _FIXTURES / "valid-minimal"
+    dist_dir = tmp_path / "dist_skills"
+    child_env = dict(os.environ)
+    child_env["SOURCE_DATE_EPOCH"] = "253402300799"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_TOOLS_DIR / "build_skill.py"),
+            "--source-dir",
+            str(fixture_dir),
+            "--dist-dir",
+            str(dist_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+    assert result.returncode == 0, (
+        f"Expected exit code 0, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    skill_md = dist_dir / "full" / "claude" / "SKILL.md"
+    assert skill_md.exists()
+    text = skill_md.read_text(encoding="utf-8")
+    assert "build_date_utc: 9999-12-31T23:59:59Z" in text
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +1026,29 @@ def test_source_date_epoch_invalid_forms_rejected(raw):
 
 
 def test_source_date_epoch_max_boundary_accepted():
-    assert validate_source_date_epoch(str(2**63 - 1)) == 2**63 - 1
+    """253402300799 == 9999-12-31T23:59:59Z, the max ISO-8601 4-digit-year
+    instant.  Codex cross-review round 2 must-fix #2: the bound was
+    tightened from 2**63-1 down to this value because a value accepted by
+    the old bound could traceback in _source_date_epoch_to_iso_utc well
+    before 2**63-1 (and even lower on Windows), i.e. AFTER build_cell had
+    already cleaned a stale cell dir -- a partial-state, non-exit-2
+    failure.  253402300799 is the new, tightly-matched upper bound."""
+    assert validate_source_date_epoch("253402300799") == 253402300799
+
+
+def test_source_date_epoch_above_new_max_rejected():
+    """253402300800 (one second past 9999-12-31T23:59:59Z) is rejected."""
+    with pytest.raises(BuildError):
+        validate_source_date_epoch("253402300800")
+
+
+def test_source_date_epoch_to_iso_utc_at_new_max_boundary():
+    """_source_date_epoch_to_iso_utc converts the new max bound without
+    raising, on every supported platform (including Windows, whose C
+    runtime's localtime/gmtime cannot represent year 9999 -- this is
+    exactly why the conversion is built from timedelta arithmetic on top
+    of the epoch origin rather than datetime.fromtimestamp)."""
+    assert _source_date_epoch_to_iso_utc(253402300799) == "9999-12-31T23:59:59Z"
 
 
 # --- determinism: two consecutive builds byte-identical --------------------
@@ -1096,6 +1217,105 @@ def test_safe_write_bytes_refuses_symlink_at_target(tmp_path):
     with pytest.raises(WritePolicyError):
         _safe_write_bytes(dist_root, target, b"new content")
     assert other.read_text(encoding="utf-8") == "other content"
+
+
+# --- delete-path containment (Codex cross-review round 2 must-fix #1) -------
+
+
+def test_check_delete_containment_rejects_target_outside_dist_root(tmp_path):
+    """_check_delete_containment refuses a target outside the dist root,
+    mirroring _check_write_containment's literal-path containment check."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    outside_target = tmp_path / "outside" / "cell"
+    with pytest.raises(WritePolicyError, match="outside dist root"):
+        _check_delete_containment(dist_root, outside_target)
+
+
+def test_check_delete_containment_accepts_target_inside_dist_root(tmp_path):
+    """_check_delete_containment does not raise for a plain in-root target."""
+    dist_root = tmp_path / "dist_skills"
+    cell_dir = dist_root / "full" / "claude"
+    cell_dir.mkdir(parents=True)
+    _check_delete_containment(dist_root, cell_dir)  # must not raise
+
+
+def test_check_delete_containment_rejects_symlinked_intermediate_component(
+    tmp_path,
+):
+    """A symlinked intermediate component between dist_root and target is
+    refused unconditionally by the no-symlink-component walk (must-fix #1's
+    third check), even when its realpath resolves back INSIDE dist_root --
+    i.e. even a case the literal + realpath containment checks alone (checks
+    1-2) would consider safe still trips the walk, because rmtree follows
+    the symlink at the filesystem level, not the realpath level."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    real_mode_dir = dist_root / "real_mode_dir"
+    real_mode_dir.mkdir()
+    symlinked_mode = dist_root / "full"
+    try:
+        os.symlink(str(real_mode_dir), str(symlinked_mode), target_is_directory=True)
+    except OSError:
+        pytest.skip("os.symlink is not available/permitted on this platform")
+    cell_dir = symlinked_mode / "claude"
+    with pytest.raises(WritePolicyError, match="symlink"):
+        _check_delete_containment(dist_root, cell_dir)
+
+
+def test_clean_cell_dir_refuses_rmtree_through_symlinked_parent_and_preserves_external_content(
+    tmp_path,
+):
+    """Regression for Codex cross-review round 2 must-fix #1: before this
+    fix, _clean_cell_dir called shutil.rmtree(cell_dir) with NO containment
+    check at all.  If dist_dir/<mode> were a symlink pointing outside the
+    dist tree, rmtree would recursively delete the EXTERNAL target instead
+    of build output.  This test builds exactly that setup and asserts (a)
+    the clean step now raises WritePolicyError instead of deleting anything,
+    and (b) the external sentinel file the symlink points at is untouched.
+    """
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+
+    external_dir = tmp_path / "external_target"
+    external_dir.mkdir()
+    sentinel = external_dir / "sentinel.txt"
+    sentinel.write_text("do not delete me", encoding="utf-8")
+
+    symlinked_mode_dir = dist_root / "full"
+    try:
+        os.symlink(
+            str(external_dir), str(symlinked_mode_dir), target_is_directory=True
+        )
+    except OSError:
+        pytest.skip("os.symlink is not available/permitted on this platform")
+
+    cell_dir = symlinked_mode_dir / "claude"
+
+    with pytest.raises(WritePolicyError):
+        _clean_cell_dir(dist_root, cell_dir)
+
+    # The external sentinel file must still exist: the fix must refuse
+    # BEFORE any rmtree call, not attempt-then-catch after damage is done.
+    assert sentinel.exists()
+    assert sentinel.read_text(encoding="utf-8") == "do not delete me"
+
+
+def test_clean_cell_dir_still_removes_stale_plain_dir(tmp_path):
+    """Sanity check: _clean_cell_dir's normal (no-symlink) path still works
+    after adding the containment check -- a plain stale directory inside
+    dist_root is removed and recreated empty."""
+    dist_root = tmp_path / "dist_skills"
+    cell_dir = dist_root / "full" / "claude"
+    cell_dir.mkdir(parents=True)
+    stale = cell_dir / "stale.md"
+    stale.write_text("stale", encoding="utf-8")
+
+    _clean_cell_dir(dist_root, cell_dir)
+
+    assert cell_dir.exists()
+    assert not stale.exists()
+    assert list(cell_dir.iterdir()) == []
 
 
 # --- BOM guard on authored source_files (F7) ---------------------------------

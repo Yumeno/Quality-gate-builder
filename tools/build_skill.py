@@ -810,7 +810,17 @@ def validate_and_parse(
 # ---------------------------------------------------------------------------
 
 _RE_BARE_NONNEG_INT = re.compile(r"^[0-9]+$")
-_SOURCE_DATE_EPOCH_MAX = 2**63 - 1
+# Upper bound: 9999-12-31T23:59:59Z, the maximum instant representable by a
+# 4-digit-year ISO-8601 string (the format _source_date_epoch_to_iso_utc
+# emits).  The previous bound (2**63-1) was accepted by this function but
+# far exceeds what datetime.fromtimestamp can convert (raises OSError /
+# ValueError well below that on every platform, and even lower on Windows);
+# an accepted-but-unconvertible value could traceback in
+# _source_date_epoch_to_iso_utc AFTER build_cell had already cleaned a
+# stale cell dir, leaving a partial (non-exit-2) failure state (Codex
+# cross-review round 2 must-fix #2).  253402300799 is the literal max: it
+# is also comfortably convertible on every supported platform.
+_SOURCE_DATE_EPOCH_MAX = 253402300799
 
 
 def validate_source_date_epoch(raw: str | None) -> int | None:
@@ -818,7 +828,10 @@ def validate_source_date_epoch(raw: str | None) -> int | None:
 
     Accepts ONLY a bare decimal non-negative integer string: no leading
     '+'/'-', no surrounding whitespace, no decimals, no hex.  Range is
-    0..2**63-1 inclusive.
+    0..253402300799 inclusive (253402300799 = 9999-12-31T23:59:59Z, the
+    latest instant representable by the 4-digit-year ISO-8601 UTC string
+    this converter emits; see _SOURCE_DATE_EPOCH_MAX for why the previous
+    2**63-1 bound was unsafe).
 
     Returns None if *raw* is None (unset).  Returns the parsed int
     otherwise.  Raises BuildError on any format or range violation
@@ -835,17 +848,43 @@ def validate_source_date_epoch(raw: str | None) -> int | None:
     value = int(raw)
     if value > _SOURCE_DATE_EPOCH_MAX:
         raise BuildError(
-            f"SOURCE_DATE_EPOCH out of range (0..{_SOURCE_DATE_EPOCH_MAX}); "
-            f"got {value}"
+            f"SOURCE_DATE_EPOCH out of range (0..{_SOURCE_DATE_EPOCH_MAX}, "
+            f"i.e. up to 9999-12-31T23:59:59Z); got {value}"
         )
     return value
 
 
 def _source_date_epoch_to_iso_utc(epoch: int) -> str:
-    """Convert a validated SOURCE_DATE_EPOCH value to an ISO-8601 UTC string."""
+    """Convert a validated SOURCE_DATE_EPOCH value to an ISO-8601 UTC string.
+
+    *epoch* is expected to already have passed validate_source_date_epoch's
+    range check (0..._SOURCE_DATE_EPOCH_MAX, i.e. up to
+    9999-12-31T23:59:59Z).  Deliberately built from the epoch (1970-01-01
+    UTC) via timedelta arithmetic rather than
+    ``datetime.datetime.fromtimestamp``: fromtimestamp goes through the
+    platform C library's localtime/gmtime, whose range is narrower than
+    Python's own datetime range on at least one supported platform
+    (confirmed: Windows' C runtime tops out around year 3001, far below
+    9999) -- the same accepted-value-tracebacks-on-convert gap that
+    motivated tightening _SOURCE_DATE_EPOCH_MAX away from 2**63-1 (Codex
+    cross-review round 2 must-fix #2).  timedelta arithmetic stays inside
+    Python's own datetime implementation and supports the full documented
+    range portably.  The try/except remains as defense in depth for any
+    residual OverflowError/OSError/ValueError (e.g. a caller that bypassed
+    validate_source_date_epoch's range check): it is re-raised as
+    SourceValidationError rather than propagating as an unhandled
+    traceback, keeping the exit-2 contract uniform.
+    """
     import datetime
 
-    dt = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+    try:
+        epoch_origin = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+        dt = epoch_origin + datetime.timedelta(seconds=epoch)
+    except (OSError, ValueError, OverflowError) as exc:
+        raise SourceValidationError(
+            f"SOURCE_DATE_EPOCH value {epoch} could not be converted to a "
+            f"UTC timestamp: {exc}"
+        ) from exc
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -1470,6 +1509,85 @@ def _check_write_containment(dist_root: Path, target: Path) -> None:
         )
 
 
+def _check_delete_containment(dist_root: Path, target: Path) -> None:
+    """Raise WritePolicyError unless it is safe to recursively delete *target*.
+
+    Reuses the SAME containment policy as ``_check_write_containment`` (both
+    checks: literal normpath prefix against dist_root, and realpath
+    containment) so create and delete are guarded by one policy, not two
+    independently-maintained ones (Codex cross-review round 2 must-fix #1).
+    The delete side has an extra requirement beyond the write side, though:
+    a create only ever touches the *parent* of a brand-new path, but a
+    recursive delete (``shutil.rmtree``) walks and removes *target itself*
+    and everything under it -- so if any directory *component between
+    dist_root and target* (inclusive of target, exclusive of dist_root) is
+    itself a symlink, rmtree would recurse through that symlink and delete
+    whatever it points at, which may be entirely outside dist_root.  This
+    is refused unconditionally: a symlinked intermediate component makes
+    the delete path untrustworthy regardless of where the symlink target
+    resolves to.
+
+    Checks, in order:
+      1. normpath containment: normpath(target) must equal or be nested
+         under normpath(dist_root) (catches ``../`` traversal in the given
+         path string).
+      2. realpath containment: realpath(target) must equal or be nested
+         under realpath(dist_root) (catches a symlinked directory swapped
+         in under dist_root, or *target itself* being a symlink to
+         somewhere outside dist_root).
+      3. no-symlink-component walk: every path component strictly between
+         dist_root and target (inclusive of target) must not be a symlink
+         (``os.path.islink``).  Deleting *through* a symlinked intermediate
+         is refused even if that symlink's realpath happens to resolve back
+         inside dist_root, because rmtree's recursive walk follows the
+         symlink at the filesystem level, not the realpath level.
+    """
+    dist_root_norm = os.path.normpath(str(dist_root))
+    target_norm = os.path.normpath(str(target))
+    if not (
+        target_norm == dist_root_norm
+        or target_norm.startswith(dist_root_norm + os.sep)
+    ):
+        raise WritePolicyError(
+            f"Refusing to delete outside dist root: {target} "
+            f"(dist_root={dist_root})"
+        )
+
+    dist_root_real = os.path.realpath(str(dist_root))
+    target_real = os.path.realpath(str(target))
+    if not (
+        target_real == dist_root_real
+        or target_real.startswith(dist_root_real + os.sep)
+    ):
+        raise WritePolicyError(
+            f"Refusing to delete outside dist root (realpath check failed): "
+            f"{target} (dist_root={dist_root})"
+        )
+
+    # Walk every component strictly between dist_root and target (inclusive
+    # of target), and refuse if any of them is itself a symlink.  Built by
+    # repeatedly taking target_norm's parent until we reach dist_root_norm.
+    component = Path(target_norm)
+    dist_root_path = Path(dist_root_norm)
+    components_to_check: list[Path] = []
+    while component != dist_root_path:
+        components_to_check.append(component)
+        parent = component.parent
+        if parent == component:
+            # Reached filesystem root without hitting dist_root_norm: the
+            # earlier normpath containment check above should have already
+            # caught this, but guard defensively against an infinite loop.
+            break
+        component = parent
+
+    for comp in components_to_check:
+        if os.path.islink(str(comp)):
+            raise WritePolicyError(
+                f"Refusing to delete through a symlinked path component: "
+                f"{comp} (target={target}, dist_root={dist_root})"
+            )
+
+
 def _safe_write_bytes(dist_root: Path, target: Path, data: bytes) -> None:
     """Write *data* to *target* with layered path + TOCTOU defenses.
 
@@ -1647,15 +1765,37 @@ def verify_text_artifact(text: str, *, label: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _clean_cell_dir(cell_dir: Path) -> None:
+def _clean_cell_dir(dist_root: Path, cell_dir: Path) -> None:
     """Remove *cell_dir* if it exists, then recreate it empty.
 
     Codex K=2 r1 spec fix #2 "stale output 除去 or clean build": clean
     build is the default; this also serves as the primary hardlink defense
     (see phase5-step5-a-2.md Sec.6.3 item 5(a)).
+
+    Codex cross-review round 2 must-fix #1: the write path
+    (``_safe_write_bytes``) has always been guarded by
+    ``_check_write_containment`` before it touches the filesystem, but this
+    delete path previously called ``shutil.rmtree`` with NO containment
+    check at all.  If ``cell_dir`` (or any parent under *dist_root*) were a
+    symlink pointing outside the dist tree, ``rmtree`` would recursively
+    delete whatever that symlink points at -- external content, not build
+    output.  ``_check_delete_containment`` reuses the same policy as the
+    write side (literal + realpath containment) plus an extra
+    no-symlink-component walk that the write side does not need (a
+    recursive delete, unlike a single-file create, walks every component
+    of the tree being removed).  Any refusal, and any OSError raised by
+    the rmtree call itself, surfaces as WritePolicyError so the exit-2
+    contract is uniform across every write/delete refusal in this module
+    (F4).
     """
+    _check_delete_containment(dist_root, cell_dir)
     if cell_dir.exists():
-        shutil.rmtree(cell_dir)
+        try:
+            shutil.rmtree(cell_dir)
+        except OSError as exc:
+            raise WritePolicyError(
+                f"Failed to remove stale cell dir {cell_dir}: {exc}"
+            ) from exc
     cell_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -1707,7 +1847,7 @@ def build_cell(
     + lint/ copies, and syntax verification of every generated artifact.
     """
     cell_dir = dist_dir / mode / agent
-    _clean_cell_dir(cell_dir)
+    _clean_cell_dir(dist_dir, cell_dir)
 
     converter_path = Path(__file__).resolve()
     digest = compute_build_input_digest(
@@ -1853,8 +1993,28 @@ def build_all(
 # ---------------------------------------------------------------------------
 
 
+class _BuildSkillArgumentParser(argparse.ArgumentParser):
+    """argparse parser that exits with 64 (usage error) instead of 2.
+
+    Reuses qgb's own established pattern (``qgb.cli.QgbArgumentParser``):
+    argparse's default ``error()`` implementation prints usage and exits
+    with code 2, which collides with this module's own BuildError exit
+    code (also 2, see the module docstring's "Exit codes" table) --
+    a genuine CLI usage mistake (unknown option, bad value) and a
+    validation/parse/generation failure of the *build itself* would
+    otherwise be indistinguishable from the exit code alone (Codex
+    cross-review round 2 must-fix #3).  ``--help``/``-h`` is unaffected:
+    argparse's help action calls ``self.exit(0)`` directly, never
+    ``self.error()``, so it keeps exiting 0.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        self.print_usage(sys.stderr)
+        self.exit(64, f"{self.prog}: error: {message}\n")
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = _BuildSkillArgumentParser(
         prog="build_skill",
         description=(
             "build_skill.py -- Phase 5 skill converter "

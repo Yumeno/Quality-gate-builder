@@ -82,7 +82,7 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 4. sha256 を計算、16 進 lowercase で表現
 5. 短縮表記 (最初の 16 桁) を生成物 header に埋め込み: `build_input_digest: 0123456789abcdef`
 
-**注**: カテゴリ 6 (converter 実装) は **build_skill.py 自身を読み込んで digest に含める** = converter 起動時に `__file__` または package root を再帰的に読む。`.py` 改行は `.gitattributes` で LF 固定。
+**注**: カテゴリ 7 (converter 実装) は **build_skill.py 自身を読み込んで digest に含める** = converter 起動時に `__file__` または package root を再帰的に読む。`.py` 改行は `.gitattributes` で LF 固定。
 
 #### 設計上の主張
 
@@ -91,7 +91,7 @@ build 結果は以下に依存するため、すべてを digest 対象に含め
 - **golden fixture は build 入力同期で更新**: 上記 8 カテゴリのいずれかが変更 → golden 再生成 + 同一 commit に含める (1 commit 内で build 入力と digest が一致する状態を維持)
 - **build 入力外の変化は digest を変えない**: 例えば `development/docs/journal/` の追記、利用者プロジェクト側の変更、CI 設定の変更等は digest に影響しない (= golden 比較も影響しない)
 - **`SOURCE_DATE_EPOCH` 設定時の挙動**: 環境変数値が digest カテゴリ 8 に含まれるため、設定値が異なれば digest も異なる。通常 build (未設定) と release build (epoch 値設定) は別 digest 系統で扱う (golden fixture も 2 系統 — 通常 build 系統が standard、release CI 系統は release artifact 検証用、運用は 5.b / 5.c で具体化)
-- **digest はツールチェーン版数を含まない**: 出力レンダリング (frontmatter YAML 生成含む) は Python stdlib のみで行う構造のため、pyyaml / Python の版数は出力 byte に影響し得ない (pyyaml は metadata.yaml / agent doc front matter の **入力 parse** 専用、および生成後の syntax 検証 `verify_generated_skill_md` での roundtrip 確認専用で、出力の emission には一切使わない、2026-07-04 レビュー lens-3 Critical の構造的解消)。build_input_digest がツールチェーン版数を含まないことの正当性はこの構造そのものに由来する (別途バージョン文字列を digest に含めて追認する必要がない)
+- **digest はツールチェーン版数を含まない**: 出力レンダリング (frontmatter YAML 生成含む) は Python stdlib のみで行う構造のため、**正常に受理された同一入力に対する emission byte** は pyyaml / Python の版数に依存しない (pyyaml は metadata.yaml / agent doc front matter の **入力 parse** 専用、および生成後の syntax 検証 `verify_generated_skill_md` での roundtrip 確認専用で、出力の emission には一切使わない、2026-07-04 レビュー lens-3 Critical の構造的解消)。**受理/拒否の挙動**(ある入力が valid と判定されるか)はパース側で使うライブラリ版数に依存し得るが、それは build 成否が変わる話であり、受理された入力から生成される byte が変わる話ではない (byte drift ではない)。build_input_digest がツールチェーン版数を含まないことの正当性はこの emission-only 構造に由来する (別途バージョン文字列を digest に含めて追認する必要がない)。この主張は CI の複数 Python 版 (matrix: Python 3.10 / 3.12) での golden byte 一致検証を根拠として持つ
 
 #### 旧 source_content_digest との違い
 
