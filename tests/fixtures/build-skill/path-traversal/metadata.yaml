@@ -1,0 +1,10 @@
+skill_id: test-skill
+version: 0.1.0
+description: Test fixture for build_skill.py
+converter_min_version: 0.1.0
+source_files:
+  - body.md
+build_modes:
+  - full
+target_agents:
+  - claude
