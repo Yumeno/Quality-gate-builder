@@ -28,7 +28,7 @@ from typing import Any
 # Version
 # ---------------------------------------------------------------------------
 
-CONVERTER_VERSION = "0.1.0"
+CONVERTER_VERSION = "0.1.1"
 
 # ---------------------------------------------------------------------------
 # Repo-relative defaults
@@ -1043,19 +1043,27 @@ def compute_build_input_digest(
 
 
 def build_generator_header(
-    *, build_input_digest: str, source_date_epoch: int | None
+    *, build_input_digest: str, source_date_epoch: int | None, skill_version: str
 ) -> str:
     """Return the deterministic HTML-comment generator header block.
 
     Placed immediately after frontmatter in SKILL.md, or at the very top of
     helper files / INSTALL.md.  No source commit hash.  No timestamp unless
     SOURCE_DATE_EPOCH is set (build_date_utc line then appended).
+
+    *skill_version* is metadata.yaml's own ``version`` field (the skill's
+    own semver), distinct from ``converter_version`` (the converter tool's
+    own version).  Before this field existed, a distributed SKILL.md had no
+    way to state the skill's own version anywhere in its header, and a
+    consuming LLM reading ``converter_version`` could -- and in practice
+    did -- misread it as the skill's version.
     """
     short_digest = build_input_digest[:16]
     lines = [
         "<!--",
         "  GENERATED FILE - DO NOT EDIT.",
         "  これは生成物。skills/source/body.md を編集すること。",
+        f"  skill_version: {skill_version}",
         f"  converter_version: {CONVERTER_VERSION}",
         f"  build_input_digest: {short_digest}",
     ]
@@ -1068,7 +1076,7 @@ def build_generator_header(
 
 
 def build_generator_header_hash(
-    *, build_input_digest: str, source_date_epoch: int | None
+    *, build_input_digest: str, source_date_epoch: int | None, skill_version: str
 ) -> str:
     """Return the generator header using '#'-comment syntax, pure ASCII.
 
@@ -1080,11 +1088,15 @@ def build_generator_header_hash(
     because setup-qgb.ps1/.sh are asserted pure-ASCII deterministic content
     (Phase 5 Step 5.c-1, Issue #27) -- unlike SKILL.md/INSTALL.md/helper
     files, which are Japanese-authored Markdown and always UTF-8.
+
+    *skill_version* has the same meaning as in build_generator_header: the
+    skill's own semver (metadata.yaml's ``version``), not the converter's.
     """
     short_digest = build_input_digest[:16]
     lines = [
         "# GENERATED FILE - DO NOT EDIT.",
         "# This is a generated artifact. Edit skills/source/body.md instead.",
+        f"# skill_version: {skill_version}",
         f"# converter_version: {CONVERTER_VERSION}",
         f"# build_input_digest: {short_digest}",
     ]
@@ -2213,11 +2225,16 @@ def build_cell(
         repo_root=repo_root,
         source_date_epoch=source_date_epoch,
     )
+    skill_version = str(metadata.get("version", ""))
     header = build_generator_header(
-        build_input_digest=digest, source_date_epoch=source_date_epoch
+        build_input_digest=digest,
+        source_date_epoch=source_date_epoch,
+        skill_version=skill_version,
     )
     header_hash = build_generator_header_hash(
-        build_input_digest=digest, source_date_epoch=source_date_epoch
+        build_input_digest=digest,
+        source_date_epoch=source_date_epoch,
+        skill_version=skill_version,
     )
 
     result = BuildCellResult(mode=mode, agent=agent, cell_dir=cell_dir, build_input_digest=digest)

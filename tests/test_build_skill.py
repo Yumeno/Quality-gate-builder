@@ -42,6 +42,7 @@ from build_skill import (  # noqa: E402
     build_cell,
     build_frontmatter,
     build_generator_header,
+    build_generator_header_hash,
     check_agent_docs,
     check_converter_version,
     check_source_files_bom,
@@ -783,9 +784,26 @@ def test_generator_header_present_in_skill_md(tmp_path):
     )
     text = (cell.cell_dir / "SKILL.md").read_text(encoding="utf-8")
     assert "GENERATED FILE - DO NOT EDIT" in text
+    assert f"skill_version: {metadata['version']}" in text
     assert f"converter_version: {CONVERTER_VERSION}" in text
     assert "build_input_digest:" in text
     assert "build_date_utc" not in text  # SOURCE_DATE_EPOCH unset
+
+    # skill_version must appear immediately before converter_version (both
+    # in the header's declared line order), never the other way around --
+    # this is the exact ordering a consuming LLM reads top-to-bottom, and
+    # it is what distinguishes "the skill's own version" from "the
+    # converter tool's version" for a reader skimming the header.
+    lines = text.splitlines()
+    skill_version_idx = next(
+        i for i, ln in enumerate(lines) if ln.strip().startswith("skill_version:")
+    )
+    converter_version_idx = next(
+        i for i, ln in enumerate(lines) if ln.strip().startswith("converter_version:")
+    )
+    assert converter_version_idx == skill_version_idx + 1, (
+        "skill_version line must be immediately followed by converter_version"
+    )
 
 
 def test_generator_header_absent_in_copied_hooks_and_lint(tmp_path):
@@ -822,15 +840,46 @@ def test_generator_header_absent_in_copied_hooks_and_lint(tmp_path):
 def test_generator_header_no_build_date_when_epoch_unset(monkeypatch):
     """build_date_utc line is absent when SOURCE_DATE_EPOCH is unset."""
     monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
-    header = build_generator_header(build_input_digest="a" * 64, source_date_epoch=None)
+    header = build_generator_header(
+        build_input_digest="a" * 64, source_date_epoch=None, skill_version="0.1.3"
+    )
     assert "build_date_utc" not in header
+
+
+def test_generator_header_contains_skill_version_before_converter_version():
+    """build_generator_header emits skill_version immediately before
+    converter_version (not the other way around, and not omitted): this is
+    the fix for a real misreading incident where a consuming LLM read
+    converter_version off the header and reported it as the skill's own
+    version, because no skill_version line existed anywhere in the header."""
+    header = build_generator_header(
+        build_input_digest="a" * 64, source_date_epoch=None, skill_version="0.1.3"
+    )
+    lines = header.splitlines()
+    assert "  skill_version: 0.1.3" in lines
+    skill_idx = lines.index("  skill_version: 0.1.3")
+    assert lines[skill_idx + 1] == f"  converter_version: {CONVERTER_VERSION}"
+
+
+def test_generator_header_hash_contains_skill_version_before_converter_version():
+    """build_generator_header_hash ('#'-comment variant) has the same
+    skill_version-then-converter_version ordering as build_generator_header."""
+    header = build_generator_header_hash(
+        build_input_digest="a" * 64, source_date_epoch=None, skill_version="0.1.3"
+    )
+    lines = header.splitlines()
+    assert "# skill_version: 0.1.3" in lines
+    skill_idx = lines.index("# skill_version: 0.1.3")
+    assert lines[skill_idx + 1] == f"# converter_version: {CONVERTER_VERSION}"
 
 
 def test_generator_header_build_date_present_when_epoch_set(monkeypatch):
     """build_date_utc line is present with the correct ISO value when SOURCE_DATE_EPOCH is set."""
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "1735689600")
     epoch = validate_source_date_epoch(os.environ["SOURCE_DATE_EPOCH"])
-    header = build_generator_header(build_input_digest="a" * 64, source_date_epoch=epoch)
+    header = build_generator_header(
+        build_input_digest="a" * 64, source_date_epoch=epoch, skill_version="0.1.3"
+    )
     assert "build_date_utc: 2025-01-01T00:00:00Z" in header
 
 
@@ -1478,13 +1527,17 @@ def test_setup_scripts_contain_expected_tag_matching_metadata_version(
 
 @pytest.mark.parametrize("script_name", ["setup-qgb.ps1", "setup-qgb.sh"])
 def test_setup_scripts_contain_generator_header(tmp_path, script_name):
-    """Both scripts carry the generated-file header (converter_version +
-    build_input_digest), same as every other generated artifact."""
+    """Both scripts carry the generated-file header (skill_version +
+    converter_version + build_input_digest), same as every other generated
+    artifact.  skill_version is derived from the real metadata.yaml (not
+    hardcoded) so this test catches a version/build drift the same way
+    test_setup_scripts_contain_expected_tag_matching_metadata_version does."""
     dist_dir = tmp_path / "dist_skills"
     summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
     cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
     text = (cell.cell_dir / script_name).read_text(encoding="utf-8")
     assert "GENERATED FILE - DO NOT EDIT" in text
+    assert f"skill_version: {_real_metadata_version()}" in text
     assert f"converter_version: {CONVERTER_VERSION}" in text
     assert "build_input_digest:" in text
 
