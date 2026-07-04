@@ -8,7 +8,7 @@ description: |
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: f7c48029ac006e73
+  build_input_digest: 14924a4088439977
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
@@ -193,14 +193,26 @@ qgb の責務分離 (command runner / 異常時責務分離 / process tree parti
 
 ### 10.1 「qgb がない」「python -m qgb で動かない」
 
-利用者プロジェクトに qgb が installed されていない可能性。**qgb は利用者プロジェクトに同梱されず、PyPI にも公開されていない。** リポジトリを取得して editable install する:
+利用者プロジェクトに qgb が installed されていない可能性。**qgb は利用者プロジェクトに同梱されず、PyPI にも公開されていない。** venv 既定 (Phase 5 Step 5.c-1, Issue #27) で導入する:
 
-```bash
-git clone https://github.com/Yumeno/Quality-gate-builder.git
-pip install -e ./Quality-gate-builder
-```
+1. **同梱 setup script を推奨**: このスキルの dist cell には `setup-qgb.ps1` / `setup-qgb.sh` が同梱されている。対象プロジェクトのルートにコピーして実行すると `.venv` 作成 (既存なら温存) → タグ固定 `git+` install → `qgb --version` 動作確認まで自動化される。
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File setup-qgb.ps1
+   ```
+   ```bash
+   bash setup-qgb.sh
+   ```
+2. **手動 venv 手順** (setup script が使えない場合):
+   ```bash
+   py -3 -m venv .venv
+   .venv\Scripts\Activate.ps1        # POSIX: source .venv/bin/activate
+   pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v<ver>"
+   ```
+   `<ver>` は **このスキルと同じバージョン** (converter が `metadata.yaml#version` から `skill-v<ver>` タグを機械的に焼き込む。実際の値は同梱の INSTALL.md / setup script を参照)。
 
 `pip install quality-gate-builder` は**実行しない** (PyPI 未公開のため、同名パッケージが存在した場合それは qgb ではない)。将来 PyPI 公開された場合は本節を更新する。
+
+`git+` install はタグ先の repo を clone するのと同等の信頼を要求する (`--require-hashes` は VCS install に使えない、NF-011)。venv を使わないグローバル install は分かっている利用者向けの非推奨経路として残るが、既定は venv。
 
 ### 10.2 「`.quality-system/` が既にあるが内容が古い」
 

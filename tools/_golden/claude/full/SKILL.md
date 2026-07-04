@@ -17,7 +17,7 @@ disable-model-invocation: false
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: f7c48029ac006e73
+  build_input_digest: 14924a4088439977
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
@@ -190,20 +190,23 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
 1. **利用者プロジェクトの状況確認**
    - 現在のディレクトリ (`pwd`)、git 状態 (`git status`)、既存ファイル (`ls -la`)、`README.md` の冒頭
    - 利用者プロジェクトの種類 (CLI / Web / ドキュメント等) を**自律判断せず利用者に確認**する (アダプタ的な機械検出は qgb 本体が撤回した方針、対象認識は LLM 責務)
-2. **`python -m qgb init` を実行**
+2. **qgb の可用性確認 (Phase 5 Step 5.c-1)**
+   - `python -m qgb --version` を試す。失敗する場合、まず**このプロジェクトの qgb がどの interpreter にいるか**を確定する: `.venv` があれば `.venv\Scripts\python.exe -m qgb` (POSIX: `.venv/bin/python -m qgb`) を明示的に呼び出す (セッション shell は venv を自動 activate しない)
+   - それでも qgb が見つからない場合、同梱の `setup-qgb.ps1` / `setup-qgb.sh` の内容 (`.venv` 作成 + タグ固定 `git+` install) を §3.5 の姿勢 (親切なコンサルタント・メンターとして、押し付けず、内容を説明して承諾を得る) で利用者に説明し、承諾を得てから実行を提案する
+3. **`python -m qgb init` を実行**
    - `.quality-system/` 配下が生成される
    - 既に存在する場合は `InitError` で停止 → 利用者に上書き可否を確認
-3. **`project-context.md` (人間正本) を起草**
+4. **`project-context.md` (人間正本) を起草**
    - 利用者から目的 / 対象範囲 / 採用しない方式 / 参照文書を聞き取り、`.quality-system/knowledge/project-context.md` に Markdown で書く
    - 「言語判定」「フレームワーク判定」を agent が肩代わりしない (adapter 量産方針と同じ問題が再発する、Phase 3 Step 3.0 教訓)
-4. **`project-context.json` (機械正本) を補佐 Agent として起草**
+5. **`project-context.json` (機械正本) を補佐 Agent として起草**
    - `project-context.md` を読んで `.quality-system/project-context.json` に構造化
    - `source_metadata.generated_by: "agent-assisted"` を立てる
    - `human_reviewed: true` は **人間のみが立てる** (P8 違反になる)、agent は `false` のまま
-5. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
+6. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
    - `req/REQ-APP-001.md` + `req/REQ-APP-001.meta.json` + `contracts/REQ-APP-001/<stage>.json` のひな型
    - 利用者と要求内容を対話して `REQ-APP-001.md` 本文を埋める
-6. **`python -m qgb validate-policy` で機械検証**
+7. **`python -m qgb validate-policy` で機械検証**
    - `config.json` / `policy.json` の存在、契約の DAG、`manual_check`-only REQ の警告
    - blocker があれば修正して再実行
 
@@ -394,14 +397,26 @@ qgb の責務分離 (command runner / 異常時責務分離 / process tree parti
 
 ### 10.1 「qgb がない」「python -m qgb で動かない」
 
-利用者プロジェクトに qgb が installed されていない可能性。**qgb は利用者プロジェクトに同梱されず、PyPI にも公開されていない。** リポジトリを取得して editable install する:
+利用者プロジェクトに qgb が installed されていない可能性。**qgb は利用者プロジェクトに同梱されず、PyPI にも公開されていない。** venv 既定 (Phase 5 Step 5.c-1, Issue #27) で導入する:
 
-```bash
-git clone https://github.com/Yumeno/Quality-gate-builder.git
-pip install -e ./Quality-gate-builder
-```
+1. **同梱 setup script を推奨**: このスキルの dist cell には `setup-qgb.ps1` / `setup-qgb.sh` が同梱されている。対象プロジェクトのルートにコピーして実行すると `.venv` 作成 (既存なら温存) → タグ固定 `git+` install → `qgb --version` 動作確認まで自動化される。
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File setup-qgb.ps1
+   ```
+   ```bash
+   bash setup-qgb.sh
+   ```
+2. **手動 venv 手順** (setup script が使えない場合):
+   ```bash
+   py -3 -m venv .venv
+   .venv\Scripts\Activate.ps1        # POSIX: source .venv/bin/activate
+   pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v<ver>"
+   ```
+   `<ver>` は **このスキルと同じバージョン** (converter が `metadata.yaml#version` から `skill-v<ver>` タグを機械的に焼き込む。実際の値は同梱の INSTALL.md / setup script を参照)。
 
 `pip install quality-gate-builder` は**実行しない** (PyPI 未公開のため、同名パッケージが存在した場合それは qgb ではない)。将来 PyPI 公開された場合は本節を更新する。
+
+`git+` install はタグ先の repo を clone するのと同等の信頼を要求する (`--require-hashes` は VCS install に使えない、NF-011)。venv を使わないグローバル install は分かっている利用者向けの非推奨経路として残るが、既定は venv。
 
 ### 10.2 「`.quality-system/` が既にあるが内容が古い」
 

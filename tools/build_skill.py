@@ -1067,6 +1067,34 @@ def build_generator_header(
     return "\n".join(lines) + "\n"
 
 
+def build_generator_header_hash(
+    *, build_input_digest: str, source_date_epoch: int | None
+) -> str:
+    """Return the generator header using '#'-comment syntax, pure ASCII.
+
+    Same information as build_generator_header, but two differences:
+    (1) HTML comments (<!-- ... -->) are not valid syntax in PowerShell or
+    POSIX sh -- both setup-qgb.ps1 and setup-qgb.sh use '#' line comments
+    instead, matching each language's own comment syntax; (2) the body text
+    is English-only (ASCII), not the bilingual EN/JA wording used elsewhere,
+    because setup-qgb.ps1/.sh are asserted pure-ASCII deterministic content
+    (Phase 5 Step 5.c-1, Issue #27) -- unlike SKILL.md/INSTALL.md/helper
+    files, which are Japanese-authored Markdown and always UTF-8.
+    """
+    short_digest = build_input_digest[:16]
+    lines = [
+        "# GENERATED FILE - DO NOT EDIT.",
+        "# This is a generated artifact. Edit skills/source/body.md instead.",
+        f"# converter_version: {CONVERTER_VERSION}",
+        f"# build_input_digest: {short_digest}",
+    ]
+    if source_date_epoch is not None:
+        lines.append(
+            f"# build_date_utc: {_source_date_epoch_to_iso_utc(source_date_epoch)}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Rendering: full / split (items 6-7)
 # ---------------------------------------------------------------------------
@@ -1391,6 +1419,255 @@ def _dump_frontmatter(fm: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Repo URL + tag (Phase 5 Step 5.c-1, Issue #27)
+#
+# The install tag is baked as "skill-v" + metadata.yaml's version (e.g.
+# skill-v0.1.1): the setup scripts install the exact commit tagged to match
+# the skill build they were bundled with, rather than floating on a branch
+# HEAD that could drift out from under an already-installed skill.
+# ---------------------------------------------------------------------------
+
+_REPO_URL = "https://github.com/Yumeno/Quality-gate-builder.git"
+
+
+def _install_tag(metadata: dict[str, Any]) -> str:
+    """Return the git tag baked into the setup scripts: 'skill-v<version>'."""
+    version = metadata.get("version", "")
+    return f"skill-v{version}"
+
+
+# ---------------------------------------------------------------------------
+# setup-qgb.ps1 / setup-qgb.sh (item: Phase 5 Step 5.c-1 install UX, Issue #27)
+#
+# Both scripts are deterministic, ASCII-only, generated artifacts (written
+# via the same _write_text_file / generator-header path as INSTALL.md and
+# helper files -- NOT copied verbatim like hooks/lint).  The tag baked into
+# them (_install_tag) requires per-build rendering, so they cannot be static
+# copies.  No new build_input_digest category is needed: these render
+# functions live in tools/build_skill.py itself, already covered by digest
+# category 7 (converter source); metadata.yaml's version is already digest
+# category 1.
+#
+# For setup-qgb.sh specifically: the "#!/usr/bin/env bash" shebang MUST be
+# byte 0 of the file (the kernel only honors a shebang at the very start),
+# so the generator header is emitted as a *second* comment block after the
+# shebang line, not prepended before it the way every other generated
+# artifact prepends the header first.  build_cell's caller is responsible
+# for putting header placement in the right order per artifact kind (see
+# the sh special-case in build_cell below).
+# ---------------------------------------------------------------------------
+
+
+def render_setup_ps1(*, metadata: dict[str, Any]) -> str:
+    """Render setup-qgb.ps1: venv-default installer, PowerShell 5 compatible.
+
+    Pure ASCII, English messages (this file ships INTO third-party target
+    projects, so it follows the repo's own SS6.5 PowerShell-5 discipline:
+    no BOM dependency, no non-ASCII, $ErrorActionPreference = 'Stop').  The
+    header is prepended by the caller (build_cell), same as every other
+    generated artifact except setup-qgb.sh.
+    """
+    tag = _install_tag(metadata)
+    lines = [
+        "param(",
+        "    [string]$FromPath = \"\"",
+        ")",
+        "",
+        "$ErrorActionPreference = 'Stop'",
+        "",
+        "# setup-qgb.ps1 -- qgb installer (venv-default).",
+        "#",
+        "# Trust boundary note: the default install path below runs",
+        "# 'pip install git+https://...@<tag>', which is clone-equivalent",
+        "# trust (arbitrary code from the repo at that tag runs during",
+        "# 'pip install').  --require-hashes is not available for VCS",
+        "# installs (NF-011); this script does not attempt to simulate it.",
+        "# Use -FromPath for an offline / local-clone install instead.",
+        "",
+        "function Write-Step($msg) {",
+        "    Write-Host \"[setup-qgb] $msg\"",
+        "}",
+        "",
+        "# Step 1: locate a Python 3 interpreter.",
+        "Write-Step \"Step 1: locating Python...\"",
+        "$pythonCmd = $null",
+        "try {",
+        "    & py -3 --version | Out-Null",
+        "    if ($LASTEXITCODE -eq 0) {",
+        "        $pythonCmd = \"py -3\"",
+        "    }",
+        "} catch {",
+        "    $pythonCmd = $null",
+        "}",
+        "if (-not $pythonCmd) {",
+        "    try {",
+        "        & python --version | Out-Null",
+        "        if ($LASTEXITCODE -eq 0) {",
+        "            $pythonCmd = \"python\"",
+        "        }",
+        "    } catch {",
+        "        $pythonCmd = $null",
+        "    }",
+        "}",
+        "if (-not $pythonCmd) {",
+        "    Write-Host \"[setup-qgb] ERROR: no working Python 3 interpreter found (tried 'py -3' and 'python').\"",
+        "    Write-Host \"[setup-qgb] Install Python 3 and re-run this script.\"",
+        "    exit 1",
+        "}",
+        "Write-Step \"Using interpreter: $pythonCmd\"",
+        "",
+        "# Step 2: create .venv if absent; leave an existing .venv untouched.",
+        "Write-Step \"Step 2: checking .venv...\"",
+        "if (Test-Path \".venv\") {",
+        "    Write-Step \".venv already exists -- leaving it untouched.\"",
+        "} else {",
+        "    Write-Step \"Creating .venv...\"",
+        "    if ($pythonCmd -eq \"py -3\") {",
+        "        & py -3 -m venv .venv",
+        "    } else {",
+        "        & python -m venv .venv",
+        "    }",
+        "    if ($LASTEXITCODE -ne 0) {",
+        "        Write-Host \"[setup-qgb] ERROR: 'python -m venv .venv' failed (exit $LASTEXITCODE).\"",
+        "        exit 1",
+        "    }",
+        "}",
+        "$venvPython = \".venv\\Scripts\\python.exe\"",
+        "if (-not (Test-Path $venvPython)) {",
+        "    Write-Host \"[setup-qgb] ERROR: expected venv interpreter not found: $venvPython\"",
+        "    exit 1",
+        "}",
+        "",
+        "# Step 3: install qgb into .venv.",
+        "if ($FromPath -ne \"\") {",
+        "    Write-Step \"Step 3: installing qgb from local path (editable): $FromPath\"",
+        "    & $venvPython -m pip install -e $FromPath",
+        "} else {",
+        f"    Write-Step \"Step 3: installing qgb from git+{_REPO_URL} (tag {tag})...\"",
+        f"    & $venvPython -m pip install \"git+{_REPO_URL}@{tag}\"",
+        "}",
+        "if ($LASTEXITCODE -ne 0) {",
+        "    Write-Host \"[setup-qgb] ERROR: pip install failed (exit $LASTEXITCODE).\"",
+        "    exit 1",
+        "}",
+        "",
+        "# Step 4: verify.",
+        "Write-Step \"Step 4: verifying installation...\"",
+        "& $venvPython -m qgb --version",
+        "if ($LASTEXITCODE -ne 0) {",
+        "    Write-Host \"[setup-qgb] ERROR: '$venvPython -m qgb --version' failed (exit $LASTEXITCODE).\"",
+        "    Write-Host \"[setup-qgb] qgb was not installed correctly. See the error above.\"",
+        "    exit 1",
+        "}",
+        "",
+        "# Step 5: next steps.",
+        "Write-Host \"\"",
+        "Write-Host \"[setup-qgb] qgb installed successfully into .venv.\"",
+        "Write-Host \"[setup-qgb] To activate this venv in your shell:\"",
+        "Write-Host \"[setup-qgb]     .venv\\Scripts\\Activate.ps1\"",
+        "Write-Host \"[setup-qgb] Agent sessions do NOT auto-activate a venv: invoke qgb explicitly instead:\"",
+        "Write-Host \"[setup-qgb]     .venv\\Scripts\\python.exe -m qgb <command>\"",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_setup_sh(*, metadata: dict[str, Any]) -> str:
+    """Render setup-qgb.sh: venv-default installer, POSIX sh compatible.
+
+    Mirrors render_setup_ps1's steps.  The shebang line is returned as part
+    of this string (line 1); the caller (build_cell) must insert the
+    generator header AFTER this line, never before it -- a shebang only
+    works from byte 0 of the file.
+    """
+    tag = _install_tag(metadata)
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        "# setup-qgb.sh -- qgb installer (venv-default).",
+        "#",
+        "# Trust boundary note: the default install path below runs",
+        f"# 'pip install git+{_REPO_URL}@{tag}', which is clone-equivalent",
+        "# trust (arbitrary code from the repo at that tag runs during",
+        "# 'pip install').  --require-hashes is not available for VCS",
+        "# installs (NF-011); this script does not attempt to simulate it.",
+        "# Use --from-path for an offline / local-clone install instead.",
+        "#",
+        "# This file may not have the executable bit set after extracting",
+        "# from a zip archive; invoke it explicitly: bash setup-qgb.sh",
+        "",
+        "FROM_PATH=\"\"",
+        "while [ $# -gt 0 ]; do",
+        "    case \"$1\" in",
+        "        --from-path)",
+        "            FROM_PATH=\"$2\"",
+        "            shift 2",
+        "            ;;",
+        "        --from-path=*)",
+        "            FROM_PATH=\"${1#--from-path=}\"",
+        "            shift",
+        "            ;;",
+        "        *)",
+        "            echo \"[setup-qgb] ERROR: unknown argument: $1\" >&2",
+        "            exit 1",
+        "            ;;",
+        "    esac",
+        "done",
+        "",
+        "echo \"[setup-qgb] Step 1: locating Python...\"",
+        "PYTHON_CMD=\"\"",
+        "if command -v python3 >/dev/null 2>&1 && python3 --version >/dev/null 2>&1; then",
+        "    PYTHON_CMD=\"python3\"",
+        "elif command -v python >/dev/null 2>&1 && python --version >/dev/null 2>&1; then",
+        "    PYTHON_CMD=\"python\"",
+        "else",
+        "    echo \"[setup-qgb] ERROR: no working Python 3 interpreter found (tried 'python3' and 'python').\" >&2",
+        "    echo \"[setup-qgb] Install Python 3 and re-run this script.\" >&2",
+        "    exit 1",
+        "fi",
+        "echo \"[setup-qgb] Using interpreter: $PYTHON_CMD\"",
+        "",
+        "echo \"[setup-qgb] Step 2: checking .venv...\"",
+        "if [ -d \".venv\" ]; then",
+        "    echo \"[setup-qgb] .venv already exists -- leaving it untouched.\"",
+        "else",
+        "    echo \"[setup-qgb] Creating .venv...\"",
+        "    \"$PYTHON_CMD\" -m venv .venv",
+        "fi",
+        "VENV_PYTHON=\".venv/bin/python\"",
+        "if [ ! -x \"$VENV_PYTHON\" ]; then",
+        "    echo \"[setup-qgb] ERROR: expected venv interpreter not found: $VENV_PYTHON\" >&2",
+        "    exit 1",
+        "fi",
+        "",
+        "if [ -n \"$FROM_PATH\" ]; then",
+        "    echo \"[setup-qgb] Step 3: installing qgb from local path (editable): $FROM_PATH\"",
+        "    \"$VENV_PYTHON\" -m pip install -e \"$FROM_PATH\"",
+        "else",
+        f"    echo \"[setup-qgb] Step 3: installing qgb from git+{_REPO_URL} (tag {tag})...\"",
+        f"    \"$VENV_PYTHON\" -m pip install \"git+{_REPO_URL}@{tag}\"",
+        "fi",
+        "",
+        "echo \"[setup-qgb] Step 4: verifying installation...\"",
+        "if ! \"$VENV_PYTHON\" -m qgb --version; then",
+        "    echo \"[setup-qgb] ERROR: '$VENV_PYTHON -m qgb --version' failed.\" >&2",
+        "    echo \"[setup-qgb] qgb was not installed correctly. See the error above.\" >&2",
+        "    exit 1",
+        "fi",
+        "",
+        "echo \"\"",
+        "echo \"[setup-qgb] qgb installed successfully into .venv.\"",
+        "echo \"[setup-qgb] To activate this venv in your shell:\"",
+        "echo \"[setup-qgb]     source .venv/bin/activate\"",
+        "echo \"[setup-qgb] Agent sessions do NOT auto-activate a venv: invoke qgb explicitly instead:\"",
+        "echo \"[setup-qgb]     .venv/bin/python -m qgb <command>\"",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # INSTALL.md (item 10)
 # ---------------------------------------------------------------------------
 
@@ -1418,10 +1695,12 @@ def render_install_md(*, agent: str, mode: str, metadata: dict[str, Any]) -> str
             "SKILL.md と同じディレクトリに配置)"
         )
 
+    tag = _install_tag(metadata)
+
     lines = [
         f"# {skill_id} skill インストールガイド ({agent} / {mode})",
         "",
-        "## 配置先",
+        "## 配置先 (このスキル自身)",
         "",
         f"- 個人全プロジェクト共通: `{user_path}`",
         f"- プロジェクト単位: `{project_path}`",
@@ -1429,6 +1708,81 @@ def render_install_md(*, agent: str, mode: str, metadata: dict[str, Any]) -> str
         "## コピーするファイル",
         "",
         files_desc,
+        "",
+        "## qgb 本体のインストール (対象プロジェクトへ)",
+        "",
+        (
+            "スキル自体の配置とは別に、`qgb` CLI 本体を"
+            "**対象プロジェクト側**にインストールする必要があります。"
+            "以下 (A) 推奨手順を優先し、うまくいかない場合のみ (B) 手動手順を使ってください。"
+        ),
+        "",
+        "### (A) 推奨: 同梱 setup script を実行",
+        "",
+        (
+            "このディレクトリに同梱されている `setup-qgb.ps1` / `setup-qgb.sh` を"
+            "対象プロジェクトのルートにコピーし、実行してください。"
+            "`.venv` を作成 (既存の `.venv` があれば温存) し、"
+            f"タグ固定 (`{tag}` -- このスキルと同じバージョンにビルドされたタグ) で "
+            "`git+` install した後、`qgb --version` で動作確認まで行います。"
+        ),
+        "",
+        "Windows (PowerShell):",
+        "",
+        "```powershell",
+        "powershell -ExecutionPolicy Bypass -File setup-qgb.ps1",
+        "```",
+        "",
+        "POSIX (bash):",
+        "",
+        "```bash",
+        "bash setup-qgb.sh",
+        "```",
+        "",
+        (
+            "オフライン環境 / 開発中でローカル clone から入れたい場合は "
+            "`-FromPath <ローカル clone のパス>` (PowerShell) / "
+            "`--from-path <ローカル clone のパス>` (bash) を指定してください "
+            "(editable install、`pip install -e <path>`)。"
+        ),
+        "",
+        "### (B) 手動 (venv 手順)",
+        "",
+        "```powershell",
+        "py -3 -m venv .venv",
+        ".venv\\Scripts\\Activate.ps1",
+        f"pip install \"git+{_REPO_URL}@{tag}\"",
+        "```",
+        "",
+        "```bash",
+        "python3 -m venv .venv",
+        "source .venv/bin/activate",
+        f"pip install \"git+{_REPO_URL}@{tag}\"",
+        "```",
+        "",
+        (
+            f"`{tag}` はこのスキルの build と同じバージョン "
+            "(`metadata.yaml#version`) から機械的に導出されたタグです。"
+            "別バージョンのスキルを使う場合はそのスキルの INSTALL.md が"
+            "焼き込む別タグを使ってください。"
+        ),
+        "",
+        (
+            "**信頼境界の注記**: `git+` install は指定タグの repo を"
+            "clone して実行するのと同等の信頼を要求します "
+            "(pip install 中に任意コードが実行され得る)。"
+            "`--require-hashes` はこの install 経路には使えません (NF-011)。"
+        ),
+        "",
+        (
+            "**注 (分かっている人向け、非推奨)**: venv を使わずグローバルに "
+            "`pip install` することも技術的には可能ですが、"
+            "他プロジェクトの依存関係と衝突するリスクがあるため推奨しません。"
+            "また `pip install quality-gate-builder` は"
+            "**実行しないでください** (PyPI 未公開のため、"
+            "同名パッケージが存在した場合それは qgb ではありません。"
+            "将来 PyPI 公開された場合は本節を更新します)。"
+        ),
         "",
         "## hooks (任意, opt-in)",
         "",
@@ -1862,6 +2216,9 @@ def build_cell(
     header = build_generator_header(
         build_input_digest=digest, source_date_epoch=source_date_epoch
     )
+    header_hash = build_generator_header_hash(
+        build_input_digest=digest, source_date_epoch=source_date_epoch
+    )
 
     result = BuildCellResult(mode=mode, agent=agent, cell_dir=cell_dir, build_input_digest=digest)
 
@@ -1906,6 +2263,27 @@ def build_cell(
     install_path = cell_dir / "INSTALL.md"
     _write_text_file(dist_dir, install_path, install_text)
     result.files_written.append(install_path)
+
+    # --- setup-qgb.ps1 / setup-qgb.sh (Phase 5 Step 5.c-1, Issue #27) ---
+    # Generated artifacts (tag baked in), written into EVERY dist cell (not
+    # copied verbatim like hooks/lint).  setup-qgb.ps1 follows the normal
+    # header-then-body order every other generated artifact uses; setup-qgb.sh
+    # is the one exception -- its shebang must be byte 0 of the file, so the
+    # header is spliced in AFTER the shebang line instead of prepended before
+    # the whole text.
+    setup_ps1_text = header_hash + render_setup_ps1(metadata=metadata)
+    verify_text_artifact(setup_ps1_text, label="setup-qgb.ps1")
+    setup_ps1_path = cell_dir / "setup-qgb.ps1"
+    _write_text_file(dist_dir, setup_ps1_path, setup_ps1_text)
+    result.files_written.append(setup_ps1_path)
+
+    setup_sh_body = render_setup_sh(metadata=metadata)
+    shebang_line, _, rest_of_sh = setup_sh_body.partition("\n")
+    setup_sh_text = shebang_line + "\n" + header_hash + rest_of_sh
+    verify_text_artifact(setup_sh_text, label="setup-qgb.sh")
+    setup_sh_path = cell_dir / "setup-qgb.sh"
+    _write_text_file(dist_dir, setup_sh_path, setup_sh_text)
+    result.files_written.append(setup_sh_path)
 
     # --- hooks/ copy (verbatim, no header) ---
     hook_dirname = AGENT_TO_HOOK_DIRNAME.get(agent)

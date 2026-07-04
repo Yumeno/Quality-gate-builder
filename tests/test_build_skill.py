@@ -1392,3 +1392,114 @@ def test_install_md_codex_paths():
     assert ".agents/skills/qgb/" in text
     # Split mode mentions helper files explicitly.
     assert "helper" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# setup-qgb.ps1 / setup-qgb.sh (Phase 5 Step 5.c-1, Issue #27)
+# ---------------------------------------------------------------------------
+
+
+def _real_metadata_version() -> str:
+    """Read version straight out of the real skills/source/metadata.yaml.
+
+    Tests must not hardcode "0.1.1": deriving the expectation from the
+    authored source is what actually catches a metadata/converter drift
+    (e.g. someone bumping metadata.yaml without regenerating dist, or a
+    stale test surviving a later version bump unnoticed).
+    """
+    metadata = validate_metadata(_SKILLS_SOURCE, schema_path=_SCHEMA_PATH)
+    return str(metadata["version"])
+
+
+def test_setup_scripts_written_in_all_four_cells(tmp_path):
+    """setup-qgb.ps1 and setup-qgb.sh are generated into every (mode, agent) cell."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    assert len(summary.cells) == 4
+    for cell in summary.cells:
+        assert (cell.cell_dir / "setup-qgb.ps1").exists(), cell.cell_dir
+        assert (cell.cell_dir / "setup-qgb.sh").exists(), cell.cell_dir
+
+
+def test_setup_ps1_content_is_pure_ascii(tmp_path):
+    """setup-qgb.ps1 is pure ASCII (PowerShell 5 discipline, no BOM dependency)."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
+    text = (cell.cell_dir / "setup-qgb.ps1").read_text(encoding="utf-8")
+    assert all(ord(c) < 128 for c in text), "setup-qgb.ps1 must be pure ASCII"
+
+
+def test_setup_sh_content_is_pure_ascii(tmp_path):
+    """setup-qgb.sh is pure ASCII."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
+    text = (cell.cell_dir / "setup-qgb.sh").read_text(encoding="utf-8")
+    assert all(ord(c) < 128 for c in text), "setup-qgb.sh must be pure ASCII"
+
+
+def test_setup_sh_shebang_is_first_line(tmp_path):
+    """setup-qgb.sh line 1 is the bash shebang (the generator header must
+    come AFTER it, never before -- a shebang only works from byte 0)."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
+    text = (cell.cell_dir / "setup-qgb.sh").read_text(encoding="utf-8")
+    first_line = text.split("\n", 1)[0]
+    assert first_line == "#!/usr/bin/env bash"
+
+
+def test_setup_ps1_header_at_top(tmp_path):
+    """setup-qgb.ps1's generator header appears at the very top of the file."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
+    text = (cell.cell_dir / "setup-qgb.ps1").read_text(encoding="utf-8")
+    assert text.startswith("# GENERATED FILE - DO NOT EDIT.")
+
+
+@pytest.mark.parametrize("script_name", ["setup-qgb.ps1", "setup-qgb.sh"])
+def test_setup_scripts_contain_expected_tag_matching_metadata_version(
+    tmp_path, script_name
+):
+    """Both scripts bake in the exact tag 'skill-v<version>', where <version>
+    comes from the real metadata.yaml (not a hardcoded literal here)."""
+    expected_tag = f"skill-v{_real_metadata_version()}"
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
+    text = (cell.cell_dir / script_name).read_text(encoding="utf-8")
+    assert expected_tag in text, f"{script_name} missing tag {expected_tag!r}"
+    assert f"@{expected_tag}" in text, (
+        f"{script_name} must bake the tag into a git ref (@{expected_tag})"
+    )
+
+
+@pytest.mark.parametrize("script_name", ["setup-qgb.ps1", "setup-qgb.sh"])
+def test_setup_scripts_contain_generator_header(tmp_path, script_name):
+    """Both scripts carry the generated-file header (converter_version +
+    build_input_digest), same as every other generated artifact."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cell = next(c for c in summary.cells if c.mode == "full" and c.agent == "claude")
+    text = (cell.cell_dir / script_name).read_text(encoding="utf-8")
+    assert "GENERATED FILE - DO NOT EDIT" in text
+    assert f"converter_version: {CONVERTER_VERSION}" in text
+    assert "build_input_digest:" in text
+
+
+def test_install_md_mentions_setup_script_and_venv_path():
+    """INSTALL.md's rewritten install-UX section (Phase 5 Step 5.c-1)
+    presents the bundled setup script + venv path as the primary route, and
+    does NOT present a bare global 'pip install -e' as the primary path."""
+    metadata = {"skill_id": "qgb", "version": "0.1.1"}
+    text = render_install_md(agent="claude", mode="full", metadata=metadata)
+    assert "setup-qgb.ps1" in text
+    assert "setup-qgb.sh" in text
+    assert ".venv" in text
+    assert "skill-v0.1.1" in text
+    # The old bare-global-install-as-primary-path phrasing must be gone: a
+    # plain "pip install -e ./Quality-gate-builder" with no venv context is
+    # no longer the first thing INSTALL.md tells the reader to run.
+    assert "pip install -e ./Quality-gate-builder" not in text

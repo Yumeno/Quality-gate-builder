@@ -2,7 +2,7 @@
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: f7c48029ac006e73
+  build_input_digest: 14924a4088439977
 -->
 
 ## 6. 作業手順
@@ -16,20 +16,23 @@
 1. **利用者プロジェクトの状況確認**
    - 現在のディレクトリ (`pwd`)、git 状態 (`git status`)、既存ファイル (`ls -la`)、`README.md` の冒頭
    - 利用者プロジェクトの種類 (CLI / Web / ドキュメント等) を**自律判断せず利用者に確認**する (アダプタ的な機械検出は qgb 本体が撤回した方針、対象認識は LLM 責務)
-2. **`python -m qgb init` を実行**
+2. **qgb の可用性確認 (Phase 5 Step 5.c-1)**
+   - `python -m qgb --version` を試す。失敗する場合、まず**このプロジェクトの qgb がどの interpreter にいるか**を確定する: `.venv` があれば `.venv\Scripts\python.exe -m qgb` (POSIX: `.venv/bin/python -m qgb`) を明示的に呼び出す (セッション shell は venv を自動 activate しない)
+   - それでも qgb が見つからない場合、同梱の `setup-qgb.ps1` / `setup-qgb.sh` の内容 (`.venv` 作成 + タグ固定 `git+` install) を §3.5 の姿勢 (親切なコンサルタント・メンターとして、押し付けず、内容を説明して承諾を得る) で利用者に説明し、承諾を得てから実行を提案する
+3. **`python -m qgb init` を実行**
    - `.quality-system/` 配下が生成される
    - 既に存在する場合は `InitError` で停止 → 利用者に上書き可否を確認
-3. **`project-context.md` (人間正本) を起草**
+4. **`project-context.md` (人間正本) を起草**
    - 利用者から目的 / 対象範囲 / 採用しない方式 / 参照文書を聞き取り、`.quality-system/knowledge/project-context.md` に Markdown で書く
    - 「言語判定」「フレームワーク判定」を agent が肩代わりしない (adapter 量産方針と同じ問題が再発する、Phase 3 Step 3.0 教訓)
-4. **`project-context.json` (機械正本) を補佐 Agent として起草**
+5. **`project-context.json` (機械正本) を補佐 Agent として起草**
    - `project-context.md` を読んで `.quality-system/project-context.json` に構造化
    - `source_metadata.generated_by: "agent-assisted"` を立てる
    - `human_reviewed: true` は **人間のみが立てる** (P8 違反になる)、agent は `false` のまま
-5. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
+6. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
    - `req/REQ-APP-001.md` + `req/REQ-APP-001.meta.json` + `contracts/REQ-APP-001/<stage>.json` のひな型
    - 利用者と要求内容を対話して `REQ-APP-001.md` 本文を埋める
-6. **`python -m qgb validate-policy` で機械検証**
+7. **`python -m qgb validate-policy` で機械検証**
    - `config.json` / `policy.json` の存在、契約の DAG、`manual_check`-only REQ の警告
    - blocker があれば修正して再実行
 
