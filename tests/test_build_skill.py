@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-"""tests/test_build_skill.py -- Tests for tools/build_skill.py (Stage 2: VALIDATION + PARSE).
+"""tests/test_build_skill.py -- Tests for tools/build_skill.py.
+
+Covers Stage 2 (VALIDATION + PARSE) and Stage 3 (GENERATION: full/split
+render, agent frontmatter, generator header, build_input_digest, INSTALL.md,
+hooks/lint copies, path defenses, syntax verification, determinism).
 
 Import strategy: sys.path manipulation to import directly from tools/.
 """
 
+import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 # ---------------------------------------------------------------------------
-# Path setup: make tools/ importable
+# Path setup: make tools/ importable (must precede the build_skill import)
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -24,16 +30,24 @@ if str(_TOOLS_DIR) not in sys.path:
 from build_skill import (  # noqa: E402
     CONVERTER_VERSION,
     BuildError,
-    UsageError,
-    MarkerBlock,
-    ParseResult,
+    _safe_write_bytes,
+    build_all,
+    build_cell,
+    build_frontmatter,
+    build_generator_header,
     check_agent_docs,
     check_converter_version,
-    check_source_files,
+    compute_build_input_digest,
     parse_markers,
     parse_semver,
+    render_full,
+    render_install_md,
+    render_split,
     validate_and_parse,
     validate_metadata,
+    validate_source_date_epoch,
+    verify_generated_skill_md,
+    verify_text_artifact,
 )
 
 # ---------------------------------------------------------------------------
@@ -302,19 +316,20 @@ def test_marker_name_missing_md_extension_fails():
 
 
 def test_valid_minimal_parses_correctly():
-    """valid-minimal fixture parses to exactly 2 markers; block-comment examples ignored."""
+    """valid-minimal fixture parses to exactly 3 markers; block-comment examples ignored."""
     fixture_dir = _FIXTURES / "valid-minimal"
     body_text = (fixture_dir / "body.md").read_text(
         encoding="utf-8-sig", newline=""
     ).replace("\r\n", "\n").replace("\r", "\n")
     result = parse_markers(body_text, source_files=["body.md"])
 
-    assert len(result.markers) == 2, (
-        f"Expected 2 markers, got {len(result.markers)}: "
+    assert len(result.markers) == 3, (
+        f"Expected 3 markers, got {len(result.markers)}: "
         f"{[m.name for m in result.markers]}"
     )
     assert result.markers[0].name == "helper-a.md"
     assert result.markers[1].name == "helper-b.md"
+    assert result.markers[2].name == "prompts/helper-c.md"
 
     # helper-a.md content preserved EXACTLY: leading and trailing blank
     # lines between the markers must survive (no trimming).
@@ -328,6 +343,11 @@ def test_valid_minimal_parses_correctly():
     assert result.markers[1].content == [
         "Line one of B.\n",
         "Line two of B.\n",
+    ]
+
+    # prompts/helper-c.md content: subdirectory helper, single line.
+    assert result.markers[2].content == [
+        "Content of helper C (subdir).\n",
     ]
 
     # The example-inside-comment.md from the HTML block comment must NOT appear.
@@ -422,30 +442,548 @@ def test_cli_exit_code_64_on_usage_error(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 20. test_cli_bare_build_fails_closed_before_stage3
+# 20. test_cli_bare_build_succeeds_and_writes_dist_dir
 # ---------------------------------------------------------------------------
 
 
-def test_cli_bare_build_fails_closed_before_stage3():
-    """A bare build (no --check) exits 2 until stage 3 implements generation.
+def test_cli_bare_build_succeeds_and_writes_dist_dir(tmp_path):
+    """A bare build (no --check) performs the full generation build (stage 3).
 
-    Validation itself passes on the valid-minimal fixture, but reporting
-    success for a build that produced nothing would let CI misread a no-op
-    as a completed build (fail-closed discipline).
+    Uses --dist-dir so the test never touches the repo's real dist/ tree.
+    Note: the valid-minimal fixture's metadata.yaml declares target_agents:
+    [claude] only, so the agent doc lookup resolves against this repo's
+    real development/docs/skill-converter/agent-claude.md (repo asset,
+    same default-resolution contract as validate_and_parse).
     """
     fixture_dir = _FIXTURES / "valid-minimal"
+    dist_dir = tmp_path / "dist_skills"
     result = subprocess.run(
         [
             sys.executable,
             str(_TOOLS_DIR / "build_skill.py"),
             "--source-dir",
             str(fixture_dir),
+            "--dist-dir",
+            str(dist_dir),
         ],
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 2, (
-        f"Expected exit code 2, got {result.returncode}\n"
+    assert result.returncode == 0, (
+        f"Expected exit code 0, got {result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    assert "not implemented" in result.stderr
+    assert "BUILD OK" in result.stdout
+    skill_md = dist_dir / "full" / "claude" / "SKILL.md"
+    assert skill_md.exists()
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: GENERATION phase tests
+# ---------------------------------------------------------------------------
+
+
+def _valid_minimal_parse():
+    """Return (metadata, ParseResult) for the valid-minimal fixture."""
+    fixture_dir = _FIXTURES / "valid-minimal"
+    return validate_and_parse(fixture_dir, schema_path=_SCHEMA_PATH)
+
+
+# --- full render -----------------------------------------------------------
+
+
+def test_render_full_removes_only_marker_lines():
+    """full render: marker start/end LINES removed, content left in place."""
+    _, pr = _valid_minimal_parse()
+    original_lines = pr.source_text.split("\n")
+    rendered = render_full(pr.source_text, pr.markers)
+    rendered_lines = rendered.split("\n")
+
+    # Exactly 2 lines removed per marker (start + end), nothing else.
+    assert len(rendered_lines) == len(original_lines) - 2 * len(pr.markers)
+
+    # Content lines survive verbatim (spot-check a distinctive line).
+    assert "Content of helper A." in rendered
+    assert "Line one of B." in rendered
+    assert "Content of helper C (subdir)." in rendered
+
+    # Marker tag lines themselves must be gone (real markers only: the
+    # helper-a.md / helper-b.md / prompts/helper-c.md start tags and their
+    # matching end tags at column 0 with no leading whitespace).
+    assert "<!-- split:helper_start helper-a.md -->" not in rendered
+    assert "<!-- split:helper_start helper-b.md -->" not in rendered
+    assert "<!-- split:helper_start prompts/helper-c.md -->" not in rendered
+    # But the block-comment examples (never real markers, per the parser's
+    # own grammar: indented "  <!-- split:helper_end -->" and the nested
+    # start tag inside an open HTML comment) must survive verbatim, since
+    # render_full only strips LINES that parse_markers recognized as real
+    # start/end marker lines.
+    assert "<!-- split:helper_start example-inside-comment.md -->" in rendered
+    assert "  <!-- split:helper_end -->" in rendered
+
+
+# --- split render ------------------------------------------------------------
+
+
+def test_render_split_produces_exactly_one_see_line_per_marker():
+    """split render: each marker replaced by exactly one '@see <name>' line."""
+    _, pr = _valid_minimal_parse()
+    body, helpers = render_split(pr.source_text, pr.markers)
+
+    for mb in pr.markers:
+        see_line = f"@see {mb.name}"
+        assert body.count(see_line) == 1, (
+            f"Expected exactly one {see_line!r} line, "
+            f"found {body.count(see_line)}"
+        )
+
+    # Marker tag lines and inline content must not appear in the body.
+    assert "<!-- split:helper_start helper-a.md -->" not in body
+    assert "Content of helper A." not in body
+
+
+def test_render_split_helper_content_matches_marker_block_verbatim():
+    """Helper content returned by render_split equals MarkerBlock.content joined."""
+    _, pr = _valid_minimal_parse()
+    _, helpers = render_split(pr.source_text, pr.markers)
+
+    for mb in pr.markers:
+        assert helpers[mb.name] == "".join(mb.content)
+
+
+def test_render_split_subdir_helper_present():
+    """The prompts/helper-c.md subdirectory marker round-trips through render_split."""
+    _, pr = _valid_minimal_parse()
+    _, helpers = render_split(pr.source_text, pr.markers)
+    assert "prompts/helper-c.md" in helpers
+    assert helpers["prompts/helper-c.md"] == "Content of helper C (subdir).\n"
+
+
+def test_build_cell_split_writes_helper_files_including_subdir(tmp_path):
+    """build_cell in split mode writes helper files, including a subdir helper."""
+    metadata, pr = _valid_minimal_parse()
+    dist_dir = tmp_path / "dist_skills"
+    cell = build_cell(
+        mode="split",
+        agent="claude",
+        source_dir=_FIXTURES / "valid-minimal",
+        dist_dir=dist_dir,
+        metadata=metadata,
+        parse_result=pr,
+        schema_path=_SCHEMA_PATH,
+        agent_docs_dir=_AGENT_DOCS_DIR,
+        repo_root=_REPO_ROOT,
+        source_date_epoch=None,
+    )
+    helper_a = cell.cell_dir / "helper-a.md"
+    helper_b = cell.cell_dir / "helper-b.md"
+    helper_c = cell.cell_dir / "prompts" / "helper-c.md"
+    assert helper_a.exists()
+    assert helper_b.exists()
+    assert helper_c.exists()
+    assert helper_c.parent.is_dir()
+
+    # Helper content = generator header + verbatim marker content.
+    text = helper_c.read_text(encoding="utf-8")
+    assert text.endswith("Content of helper C (subdir).\n")
+    assert "GENERATED FILE" in text
+
+    # Enumeration order in files_written follows marker appearance order.
+    names_written = [
+        str(p.relative_to(cell.cell_dir)).replace(os.sep, "/")
+        for p in cell.files_written
+    ]
+    idx_a = names_written.index("helper-a.md")
+    idx_b = names_written.index("helper-b.md")
+    idx_c = [i for i, n in enumerate(names_written) if n.endswith("helper-c.md")][0]
+    assert idx_a < idx_b < idx_c
+
+
+# --- frontmatter -------------------------------------------------------------
+
+
+def _parse_frontmatter_block(fm_text: str) -> dict:
+    """Extract and YAML-parse the body between the leading/trailing '---' lines."""
+    return yaml.safe_load(fm_text.split("---\n")[1].rsplit("---", 1)[0])
+
+
+def test_frontmatter_claude_vs_codex_key_sets_differ():
+    """Claude frontmatter has extra keys (allowed-tools, disable-model-invocation);
+    Codex frontmatter has only the confirmed key set (name, description)."""
+    metadata = {"skill_id": "qgb", "description": "Test description."}
+    claude_fm_text = build_frontmatter("claude", metadata)
+    codex_fm_text = build_frontmatter("codex", metadata)
+
+    claude_fm = _parse_frontmatter_block(claude_fm_text)
+    codex_fm = _parse_frontmatter_block(codex_fm_text)
+
+    assert set(claude_fm.keys()) == {
+        "name",
+        "description",
+        "allowed-tools",
+        "disable-model-invocation",
+    }
+    assert set(codex_fm.keys()) == {"name", "description"}
+    assert "allowed-tools" not in codex_fm
+
+
+def test_frontmatter_key_order_is_declaration_order():
+    """Frontmatter YAML key order matches the declared order (not alphabetical)."""
+    metadata = {"skill_id": "qgb", "description": "Test description."}
+    claude_fm_text = build_frontmatter("claude", metadata)
+    fm_body = claude_fm_text.split("---\n")[1].rsplit("---", 1)[0]
+    # Extract top-level keys in file order (lines not indented, ending with ':').
+    keys_in_order = [
+        line.split(":", 1)[0]
+        for line in fm_body.splitlines()
+        if line and not line.startswith((" ", "-")) and ":" in line
+    ]
+    assert keys_in_order == [
+        "name",
+        "description",
+        "allowed-tools",
+        "disable-model-invocation",
+    ]
+
+
+def test_frontmatter_description_comes_from_metadata():
+    """description value in frontmatter matches metadata.yaml's description field."""
+    metadata = {"skill_id": "qgb", "description": "Unique marker description XYZ."}
+    fm_text = build_frontmatter("claude", metadata)
+    fm_body = fm_text.split("---\n")[1].rsplit("---", 1)[0]
+    fm = yaml.safe_load(fm_body)
+    assert fm["description"] == "Unique marker description XYZ."
+
+
+# --- generator header ---------------------------------------------------------
+
+
+def test_generator_header_present_in_skill_md(tmp_path):
+    """Generated SKILL.md contains the generator header after frontmatter."""
+    metadata, pr = _valid_minimal_parse()
+    dist_dir = tmp_path / "dist_skills"
+    cell = build_cell(
+        mode="full",
+        agent="claude",
+        source_dir=_FIXTURES / "valid-minimal",
+        dist_dir=dist_dir,
+        metadata=metadata,
+        parse_result=pr,
+        schema_path=_SCHEMA_PATH,
+        agent_docs_dir=_AGENT_DOCS_DIR,
+        repo_root=_REPO_ROOT,
+        source_date_epoch=None,
+    )
+    text = (cell.cell_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert "GENERATED FILE - DO NOT EDIT" in text
+    assert f"converter_version: {CONVERTER_VERSION}" in text
+    assert "build_input_digest:" in text
+    assert "build_date_utc" not in text  # SOURCE_DATE_EPOCH unset
+
+
+def test_generator_header_absent_in_copied_hooks_and_lint(tmp_path):
+    """Copied hook/lint files carry no generator header (byte-verbatim copy)."""
+    metadata, pr = validate_and_parse(_SKILLS_SOURCE, schema_path=_SCHEMA_PATH)
+    dist_dir = tmp_path / "dist_skills"
+    cell = build_cell(
+        mode="full",
+        agent="claude",
+        source_dir=_SKILLS_SOURCE,
+        dist_dir=dist_dir,
+        metadata=metadata,
+        parse_result=pr,
+        schema_path=_SCHEMA_PATH,
+        agent_docs_dir=_AGENT_DOCS_DIR,
+        repo_root=_REPO_ROOT,
+        source_date_epoch=None,
+    )
+    hook_file = cell.cell_dir / "hooks" / "settings.example.json"
+    assert hook_file.exists()
+    text = hook_file.read_text(encoding="utf-8")
+    assert "GENERATED FILE" not in text
+
+    lint_file = cell.cell_dir / "lint" / "check-command-contract.py"
+    assert lint_file.exists()
+    lint_text = lint_file.read_text(encoding="utf-8")
+    assert "GENERATED FILE" not in lint_text
+
+    # Byte-verbatim: copied content matches the source file exactly.
+    source_hook = _SKILLS_SOURCE / "hooks" / "claude-code" / "settings.example.json"
+    assert hook_file.read_bytes() == source_hook.read_bytes()
+
+
+def test_generator_header_no_build_date_when_epoch_unset(monkeypatch):
+    """build_date_utc line is absent when SOURCE_DATE_EPOCH is unset."""
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    header = build_generator_header(build_input_digest="a" * 64, source_date_epoch=None)
+    assert "build_date_utc" not in header
+
+
+def test_generator_header_build_date_present_when_epoch_set(monkeypatch):
+    """build_date_utc line is present with the correct ISO value when SOURCE_DATE_EPOCH is set."""
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1735689600")
+    epoch = validate_source_date_epoch(os.environ["SOURCE_DATE_EPOCH"])
+    header = build_generator_header(build_input_digest="a" * 64, source_date_epoch=epoch)
+    assert "build_date_utc: 2025-01-01T00:00:00Z" in header
+
+
+# --- build_input_digest --------------------------------------------------
+
+
+def test_digest_two_builds_same_input_same_digest():
+    """Two digest computations over the same inputs produce the same digest."""
+    metadata, _ = _valid_minimal_parse()
+    kwargs = dict(
+        source_dir=_FIXTURES / "valid-minimal",
+        metadata=metadata,
+        schema_path=_SCHEMA_PATH,
+        agent_docs_dir=_AGENT_DOCS_DIR,
+        converter_path=_TOOLS_DIR / "build_skill.py",
+        repo_root=_REPO_ROOT,
+        source_date_epoch=None,
+    )
+    d1 = compute_build_input_digest(**kwargs)
+    d2 = compute_build_input_digest(**kwargs)
+    assert d1 == d2
+
+
+def test_digest_changes_when_hook_file_byte_flipped(tmp_path):
+    """Flipping 1 byte in a category-4 hook file changes the digest.
+
+    All digest inputs (source_dir, schema_path, agent_docs_dir, converter
+    source) are mirrored under one tmp repo_root, so path-relativization
+    stays consistent (compute_build_input_digest requires every input path
+    to resolve under repo_root).
+    """
+    import shutil as _shutil
+
+    tmp_repo_root = tmp_path / "tmp_repo"
+    src_copy = tmp_repo_root / "skills" / "source"
+    agent_docs_copy = tmp_repo_root / "development" / "docs" / "skill-converter"
+    tools_copy = tmp_repo_root / "tools"
+    _shutil.copytree(_SKILLS_SOURCE, src_copy)
+    _shutil.copytree(_AGENT_DOCS_DIR, agent_docs_copy)
+    tools_copy.mkdir(parents=True)
+    _shutil.copy2(_TOOLS_DIR / "build_skill.py", tools_copy / "build_skill.py")
+
+    schema_copy = src_copy / "metadata.schema.json"
+    metadata, _ = validate_and_parse(src_copy, schema_path=schema_copy)
+
+    kwargs = dict(
+        metadata=metadata,
+        schema_path=schema_copy,
+        agent_docs_dir=agent_docs_copy,
+        converter_path=tools_copy / "build_skill.py",
+        repo_root=tmp_repo_root,
+        source_date_epoch=None,
+    )
+    d_before = compute_build_input_digest(source_dir=src_copy, **kwargs)
+
+    hook_file = src_copy / "hooks" / "claude-code" / "settings.example.json"
+    data = bytearray(hook_file.read_bytes())
+    # Flip one byte (safe: this is JSON prose text, flip a printable char).
+    data[10] ^= 0x01
+    hook_file.write_bytes(bytes(data))
+
+    d_after = compute_build_input_digest(source_dir=src_copy, **kwargs)
+    assert d_before != d_after
+
+
+def test_digest_differs_with_source_date_epoch_set_vs_unset():
+    """SOURCE_DATE_EPOCH set vs unset produces a different digest (category 8)."""
+    metadata, _ = _valid_minimal_parse()
+    kwargs = dict(
+        source_dir=_FIXTURES / "valid-minimal",
+        metadata=metadata,
+        schema_path=_SCHEMA_PATH,
+        agent_docs_dir=_AGENT_DOCS_DIR,
+        converter_path=_TOOLS_DIR / "build_skill.py",
+        repo_root=_REPO_ROOT,
+    )
+    d_unset = compute_build_input_digest(source_date_epoch=None, **kwargs)
+    d_set = compute_build_input_digest(source_date_epoch=1735689600, **kwargs)
+    assert d_unset != d_set
+
+
+# --- SOURCE_DATE_EPOCH validation ------------------------------------------
+
+
+def test_source_date_epoch_valid_decimal_accepted():
+    assert validate_source_date_epoch("12345") == 12345
+
+
+def test_source_date_epoch_none_returns_none():
+    assert validate_source_date_epoch(None) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["+1", " 1", "1 ", "1.5", "0x10", "-1", str(2**63)],
+)
+def test_source_date_epoch_invalid_forms_rejected(raw):
+    with pytest.raises(BuildError):
+        validate_source_date_epoch(raw)
+
+
+def test_source_date_epoch_max_boundary_accepted():
+    assert validate_source_date_epoch(str(2**63 - 1)) == 2**63 - 1
+
+
+# --- determinism: two consecutive builds byte-identical --------------------
+
+
+def _walk_files(root: Path) -> dict[str, Path]:
+    result = {}
+    for p in root.rglob("*"):
+        if p.is_file():
+            result[str(p.relative_to(root)).replace(os.sep, "/")] = p
+    return result
+
+
+def test_two_consecutive_builds_are_byte_identical(tmp_path):
+    """Two builds into two different tmp dist dirs produce byte-identical trees."""
+    dist_a = tmp_path / "dist_a"
+    dist_b = tmp_path / "dist_b"
+
+    build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_a, repo_root=_REPO_ROOT)
+    build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_b, repo_root=_REPO_ROOT)
+
+    files_a = _walk_files(dist_a)
+    files_b = _walk_files(dist_b)
+    assert set(files_a.keys()) == set(files_b.keys())
+
+    mismatches = [
+        rel
+        for rel, pa in files_a.items()
+        if pa.read_bytes() != files_b[rel].read_bytes()
+    ]
+    assert mismatches == [], f"Byte mismatches in: {mismatches}"
+
+
+def test_full_build_produces_four_cells(tmp_path):
+    """build_all on the real skills/source produces all 4 (mode, agent) cells."""
+    dist_dir = tmp_path / "dist_skills"
+    summary = build_all(source_dir=_SKILLS_SOURCE, dist_dir=dist_dir, repo_root=_REPO_ROOT)
+    cells = {(c.mode, c.agent) for c in summary.cells}
+    assert cells == {
+        ("full", "claude"),
+        ("full", "codex"),
+        ("split", "claude"),
+        ("split", "codex"),
+    }
+    for c in summary.cells:
+        assert (c.cell_dir / "SKILL.md").exists()
+        assert (c.cell_dir / "INSTALL.md").exists()
+
+
+# --- clean build -------------------------------------------------------------
+
+
+def test_clean_build_removes_stale_file(tmp_path):
+    """A stale file pre-created in a dist cell is gone after build."""
+    dist_dir = tmp_path / "dist_skills"
+    cell_dir = dist_dir / "full" / "claude"
+    cell_dir.mkdir(parents=True)
+    stale = cell_dir / "stale-leftover.md"
+    stale.write_text("should be removed", encoding="utf-8")
+
+    metadata, pr = _valid_minimal_parse()
+    build_cell(
+        mode="full",
+        agent="claude",
+        source_dir=_FIXTURES / "valid-minimal",
+        dist_dir=dist_dir,
+        metadata=metadata,
+        parse_result=pr,
+        schema_path=_SCHEMA_PATH,
+        agent_docs_dir=_AGENT_DOCS_DIR,
+        repo_root=_REPO_ROOT,
+        source_date_epoch=None,
+    )
+    assert not stale.exists()
+
+
+# --- path defense ------------------------------------------------------------
+
+
+def test_safe_write_bytes_rejects_target_outside_dist_root(tmp_path):
+    """_safe_write_bytes refuses a target outside the dist root."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    outside_target = tmp_path / "outside" / "evil.md"
+    with pytest.raises(BuildError, match="outside dist root"):
+        _safe_write_bytes(dist_root, outside_target, b"evil content")
+
+
+def test_safe_write_bytes_writes_inside_dist_root(tmp_path):
+    """_safe_write_bytes succeeds for a target inside the dist root."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    target = dist_root / "sub" / "file.md"
+    _safe_write_bytes(dist_root, target, b"hello")
+    assert target.read_bytes() == b"hello"
+
+
+def test_safe_write_bytes_refuses_to_overwrite_existing_file(tmp_path):
+    """_safe_write_bytes refuses to write over an existing path (clean-build invariant)."""
+    dist_root = tmp_path / "dist_skills"
+    dist_root.mkdir()
+    target = dist_root / "file.md"
+    target.write_text("existing", encoding="utf-8")
+    with pytest.raises(BuildError):
+        _safe_write_bytes(dist_root, target, b"new content")
+
+
+# --- syntax verification -----------------------------------------------------
+
+
+def test_verify_generated_skill_md_catches_broken_frontmatter():
+    """verify_generated_skill_md raises BuildError on unparsable YAML frontmatter."""
+    broken = "---\nname: [unclosed\n---\nBody content.\n"
+    with pytest.raises(BuildError):
+        verify_generated_skill_md(broken, expected_keys={"name"})
+
+
+def test_verify_generated_skill_md_catches_missing_expected_key():
+    """verify_generated_skill_md raises BuildError when an expected key is absent."""
+    text = "---\nname: qgb\n---\nBody content.\n"
+    with pytest.raises(BuildError, match="missing expected keys"):
+        verify_generated_skill_md(text, expected_keys={"name", "description"})
+
+
+def test_verify_generated_skill_md_catches_unclosed_frontmatter():
+    """verify_generated_skill_md raises BuildError when frontmatter never closes."""
+    text = "---\nname: qgb\nBody without closing marker.\n"
+    with pytest.raises(BuildError, match="never closes"):
+        verify_generated_skill_md(text, expected_keys={"name"})
+
+
+def test_verify_text_artifact_catches_empty_content():
+    with pytest.raises(BuildError, match="empty"):
+        verify_text_artifact("   \n  ", label="test artifact")
+
+
+def test_verify_text_artifact_catches_nul_byte():
+    with pytest.raises(BuildError, match="NUL"):
+        verify_text_artifact("hello\x00world", label="test artifact")
+
+
+# --- INSTALL.md --------------------------------------------------------------
+
+
+def test_install_md_mentions_placement_paths_and_lint():
+    metadata = {"skill_id": "qgb"}
+    text = render_install_md(agent="claude", mode="full", metadata=metadata)
+    assert "~/.claude/skills/qgb/" in text
+    assert ".claude/skills/qgb/" in text
+    assert "lint" in text
+    assert "hooks" in text
+
+
+def test_install_md_codex_paths():
+    metadata = {"skill_id": "qgb"}
+    text = render_install_md(agent="codex", mode="split", metadata=metadata)
+    assert "~/.agents/skills/qgb/" in text
+    assert ".agents/skills/qgb/" in text
+    # Split mode mentions helper files explicitly.
+    assert "helper" in text.lower()

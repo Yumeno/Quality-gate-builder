@@ -25,4 +25,10 @@ Line one of B.
 Line two of B.
 <!-- split:helper_end -->
 
+Some text before a subdir helper.
+
+<!-- split:helper_start prompts/helper-c.md -->
+Content of helper C (subdir).
+<!-- split:helper_end -->
+
 End of document.
