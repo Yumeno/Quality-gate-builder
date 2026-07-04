@@ -1,0 +1,222 @@
+# qgb skill release CI (Phase 5 Step 5.c, 2026-07-04).
+#
+# Design rationale:
+#
+# - **Two independent verification lineages, both required before any
+#   release artifact is trusted.** (a) SOURCE_DATE_EPOCH-unset build must
+#   byte-match the committed tools/_golden/ tree -- this ties the release
+#   to the reviewed golden lineage that the `test` and `golden-integrity`
+#   jobs already gate on every push. Reused via
+#   `pytest tests/test_build_skill_golden.py -q` rather than a hand-rolled
+#   diff, so the comparison logic has exactly one implementation.
+#   (b) The actual release build (SOURCE_DATE_EPOCH pinned to the tagged
+#   commit's timestamp) is run TWICE and compared byte-for-byte -- this is
+#   the release-lineage self-check promised in
+#   development/docs/journal/phase5-step5-b-prejournal.md sec.3.3 (golden
+#   itself only covers the unset lineage; the epoch-set lineage is
+#   verified per-release instead of via a second committed golden tree).
+#
+# - **Rebuild instead of artifact transfer between jobs.** The `build` job
+#   and the `release` job each run the full build; no
+#   actions/upload-artifact / download-artifact hop moves zips between
+#   them. This is a deliberate double win: (1) it keeps the third-party
+#   action surface identical to test.yml (actions/checkout +
+#   actions/setup-python only, same SHA pins, per SECURITY.md), and
+#   (2) it is a direct dogfood of the determinism guarantee this whole
+#   pipeline exists to prove -- if two independent build runs of the same
+#   commit can't produce identical bytes, the release should not ship
+#   regardless of whether artifact-passing would have "worked" anyway.
+#
+# - **workflow_dispatch is the dry-run entry point; tag push is the release
+#   entry point.** No dispatch inputs are needed -- the trigger kind alone
+#   selects the mode. Dry-run runs every verification step and logs zip
+#   names + sha256sums as evidence, but the `release` job (gated on
+#   `startsWith(github.ref, 'refs/tags/skill-v')`) never runs, so no
+#   GitHub Release is created and no contents:write permission is ever
+#   requested for a dispatch run.
+#
+# - **Tag pattern `skill-v*`.** Reserves plain `v*` for a possible future
+#   qgb-core / PyPI release lineage; skill artifacts version independently
+#   via metadata.yaml's own version field.
+#
+# - **Permissions are split per job, not global.** Default `contents: read`
+#   at the workflow level; only the `release` job (tag push only) escalates
+#   to `contents: write`, and only for the duration of that job.
+#
+# - **No commit hash embedded in artifacts.** Per acceptance-matrix.md
+#   "利用者向け『どの commit で build されたか』", the human-readable
+#   commit hash goes in the release notes (`gh release create --notes`);
+#   the zip contents themselves never carry it (keeps the golden
+#   self-reference problem structurally impossible).
+#
+# - **This workflow only covers up to "just before release."** 5.c's
+#   completion condition is a green workflow_dispatch dry-run; the first
+#   real tag push (and any fallout from it) is Step 5.d, per
+#   development/docs/journal/phase5-step5-c-prejournal.md.
+
+name: release
+
+on:
+  push:
+    tags: ["skill-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build + verify (both lineages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v7.0.0 (2026-06-18) -- SHA pin per SECURITY.md
+      # "Action SHA Pin Policy", same pin as test.yml. fetch-depth: 0 is
+      # NOT needed: `git log -1 --format=%ct` only needs the checked-out
+      # commit's own metadata, which the default (shallow, depth-1)
+      # checkout already includes.
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      # actions/setup-python v6.2.0 (2026-01-22) -- SHA pin per SECURITY.md.
+      - name: Setup Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.10"
+
+      - name: Install dev dependencies (hash-verified, binary-only)
+        run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
+
+      # No editable qgb install: build_skill.py imports only the stdlib
+      # plus dev-lock-installed yaml / jsonschema, never the qgb package
+      # (same rationale as the golden-integrity job in test.yml).
+
+      # Lineage (a): SOURCE_DATE_EPOCH-unset build must byte-match the
+      # committed tools/_golden/ tree. Reuses the existing golden test
+      # rather than re-implementing the comparison here.
+      - name: "Lineage (a): unset-epoch build matches committed golden"
+        run: python -m pytest tests/test_build_skill_golden.py -q
+
+      # Lineage (b): the release build itself (SOURCE_DATE_EPOCH pinned to
+      # the tagged commit's own timestamp) must be reproducible: building
+      # twice from the same commit must yield byte-identical trees. This
+      # is the release-lineage counterpart to lineage (a) -- golden only
+      # covers the epoch-unset build, so the epoch-set build is verified
+      # per-run instead of via a second committed golden tree (prejournal
+      # sec.3.3 / sec.2).
+      - name: "Lineage (b): release build is reproducible (build twice, diff)"
+        shell: bash
+        run: |
+          EPOCH="$(git log -1 --format=%ct)"
+          echo "Using SOURCE_DATE_EPOCH=$EPOCH (tagged commit timestamp)"
+          SOURCE_DATE_EPOCH="$EPOCH" python tools/build_skill.py --dist-dir tmp/rel1
+          SOURCE_DATE_EPOCH="$EPOCH" python tools/build_skill.py --dist-dir tmp/rel2
+          diff -r tmp/rel1 tmp/rel2
+          echo "OK: tmp/rel1 and tmp/rel2 are byte-identical"
+          grep -R "build_date_utc:" tmp/rel1 >/dev/null
+          echo "OK: build_date_utc line present in generated output"
+
+      # Determine the ref label used in zip filenames: the tag name on a
+      # tag push, or a short dry-run label derived from the commit SHA on
+      # workflow_dispatch. No commit hash goes INSIDE any artifact's
+      # content (see header comment); this is only a filename label.
+      - name: Compute artifact ref label
+        id: ref
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/skill-v* ]]; then
+            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=dry-run-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Zip each of the 4 cells from tmp/rel1 (already proven
+      # byte-identical to tmp/rel2 above). Each zip is rooted at the
+      # cell directory itself (INSTALL.md sits at the zip root, not
+      # nested under full/claude/...).
+      - name: Zip the 4 build cells
+        shell: bash
+        run: |
+          REF="${{ steps.ref.outputs.ref }}"
+          mkdir -p dist-zips
+          for mode in full split; do
+            for agent in claude codex; do
+              cell="tmp/rel1/${mode}/${agent}"
+              zip_name="qgb-skill-${REF}-${agent}-${mode}.zip"
+              (cd "$cell" && zip -r "${GITHUB_WORKSPACE}/dist-zips/${zip_name}" .)
+            done
+          done
+
+      # Dry-run evidence: no actions/upload-artifact is used (would add a
+      # new third-party action pin outside SECURITY.md's current two-action
+      # surface). Listing + hashing the zips in the job log is sufficient
+      # verification for 5.c's acceptance condition (green CI); downloadable
+      # artifacts are not required until an actual release is cut.
+      - name: List and hash zips (verification evidence)
+        shell: bash
+        run: |
+          ls -la dist-zips/
+          sha256sum dist-zips/*.zip
+
+  release:
+    name: publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/skill-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Same pins as the build job / test.yml.
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.10"
+
+      - name: Install dev dependencies (hash-verified, binary-only)
+        run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
+
+      # Rebuild rather than receive the build job's zips via
+      # upload/download-artifact (see header comment: this is a deliberate
+      # dogfood of the determinism guarantee, and it keeps the action
+      # surface unchanged). The build job already proved both lineages for
+      # this exact commit; re-running the same commands here is cheap
+      # (a few minutes) and means the published zips are never trusted
+      # without being reproduced fresh in the job that publishes them.
+      - name: Rebuild release zips
+        shell: bash
+        run: |
+          EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$EPOCH" python tools/build_skill.py --dist-dir tmp/rel1
+          mkdir -p dist-zips
+          for mode in full split; do
+            for agent in claude codex; do
+              cell="tmp/rel1/${mode}/${agent}"
+              zip_name="qgb-skill-${GITHUB_REF_NAME}-${agent}-${mode}.zip"
+              (cd "$cell" && zip -r "${GITHUB_WORKSPACE}/dist-zips/${zip_name}" .)
+            done
+          done
+          ls -la dist-zips/
+
+      # --verify-tag: refuse to create the release if the tag does not
+      # exist / does not point at the checked-out commit (gh's built-in
+      # guard against a race between tag push and this job running).
+      # The commit hash is recorded here (release notes), never inside
+      # the zip contents themselves (acceptance-matrix.md rule).
+      - name: Create GitHub Release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist-zips/*.zip \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Built from commit ${GITHUB_SHA}. See tools/_golden/ (this repo) for the golden lineage this release was verified against."
