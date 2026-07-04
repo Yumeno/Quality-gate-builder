@@ -239,3 +239,78 @@ jobs:
         run: |
           test -z "$(git status --porcelain tools/_golden/)"
           git diff --exit-code tools/_golden/
+
+  setup-script-posix:
+    name: setup-qgb.sh (POSIX, --from-path)
+    # Phase 5 Step 5.e. Verifies the generated POSIX setup script end-to-end
+    # on a real Linux runner -- the one acceptance cell that is structurally
+    # untestable on the Windows dev machine (win32 venv layout means
+    # .venv/bin/python never exists there, regardless of shell).
+    #
+    # Only the --from-path (offline / local-clone) install path is exercised.
+    # The default path ('pip install git+...@skill-v<ver>') is deliberately
+    # NOT tested here: between releases metadata.yaml's version is bumped
+    # before the tag exists, so the default path would 404 on every in-dev
+    # push. The default path is exercised implicitly by every real release
+    # install instead.
+    #
+    # Unlike the other jobs, the pip install inside the script runs with
+    # default build isolation and no hash pinning -- intentionally. This job
+    # tests the USER-FACING behavior of the script exactly as shipped (a
+    # user machine has no dev lock); qgb's own supply-chain discipline is
+    # covered by the other jobs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.10"
+
+      # Needed only to run build_skill.py (pyyaml / jsonschema).
+      - name: Install dev dependencies (hash-verified, binary-only)
+        run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
+
+      # setup-qgb.sh is byte-identical across all 4 build cells (pure-ASCII
+      # deterministic content); full/claude is used as the representative.
+      - name: Build skill dist
+        run: python tools/build_skill.py --dist-dir tmp/dist
+
+      - name: Run setup-qgb.sh in a fresh user project (--from-path)
+        shell: bash
+        run: |
+          mkdir -p tmp/userproj
+          cp tmp/dist/full/claude/setup-qgb.sh tmp/userproj/
+          cd tmp/userproj
+          bash setup-qgb.sh --from-path "$GITHUB_WORKSPACE"
+          .venv/bin/python -m qgb --version
+
+      # Lockstep policy (since v0.1.4): the installed CLI version must match
+      # pyproject.toml, which the release workflow separately ties to the
+      # skill tag and metadata.yaml.
+      - name: Verify installed version matches pyproject.toml
+        shell: bash
+        run: |
+          cd tmp/userproj
+          PYPROJECT_VER="$(python -c "import re; print(re.search(r'^version *= *\"([^\"]+)\"', open('$GITHUB_WORKSPACE/pyproject.toml', encoding='utf-8').read(), re.M).group(1))")"
+          INSTALLED="$(.venv/bin/python -m qgb --version)"
+          echo "installed: ${INSTALLED} / pyproject: ${PYPROJECT_VER}"
+          [[ "${INSTALLED}" == *"${PYPROJECT_VER}"* ]]
+
+      # The script promises idempotency: an existing .venv is left untouched
+      # (the install into it still runs). A marker file inside .venv must
+      # survive the second invocation.
+      - name: Idempotency (second run preserves .venv)
+        shell: bash
+        run: |
+          cd tmp/userproj
+          touch .venv/marker-preserved
+          bash setup-qgb.sh --from-path "$GITHUB_WORKSPACE" | tee second-run.log
+          grep -q "already exists" second-run.log
+          test -f .venv/marker-preserved
+          .venv/bin/python -m qgb --version
