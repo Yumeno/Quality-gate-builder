@@ -24,6 +24,16 @@
 3. **5.e dogfood**: Claude full/split 深掘り + Codex full/split smoke + 保守シナリオ (A1' 一文変更の伝播 / japanese-docs-pwsh の θ+ι+κ 実機 / 5.b 申し送りの κ false positive 確認) — 対話型
 4. 5.b-ci 送りの改善 2 件 (BuildError 境界の完全統一 / regen cell 列挙の metadata 由来化) は 5.e 後のバックログ
 
+## 3.5 配布戦略の階段 (2026-07-04 追記、user 質問「python パッケージが含まれないのは今後どう対策する?」への回答を正本化)
+
+スキルは qgb 本体を同梱しない (framework-shape の Layer 分離)。本体入手の対策は 3 段:
+
+1. **短期 (v0.1.1 バックログ)**: INSTALL.md の案内を**タグ固定の 1 コマンド**に変更 — `pip install git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v<version>`。version は metadata.yaml 由来で build 時に既知なので converter が自タグを焼き込める。スキルと本体の version skew を構造的に解消
+2. **中期 (v0.1.1 同時候補)**: release workflow で `python -m build` した wheel を同じ GitHub Release に添付 (git 不要・オフライン可・スキルと本体が同一 Release で version ペア。新規 action 不要、sha256 は release notes)
+3. **長期 (Phase 6 判断)**: PyPI 公開 + trusted publishing + 名前の防衛確保 (squatting リスクの根治)。SECURITY.md への配布ポリシー追記とリリース運用コミットメントが伴うため、5.e の利用者像の実感を得てから判断
+
+5.d canary 時点の実務: 利用者はスキル同梱 INSTALL.md / body.md §10.1 の記載どおり clone + `pip install -e` (v0.1.0 の documented path)。canary ではこの documented path 自体も検証対象。
+
 ## 4. プロセスノート
 
 5.b 段階 5 で確立した「push 後の CI 確認を検収に含める」を本 Step から適用 — 2 commit とも push 後に run 結果を機械確認してから完結判定した。release workflow は外向き権限 (contents: write) を持つため、指揮役が全文精読の上で commit した。
