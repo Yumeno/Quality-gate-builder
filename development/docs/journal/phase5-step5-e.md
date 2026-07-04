@@ -1,4 +1,4 @@
-# Phase 5 Step 5.e 記録: dogfood 残セルの消化 (進行中)
+# Phase 5 Step 5.e 完結記録: dogfood 残セルの消化 (全 5 items 合格)
 
 - 実施日: 2026-07-04〜 / 対象: acceptance の未消化セル 5 件。順序 = 機械化可能なものから (5→4→1→2、3 は証跡整理のみ)
 
@@ -34,4 +34,15 @@ v0.1.2 (`ad76912`) / v0.1.3 (`dc18fa1`) / v0.1.4 (`b6fecef`) の 3 リリース�
   6. **contract の TODO 初回充填が「直接編集禁止」(review-policy §4.3) と「contract の設計」(workflow §6.2 step 4) のどちらに該当するか曖昧** — 初回充填 = 設計 (直接可)、以後 = patch 経由、の線引きを明文化すべき
 - 副次観測: 回答シート方式でも §3.5/§6.6 準拠の挙動 (設計分岐の knowledge 記録、human_reviewed の承認ベース true 化) が再現
 
-## Item 2: Codex full/split smoke — (未着手、user 端末協力が必要)
+## Item 2: Codex full/split smoke — ✅ 両セル合格 (codex exec で自動化)
+
+`codex exec --skip-git-repo-check --sandbox read-only` (codex-cli 0.142.0) により user 端末協力なしで実施 (2026-07-05)。testbed に `.agents/skills/qgb/` 配置 (INSTALL.md 記載の位置)、probe 内容 = スキル発見 + 4 原則列挙 + 品質ゲート構築計画 (実行なし)。
+
+- **full セル**: `.agents/skills/qgb/SKILL.md` を自力発見、4 原則 + §3.5 (同格) を正確列挙、計画は §6.1 → パターン B → adopt → §6.2/§6.5 → validate/check/run の正順。**103.6k tokens**
+- **split セル**: 発見 + `skill_version: 0.1.4` を正しく自己申告 (v0.1.3 ヘッダ修正の効果実証)。trigger 表と `@see` から workflow.md / prompts/design-stages.md を解決し、無関係 helper (references.md) は読まない判断。人間承認後にのみ adopt、という P8 準拠計画。**46.4k tokens**
+- **split economy の定量実証**: 同一タスクで full 103.6k vs split 46.4k — helper を必要時のみ読む分割設計の狙いが数字で確認できた
+- 軽微な正直報告 1 件: trigger 表の語 (「品質ゲート始めたい」) と依頼文の言い回しが完全一致せず「若干曖昧」— 表が意味マッチを許容する旨は §2 冒頭に記載済みで実害なし
+
+## 総括
+
+**5.e 完結 (2026-07-05)。全 5 items 合格。** acceptance の残セルはすべて消化: POSIX setup script (CI 恒久化) / PS5 日本語実走 (θ+ι+κ + lint parity) / A1' 伝播 (3 リリース実戦) / claude split 実走 (ALLOW 完走) / codex full+split smoke。新発見 6 件は v0.1.5 候補として Issue #30 に集約。**Phase 5 の全 Step (5.a〜5.e) がこれで完結** — Phase 5 全体の完結宣言はドキュメント現実化 (requirements_and_development.md / detailed-design.md / CLAUDE.md) とあわせて別途。
