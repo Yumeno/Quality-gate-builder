@@ -20,6 +20,18 @@ scratchpad の日本語文書 testbed で PowerShell 5 経路をフル往復 (20
 
 v0.1.2 (`ad76912`) / v0.1.3 (`dc18fa1`) / v0.1.4 (`b6fecef`) の 3 リリースで「body.md 変更 → regen → golden test → CI 4 matrix + golden-integrity → 両系譜 release 検証」を 3 往復。うち v0.1.2 では独立レビュー must-fix の一行修正 → 再 regen の追い込み込み。保守シナリオとしてこれ以上の実証は不要と判断。
 
-## Item 1: claude split の実走 — (進行中、下記追記)
+## Item 1: claude split の実走 — ✅ 合格 (split 参照機構は成立、新発見 6 件)
+
+方式: golden の claude-split セルを testbed に配置し、Sonnet 運転で init → project-context → Pattern B → scaffold → contract (Python runtime) → check → run を実走 (2026-07-05)。native skill ロード自体は canary full で実証済みのため、本セルの検証対象は**分割参照の解決可能性**に絞った。
+
+- **split 機構: 成立**。trigger 表と `@see` 行から workflow.md / references.md / prompts/design-stages.md / prompts/review-policy.md の全 helper に正しく到達し、ALLOW まで完走 (gate.json: meaning verbatim / scope P11 / basis 3 件 / κ クリア)
+- **運転 agent の報告から新発見 6 件** (v0.1.5 候補、Codex smoke 完了後にまとめて Issue 化):
+  1. **「§12」エイリアスが split で実害**: workflow.md 内の「§12 の capability-based dispatch checklist」等は split の実ファイルに §12 が存在せず検索不能 — 運転 agent は design-stages.md の通読で §5.5 を発見する追加コストを払った (v0.1.4 レビューで「既出荷慣行」と見送った件の実害実証。文書名 + 節番号への置換が必要)
+  2. **§6.1 の手順順序が実機と矛盾**: step 6 (scaffold) が段階設計より先に書かれているが、実機は `policy.json#stages` 空だと scaffold を拒否する (`scaffold.py` L113 確認済)。文字どおり番号順に進むと必ず一度エラー
+  3. **scaffold は `req/<REQ>.md` を生成しない** (実装確認済: meta.json + contract placeholder + gitkeep のみ)。SKILL.md §4 構造図と §6.2 step 3 は .md 雛形も出ると誤読させる
+  4. **非対話実行の `--yes` が全文書に不記載**: `qgb run` は non-TTY で `--yes` 必須だが、workflow.md §6.2 step 7 も CLAUDE.md の CLI 一覧も素のコマンドを提示 — agent 経由が前提の Phase 5 スキルとして明白な欠落
+  5. **patch の project-wide preflight 連動が §6.4 から読めない**: 無関係に見える小 patch が未充填 contract の blocker で弾かれる挙動
+  6. **contract の TODO 初回充填が「直接編集禁止」(review-policy §4.3) と「contract の設計」(workflow §6.2 step 4) のどちらに該当するか曖昧** — 初回充填 = 設計 (直接可)、以後 = patch 経由、の線引きを明文化すべき
+- 副次観測: 回答シート方式でも §3.5/§6.6 準拠の挙動 (設計分岐の knowledge 記録、human_reviewed の承認ベース true 化) が再現
 
 ## Item 2: Codex full/split smoke — (未着手、user 端末協力が必要)
