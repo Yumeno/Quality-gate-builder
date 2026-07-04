@@ -33,6 +33,15 @@
 #   (ubuntu-latest + Python 3.12 の 1 job のみ)。artifact 化は採用しない
 #   (qgb 本体 CI 責務外、利用者運用、JUnit XML WONTFIX と同型)。詳細は
 #   development/docs/journal/phase3-step3-2-prejournal.md。
+#
+# - **Step 5.b-ci (2026-07-04): golden-integrity job 追加.** pytest matrix
+#   は build vs committed golden の byte 一致を既に 4 セルで検証済みだが、
+#   それは build_all() を直接呼ぶ経路のみ。tools/regen_golden.py という
+#   別経路 (メンテナが実際に golden 更新時に叩くスクリプト) がドリフト
+#   なく committed golden を再現するかは別の検証対象、という理由で独立
+#   job 化。ubuntu-latest 単独 (golden bytes は .gitattributes の LF 強制
+#   + stdlib-only emission により OS 非依存と設計上保証済み)。詳細は
+#   development/docs/journal/phase5-step5-c-prejournal.md。
 
 name: test
 
@@ -168,3 +177,65 @@ jobs:
         run: |
           python tools/diff_locks.py requirements.lock tmp/requirements.lock
           python tools/diff_locks.py requirements-dev.lock tmp/requirements-dev.lock
+
+  golden-integrity:
+    name: golden fixtures vs regen script
+    # Phase 5 Step 5.b-ci. runs-on: ubuntu-latest (cheapest runner) because
+    # golden bytes are platform-independent BY DESIGN, not by luck:
+    # - LF is forced repo-wide for every build-input extension (.py/.md/.json/
+    #   .yaml/.yml) via .gitattributes, so git checkout cannot reintroduce
+    #   CRLF drift on any OS.
+    # - build_skill.py's own emission (_dump_frontmatter, generator header,
+    #   render_full/render_split) is stdlib-only; no platform-dependent
+    #   library output (e.g. PyYAML dump) ever reaches written bytes.
+    # - The `test` job's own matrix already proves build-vs-golden equality
+    #   is byte-identical across both OSes and both Python versions
+    #   (test_build_skill_golden.py runs in all 4 cells).
+    # This job is therefore NOT re-checking OS-portability; it exists to
+    # validate a DIFFERENT path than the pytest matrix: that
+    # `tools/regen_golden.py` -- the script a maintainer actually runs to
+    # update goldens after an intentional change -- reproduces exactly what
+    # is committed under tools/_golden/. A golden that was hand-edited, or
+    # regenerated with an uncommitted follow-up edit forgotten, fails here
+    # even though test_build_skill_golden.py (which calls build_all()
+    # directly, not the regen script) would not have caught it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.10"
+
+      - name: Install dev dependencies (hash-verified, binary-only)
+        run: "python -m pip install --require-hashes --only-binary :all: -r requirements-dev.lock"
+
+      # No editable qgb install here (unlike the `test` job): build_skill.py
+      # and regen_golden.py import only the stdlib plus dev-lock-installed
+      # yaml / jsonschema -- neither imports anything from the qgb package
+      # itself. Installing qgb editable would add an unused step.
+      - name: Regenerate goldens
+        # SOURCE_DATE_EPOCH is intentionally not set anywhere in this job's
+        # env: regen_golden.py refuses (exit 2) if it is set, since
+        # tools/_golden/ is the SOURCE_DATE_EPOCH-unset lineage only
+        # (prejournal Sec.3.3). GitHub-hosted runners do not set this
+        # variable themselves, so no explicit unset step is needed --
+        # this comment documents the invariant the job relies on.
+        run: python tools/regen_golden.py
+
+      # Two checks, not one: `git diff --exit-code` alone misses files that
+      # regen_golden.py added or deleted (a diff against a path that didn't
+      # exist before, or that no longer exists, doesn't show up the same
+      # way as a content change). `git status --porcelain` surfaces added
+      # ("??" / "A") and deleted ("D") entries directly; `git diff
+      # --exit-code` then confirms no tracked file's bytes changed either.
+      - name: Fail if regen produced any working-tree drift
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain tools/_golden/)"
+          git diff --exit-code tools/_golden/
