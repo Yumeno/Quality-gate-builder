@@ -95,6 +95,26 @@ jobs:
       # plus dev-lock-installed yaml / jsonschema, never the qgb package
       # (same rationale as the golden-integrity job in test.yml).
 
+      # Tag <-> metadata version consistency (added after v0.1.3, from a
+      # real near-miss): the zip CONTENTS bake "skill-v<metadata.yaml
+      # version>" into INSTALL.md / setup-qgb.{ps1,sh}, while the Release
+      # and zip FILENAMES use the pushed tag. Nothing else ties the two
+      # together -- pushing a tag without bumping metadata.yaml (or vice
+      # versa) would publish zips whose contents reference a different
+      # tag than the release they are attached to. Fail before building.
+      # Dry-run (workflow_dispatch) has no tag, so the check is tag-only.
+      - name: Verify tag matches metadata.yaml version
+        if: startsWith(github.ref, 'refs/tags/skill-v')
+        shell: bash
+        run: |
+          META_VER="$(python -c "import yaml; print(yaml.safe_load(open('skills/source/metadata.yaml', encoding='utf-8-sig'))['version'])")"
+          EXPECTED="skill-v${META_VER}"
+          if [[ "${GITHUB_REF_NAME}" != "${EXPECTED}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match metadata.yaml version ${META_VER} (expected tag ${EXPECTED}). Bump skills/source/metadata.yaml + regen golden, or retag."
+            exit 1
+          fi
+          echo "OK: tag ${GITHUB_REF_NAME} matches metadata.yaml version ${META_VER}"
+
       # Lineage (a): SOURCE_DATE_EPOCH-unset build must byte-match the
       # committed tools/_golden/ tree. Reuses the existing golden test
       # rather than re-implementing the comparison here.
