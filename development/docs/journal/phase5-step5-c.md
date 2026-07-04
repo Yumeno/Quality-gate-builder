@@ -28,7 +28,10 @@
 
 スキルは qgb 本体を同梱しない (framework-shape の Layer 分離)。本体入手の対策は 3 段:
 
-1. **短期 (v0.1.1 バックログ)**: INSTALL.md の案内を**タグ固定の 1 コマンド**に変更 — `pip install git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v<version>`。version は metadata.yaml 由来で build 時に既知なので converter が自タグを焼き込める。スキルと本体の version skew を構造的に解消
+1. **短期 (v0.1.1 バックログ、3 点セット)**:
+   - **venv を既定の documented path に** (user 指摘 2026-07-04: 「ユーザー目線でも、いきなりグローバルに入れるのは勇気いる」)。現行 INSTALL.md / body.md §10.1 は venv 言及なしの `pip install -e` で、字義どおり実行するとグローバルに入る — NF-003 (最小侵襲性) を利用者マシン環境にも適用し、`py -3 -m venv .venv` → activate → install の正順を既定に。グローバルは注記に降格
+   - **タグ固定 install**: `pip install git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v<version>`。version は metadata.yaml 由来で build 時に既知なので converter が自タグを焼き込める。version skew を構造的に解消
+   - **skill 側の venv 認識規律**: セッション shell は venv を自動 activate しないため、skill が `python -m qgb` を叩く前に「このプロジェクトの qgb はどの python にいるか」を確定する (§6.5 runtime 解決の思想を qgb 自身の呼び出しに適用)。5.d canary でこの摩擦の実態を観察してから文言化
 2. **中期 (v0.1.1 同時候補)**: release workflow で `python -m build` した wheel を同じ GitHub Release に添付 (git 不要・オフライン可・スキルと本体が同一 Release で version ペア。新規 action 不要、sha256 は release notes)
 3. **長期 (Phase 6 判断)**: PyPI 公開 + trusted publishing + 名前の防衛確保 (squatting リスクの根治)。SECURITY.md への配布ポリシー追記とリリース運用コミットメントが伴うため、5.e の利用者像の実感を得てから判断
 
