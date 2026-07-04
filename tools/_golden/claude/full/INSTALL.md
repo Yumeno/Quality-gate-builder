@@ -2,7 +2,7 @@
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
   converter_version: 0.1.0
-  build_input_digest: 6aa670dcc859780e
+  build_input_digest: f7c48029ac006e73
 -->
 # qgb skill インストールガイド (claude / full)
 
