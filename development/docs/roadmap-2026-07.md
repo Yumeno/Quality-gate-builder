@@ -5,8 +5,8 @@ Fable 5 (メインループ担当) の利用可能期間の区切りにあたり
 ## 1. 現在地
 
 - **Phase 1〜3 完結** (Python CLI MVP → 構造化編集 → 機械責務側の最終整備)。Phase 4 は欠番。
-- **Phase 5 (Skill Creator 化) は全 Step (5.a〜5.e) 完結** (2026-07-05、journal `phase5-step5-e.md` 総括)。skill リリース v0.1.0〜v0.1.4 公開済み。canary #1 (Fable 5 運転・機構検証) / canary #2 (Sonnet 運転・ブラインド維持・実運用ワークフロー) とも合格。
-- **Phase 5 全体の完結宣言は未実施** — v0.1.5 (Issue #30) の扱いを決めてから、ドキュメント現実化とあわせて行う (§3)。
+- **Phase 5 (Skill Creator 化) は全 Step (5.a〜5.e) 完結** (2026-07-05、journal `phase5-step5-e.md` 総括)。skill リリース **v0.1.0〜v0.1.5** 公開済み (v0.1.5 = 5.e 発見 6 件の回収、2026-07-05、Issue #30 close)。canary #1 (Fable 5 運転・機構検証) / canary #2 (Sonnet 運転・ブラインド維持・実運用ワークフロー) とも合格。**canary + dogfood の発見はすべて skill に反映済み = 積み残しゼロ**。
+- **Phase 5 全体の完結宣言は未実施** — 残るはドキュメント現実化のみ (§3)。
 - 思想憲章は **v2.0** (P12「評価系もまた設計物である」追加、P6 の根拠を監査可能性 + 利害独立に再接地)。
 
 ## 2. この期間に確立した思想・設計資産 (今後の判断の土台)
@@ -20,8 +20,8 @@ Fable 5 (メインループ担当) の利用可能期間の区切りにあたり
 
 ## 3. 直近の作業 (順序込みの推奨計画)
 
-1. **v0.1.5** ([Issue #30](https://github.com/Yumeno/Quality-gate-builder/issues/30)): 5.e split 実走の発見 6 件 (「§12」エイリアス解消 / §6.1 手順順序 / scaffold 生成物の正確化 / `--yes` 記載 / patch preflight 連動 / contract TODO 初回充填の線引き)。全件文言修正、上記テンプレの 1 バッチ。緊急度低・工数小。
-2. **Phase 5 完結のドキュメント現実化**: requirements_and_development.md §13 / detailed-design.md / CLAUDE.md / framework-shape.md (必要なら) を Phase 5 完結状態に揃え、完結 journal を書く。「ドキュメントは Phase ごとに現実装へ揃える」規律 (CLAUDE.md) の対象。
+1. ~~**v0.1.5** (Issue #30)~~ — **完了 (2026-07-05、release skill-v0.1.5、journal `phase5-v0-1-5.md`)**
+2. **Phase 5 完結のドキュメント現実化**: requirements_and_development.md §13 / detailed-design.md / CLAUDE.md / framework-shape.md (必要なら) を Phase 5 完結状態に揃え、完結 journal を書く。「ドキュメントは Phase ごとに現実装へ揃える」規律 (CLAUDE.md) の対象。**次の指揮モデルの最初の作業として推奨** (全材料は journal に揃っており、文脈確認と執筆だけで完結する)。
 3. (任意) CI matrix への **Python 3.11 追加の再判断** — test.yml に「Phase 5 提供前に再判断」と明記した宿題。判断だけでも記録する。
 
 ## 4. 中期 (Phase 6 候補領域)
@@ -60,8 +60,8 @@ Fable 5 の window 終了後も、体制は**役割で定義**されており代
 
 | 項目 | 状態 | 出所 |
 |---|---|---|
-| v0.1.5 文言バッチ | **Issue #30 (open)** | 5.e item 1 |
-| Phase 5 完結ドキュメント現実化 | 未起票 (直近作業 §3-2) | CLAUDE.md 規律 |
+| v0.1.5 文言バッチ | ✅ 完了 (Issue #30 close、release skill-v0.1.5) | 5.e item 1 |
+| Phase 5 完結ドキュメント現実化 | 未起票 (直近作業 §3-2、**次の最優先**) | CLAUDE.md 規律 |
 | CI 3.11 再判断 | 未起票 (判断のみでも可) | test.yml 内コメント |
 | wheel 添付 → PyPI + 名前防衛 | 未起票 (Phase 6) | 5.c 配布の階段 |
 | Step 3.3 再評価 | 未起票 | Phase 3 繰越 |
