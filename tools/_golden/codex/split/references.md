@@ -1,16 +1,16 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.4
+  skill_version: 0.1.5
   converter_version: 0.1.1
-  build_input_digest: 615b17206d93a251
+  build_input_digest: 6c3b5b83d915af62
 -->
 
 ## 7. 参照集
 
 (本セクションは full モード: SKILL.md 内の埋め込み見出し / split モード: `references.md` 別ファイル。)
 
-> **注意**: 本節の `development/docs/` / `examples/` は **qgb repo (github.com/Yumeno/Quality-gate-builder) 内の資料**であり、skill 配布物 (zip / pip パッケージ) には同梱されない。参照できない環境では、本 SKILL.md 内の要約 (§3 の 4 原則、§12 の設計指針) で運用が成立する設計になっている。
+> **注意**: 本節の `development/docs/` / `examples/` は **qgb repo (github.com/Yumeno/Quality-gate-builder) 内の資料**であり、skill 配布物 (zip / pip パッケージ) には同梱されない。参照できない環境では、本 SKILL.md 内の要約 (§3 の 4 原則、段階設計プロンプトの設計指針) で運用が成立する設計になっている。
 
 ### 7.1 qgb 本体の正本
 

@@ -30,7 +30,7 @@ python <skill_install>/lint/check-command-contract.py \
 exit 0 → adopt OK (fix-required findings なし、advisory note があっても 0)。
 exit 1 → fix required (proposal を直す)。exit 2 → usage error。
 
-## 検査項目 (6 件、body.md §6.5 + §12.5.5 と対応)
+## 検査項目 (6 件、body.md §6.5 + 段階設計プロンプト §5.5 と対応)
 
 | ID | 種別 | 検査内容 | 失敗例 |
 |---|---|---|---|
@@ -58,6 +58,6 @@ exit 1 → fix required (proposal を直す)。exit 2 → usage error。
 ## 関連
 
 - `skills/source/body.md` §6.5 command authoring protocol (本 lint が検証する protocol)
-- `skills/source/body.md` §12.5.5 capability-based dispatch checklist (本 lint が参照する runtime checklist)
+- 段階設計プロンプト §5.5 capability-based dispatch checklist (skills/source/body.md 内、split 配布では `prompts/design-stages.md`。本 lint が参照する runtime checklist)
 - `development/docs/journal/phase5-step5-a-2-4-prejournal.md` (本 Step の設計判断)
 - `development/docs/journal/phase5-step5-a-2.md` §6.3 step 16 lint helper 同梱 (5.b 着手前提)

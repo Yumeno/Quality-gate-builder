@@ -20,7 +20,7 @@ Behaviour notes:
       finding) when the runtime is missing on the authoring host, because
       the skill agent's host may differ from the target user environment.
 
-Checks (skills/source/body.md §6.5 + §12.5.5):
+Checks (skills/source/body.md §6.5 + design-stages prompt sec 5.5):
     C1  script extension and confirmed runtime match
     C2  PowerShell 5 target + non-ASCII .ps1 must have UTF-8 BOM
     C3  contract.command is a complete, explicit PowerShell argv
@@ -234,7 +234,8 @@ def check_extension_runtime_match(
         findings.append(
             "C1: contract.runtime is not declared. Add a runtime field "
             "(e.g. 'powershell-5' / 'bash' / 'python' / 'node') to enable "
-            "capability-based dispatch (body.md §12.5.5)."
+            "capability-based dispatch (design-stages prompt sec 5.5, "
+            "prompts/design-stages.md in split builds)."
         )
         return findings
     if script_path is None:
@@ -256,7 +257,8 @@ def check_extension_runtime_match(
             f"C1: script extension '{script_path.suffix}' does not match "
             f"runtime '{runtime}' (expected one of {expected_exts}). "
             "Match the script extension to the confirmed runtime or change "
-            "contract.runtime (body.md §12.5.5)."
+            "contract.runtime (design-stages prompt sec 5.5, "
+            "prompts/design-stages.md in split builds)."
         )
     return findings
 
@@ -692,7 +694,8 @@ def check_powershell_stdout_init(
             "PowerShell's own stdout). Without [Console]::OutputEncoding, "
             "stdout may use system code page (cp932 on Japanese Windows), "
             "causing qgb's UTF-8 decode to produce U+FFFD characters. "
-            "See body.md §6.5 + §12.5.5 PowerShell checklist."
+            "See body.md §6.5 + design-stages prompt sec 5.5 PowerShell "
+            "checklist (prompts/design-stages.md in split builds)."
         )
     return findings
 

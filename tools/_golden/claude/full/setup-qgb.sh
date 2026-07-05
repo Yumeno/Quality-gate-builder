@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # GENERATED FILE - DO NOT EDIT.
 # This is a generated artifact. Edit skills/source/body.md instead.
-# skill_version: 0.1.4
+# skill_version: 0.1.5
 # converter_version: 0.1.1
-# build_input_digest: 615b17206d93a251
+# build_input_digest: 6c3b5b83d915af62
 set -euo pipefail
 
 # setup-qgb.sh -- qgb installer (venv-default).
 #
 # Trust boundary note: the default install path below runs
-# 'pip install git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.4', which is clone-equivalent
+# 'pip install git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.5', which is clone-equivalent
 # trust (arbitrary code from the repo at that tag runs during
 # 'pip install').  --require-hashes is not available for VCS
 # installs (NF-011); this script does not attempt to simulate it.
@@ -66,8 +66,8 @@ if [ -n "$FROM_PATH" ]; then
     echo "[setup-qgb] Step 3: installing qgb from local path (editable): $FROM_PATH"
     "$VENV_PYTHON" -m pip install -e "$FROM_PATH"
 else
-    echo "[setup-qgb] Step 3: installing qgb from git+https://github.com/Yumeno/Quality-gate-builder.git (tag skill-v0.1.4)..."
-    "$VENV_PYTHON" -m pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.4"
+    echo "[setup-qgb] Step 3: installing qgb from git+https://github.com/Yumeno/Quality-gate-builder.git (tag skill-v0.1.5)..."
+    "$VENV_PYTHON" -m pip install "git+https://github.com/Yumeno/Quality-gate-builder.git@skill-v0.1.5"
 fi
 
 echo "[setup-qgb] Step 4: verifying installation..."

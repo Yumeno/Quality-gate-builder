@@ -16,9 +16,9 @@ disable-model-invocation: false
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.4
+  skill_version: 0.1.5
   converter_version: 0.1.1
-  build_input_digest: 615b17206d93a251
+  build_input_digest: 6c3b5b83d915af62
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
@@ -149,7 +149,7 @@ qgb の利用者は幅広い。IT エンジニアも非エンジニアも、qgb 
   policy.json                    # 段階定義 (どの段階で何を検査するか、機械正本)
   project-context.json           # 機械正本: 対象プロジェクトの自己定義 (schema 検証可)
   req/                           # 要求文書
-    REQ-APP-001.md               # 人間正本 (要求の自然言語記述)
+    REQ-APP-001.md               # 人間正本 (agent が Write する。scaffold は生成しない)
     REQ-APP-001.meta.json        # 機械正本 (manual_check 等の構造化メタ)
   contracts/
     REQ-APP-001/

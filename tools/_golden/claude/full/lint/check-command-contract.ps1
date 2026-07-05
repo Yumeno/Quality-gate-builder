@@ -156,7 +156,7 @@ function Check-ExtensionRuntimeMatch {
     $findings = @()
     $runtime = $Contract.runtime
     if (-not $runtime) {
-        $findings += "C1: contract.runtime is not declared. Add a runtime field (e.g. 'powershell-5' / 'bash' / 'python' / 'node') to enable capability-based dispatch (body.md sec 12.5.5)."
+        $findings += "C1: contract.runtime is not declared. Add a runtime field (e.g. 'powershell-5' / 'bash' / 'python' / 'node') to enable capability-based dispatch (design-stages prompt sec 5.5, prompts/design-stages.md in split builds)."
         return $findings
     }
     if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
@@ -167,7 +167,7 @@ function Check-ExtensionRuntimeMatch {
     }
     $expected = $RuntimeExtensions[$runtime]
     if ($expected -and -not ($expected -contains [System.IO.Path]::GetExtension($ScriptPath).ToLower())) {
-        $findings += "C1: script extension '$([System.IO.Path]::GetExtension($ScriptPath))' does not match runtime '$runtime' (expected one of $($expected -join ', ')). Match the script extension to the confirmed runtime or change contract.runtime (body.md sec 12.5.5)."
+        $findings += "C1: script extension '$([System.IO.Path]::GetExtension($ScriptPath))' does not match runtime '$runtime' (expected one of $($expected -join ', ')). Match the script extension to the confirmed runtime or change contract.runtime (design-stages prompt sec 5.5, prompts/design-stages.md in split builds)."
     }
     return $findings
 }
@@ -447,7 +447,7 @@ function Check-PowerShellStdoutInit {
     if (-not (Test-Path -LiteralPath $ScriptPath)) { return $findings }
     $text = Read-TextStrict -Path $ScriptPath
     if (-not ($text -match $PsRequiredStdoutPattern)) {
-        $findings += "C4: PowerShell script '$ScriptPath' does not set [Console]::OutputEncoding = [System.Text.Encoding]::UTF8. This is required; `$OutputEncoding alone is insufficient (it only affects child-process pipelines, not qgb's read of PowerShell's own stdout). Without [Console]::OutputEncoding, stdout may use system code page (cp932 on Japanese Windows), causing qgb's UTF-8 decode to produce U+FFFD characters. See body.md sec 6.5 + sec 12.5.5 PowerShell checklist."
+        $findings += "C4: PowerShell script '$ScriptPath' does not set [Console]::OutputEncoding = [System.Text.Encoding]::UTF8. This is required; `$OutputEncoding alone is insufficient (it only affects child-process pipelines, not qgb's read of PowerShell's own stdout). Without [Console]::OutputEncoding, stdout may use system code page (cp932 on Japanese Windows), causing qgb's UTF-8 decode to produce U+FFFD characters. See body.md sec 6.5 + design-stages prompt sec 5.5 PowerShell checklist (prompts/design-stages.md in split builds)."
     }
     return $findings
 }

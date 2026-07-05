@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.4
+  skill_version: 0.1.5
   converter_version: 0.1.1
-  build_input_digest: 615b17206d93a251
+  build_input_digest: 6c3b5b83d915af62
 -->
 
 # 段階設計プロンプト (qgb design-stages、パターン B / C)

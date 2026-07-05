@@ -129,7 +129,7 @@ python -m qgb init                                # create .quality-system/ in t
 python -m qgb scaffold REQ-APP-001                # generate REQ + contract + test stubs
 python -m qgb validate                            # JSON-schema-validate all sources of truth
 python -m qgb validate-policy [REQ-ID]            # cross-file integrity + DAG + orphan scan
-python -m qgb run REQ-APP-001                     # execute the gate, write curated evidence
+python -m qgb run REQ-APP-001 --yes               # execute the gate, write curated evidence (--yes: non-TTY 必須)
 python -m qgb check [REQ-ID]                      # rehearsal run (no curated write)
 python -m qgb dev [REQ-ID]                        # alias of check (Phase 3 watch-mode placeholder)
 python -m qgb patch <target> <patch.json>         # JSON Patch (add/replace/remove/test) + atomic swap

@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.4
+  skill_version: 0.1.5
   converter_version: 0.1.1
-  build_input_digest: 615b17206d93a251
+  build_input_digest: 6c3b5b83d915af62
 -->
 
 ## 6. 作業手順
@@ -32,14 +32,17 @@
    - `project-context.md` を読んで `.quality-system/project-context.json` に構造化
    - `source_metadata.generated_by: "agent-assisted"` を立てる
    - `human_reviewed` は `false` のまま起草し、**利用者が内容を確認したら true 化を利用者に確認する** (立てる判断は利用者のもの。agent の無断 true 化は P8 違反。確認を経ずに false のまま進めると `propose-context` が advisory warning を出し続ける)
-6. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
-   - `req/REQ-APP-001.md` + `req/REQ-APP-001.meta.json` + `contracts/REQ-APP-001/<stage>.json` のひな型
-   - 利用者と要求内容を対話して `REQ-APP-001.md` 本文を埋める
-7. **`python -m qgb validate-policy` で機械検証**
+6. **段階設計で `policy.json#stages` を確定する** (scaffold の前提)
+   - stages が空のまま次 step の scaffold を実行すると拒否される (`policy.json has no stages[]`)
+   - 進め方は「段階設計プロンプト」参照 (パターン B 推奨。full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/design-stages.md`)
+7. **`python -m qgb scaffold REQ-APP-001` で最初の REQ を生成**
+   - 生成されるのは `req/REQ-APP-001.meta.json` + `contracts/REQ-APP-001/<stage>.json` の placeholder のみ。**REQ 本文 `req/REQ-APP-001.md` は生成されない**
+   - REQ 本文 `.md` は利用者と要求内容を対話して agent が新規 Write する (人間正本)
+8. **`python -m qgb validate-policy` で機械検証**
    - `config.json` / `policy.json` の存在、契約の DAG、`manual_check`-only REQ の警告
    - blocker があれば修正して再実行
 
-8. **設計分岐の提示: 判定履歴の保存方針** (§3.5 決定の所有権の型で、初期化時に一度だけ)
+9. **設計分岐の提示: 判定履歴の保存方針** (§3.5 決定の所有権の型で、初期化時に一度だけ)
    - 機構の事実を開示する: `evidence/<REQ>/latest/` は次の `qgb run` で**上書き**され、`artifacts/` は揮発 (.gitignore + prune 対象)。過去の判定 — 特に DENY だった証跡 — を残したければ、上書き前にどこかへ固定する必要がある
    - 残すか・どう残すか (git commit のタイミング規約 / 別の VCS / アーカイブ / 「latest だけで十分」) は**利用者の設計判断**。git の利用を前提にしない
    - 選択した方針は §6.6 トリガ 1 (設計分岐の選択) として knowledge.jsonl に理由ごと記録する
@@ -49,7 +52,8 @@
 利用者から「REQ 追加」と依頼されたとき:
 
 1. **REQ ID の確定** (`REQ-<DOMAIN>-<NNN>` 形式、利用者と相談)
-2. **`python -m qgb scaffold REQ-XXX-NNN`** でひな型生成
+2. **`python -m qgb scaffold REQ-XXX-NNN`** でひな型生成 (前提: `policy.json#stages` が確定済み — 空だと拒否される)
+   - 生成物は `.meta.json` + 段階別 contract の placeholder のみ (REQ 本文 `.md` は次 step で agent が新規 Write)
 3. **REQ 本文の起草** (`req/REQ-XXX-NNN.md`)
    - 何を達成したいか (acceptance criteria)
    - どの段階で検証するか (`responsibility` の方針)
@@ -63,7 +67,7 @@
 6. **`python -m qgb check REQ-XXX-NNN`** でリハーサル実行
    - `artifacts/REQ-XXX-NNN/checks/<ts>/` に揮発出力
    - curated evidence は更新しない
-7. **問題なければ `python -m qgb run REQ-XXX-NNN`** で本実行
+7. **問題なければ `python -m qgb run REQ-XXX-NNN --yes`** で本実行 (非対話環境 = agent 経由では `--yes` が必須。対話 TTY では省略すると確認プロンプトが出る)
    - `evidence/REQ-XXX-NNN/latest/gate.json` が生成される
 
 ### 6.3 デバッグフロー
@@ -83,16 +87,18 @@
    - **タイムアウト**: `contract.timeout_seconds` を調整 (理由を `decision.meaning` に明示)
    - **出力 cap 超過**: `reason=stdout_cap_exceeded` 等、コマンド出力を抑える / 別段階に分離
    - **構成不備**: NOT_READY → `qgb validate-policy` で blocker を解消
-4. **修正後 `qgb check` でリハーサル**、問題なければ `qgb run`
+4. **修正後 `qgb check` でリハーサル**、問題なければ `qgb run --yes`
 
 ### 6.4 構造化編集フロー
 
 「contract を編集」「JSON Patch」と依頼されたとき:
 
 1. **直接ファイル編集は避ける** (Phase 2 で確立した規律)
+   - 線引き: **scaffold 直後の placeholder (`TODO-...`) を実値に初めて充填する行為は §6.2 step 4 の「contract の設計」であり、直接 Write してよい**。一度実値が入った contract 以降の変更が本フロー (patch 経由) の対象
 2. **JSON Patch で構造化編集** (`python -m qgb patch <target> <patch.json>`)
    - op: add / replace / remove / test (移動 / 複製は WONTFIX)
    - atomic swap で書き込み (途中状態が残らない)
+   - **patch は対象ファイル単体でなくプロジェクト全体の整合を preflight する**: 無関係に見える小さな patch でも、未充填 contract 等の blocker (`missing_contract_field` など) が残っていると弾かれる。先に `qgb validate-policy` で blocker を解消してから patch する
 3. **waiver 追加** は `python -m qgb add-waiver REQ-XXX stage --reason ...` 経由
    - knowledge.jsonl に自動記録、`gate.json.basis[]` で参照可能
 4. **knowledge 追加** は `python -m qgb add-knowledge <file>` 経由
@@ -126,8 +132,8 @@
      - Python: `python -X utf8 <script.py>` (Python 3.7+ で UTF-8 mode、Windows 日本語環境で `PYTHONUTF8=1` 推奨)
      - Node: `node --input-type=module <script.mjs>` 等、Node version を意識
    - argv[0] (実行ファイルの path) は **OS ネイティブの path 区切り**で書く (例: Windows では `.venv\Scripts\python.exe`)。Windows の CreateProcess は `/` 区切りの相対 path を実行ファイルとして解決しない
-5. **runtime-specific preflight (= ι capability-based dispatch、§12 参照)**
-   - 確定 runtime に対応する checklist を §12「段階設計プロンプト」の capability-based dispatch checklist から読み込んで適用
+5. **runtime-specific preflight (= ι capability-based dispatch)**
+   - 確定 runtime に対応する checklist を**段階設計プロンプト §5.5「capability-based dispatch checklist」** (full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/design-stages.md`) から読み込んで適用
    - PowerShell 5 + 非 ASCII なら BOM 必須 / `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` 設定必須 等
    - bash なら shebang + executable bit + LC_ALL=C.UTF-8 設定必須 等
 6. **`python -m qgb check REQ-XXX-NNN`** でリハーサル実行
@@ -156,14 +162,14 @@ PowerShell 7+ (`pwsh`) は UTF-8 BOM なしでも .ps1 を正しく読むが、�
 
 ASCII safe alternative (pure ASCII + Unicode escape) は `skills/source/hooks/{claude-code,codex}/scripts/check-relevance.ps1` で採用済の手法、PowerShell 5/7 両対応かつ BOM 不要だが利用者が JP 文字列を直接書きたい場合は不適。
 
-#### 他 runtime の規律 (概要、詳細は §12 capability-based dispatch checklist 参照)
+#### 他 runtime の規律 (概要、詳細は段階設計プロンプト §5.5 capability-based dispatch checklist 参照)
 
 - **bash (POSIX)**: shebang + executable bit + `LC_ALL=C.UTF-8` 設定 + 改行 LF
 - **Python**: `python -X utf8` または `PYTHONUTF8=1` + `sys.stdout.reconfigure(encoding='utf-8')` + 改行 LF + 必要なら `# -*- coding: utf-8 -*-` (Python 2 系で書く場合のみ、Python 3 系では不要)
 - **Node**: `--input-type=module` (ESM 明示) + `process.stdout.write` で UTF-8 確認 + locale 環境変数
 - **Go binary / 他 compiled**: build artifact の path + argv 完全明示、stdout encoding は binary 側の責任
 
-これらの詳細は §12 「段階設計プロンプト」の capability-based dispatch checklist 節に runtime ごとに展開。
+これらの詳細は段階設計プロンプト §5.5 (full: 同一 SKILL.md 内 / split: `prompts/design-stages.md`) に runtime ごとに展開。
 
 #### lint helper script (skill 同梱)
 

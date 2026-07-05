@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.4
+  skill_version: 0.1.5
   converter_version: 0.1.1
-  build_input_digest: 615b17206d93a251
+  build_input_digest: 6c3b5b83d915af62
 -->
 
 # レビュー観点プロンプト (qgb 利用時の LLM レビューの境界)
@@ -89,7 +89,7 @@ LLM レビューの結果は **「このプロジェクトでこう見えた」*
 
 ### 3.5 command 契約の runtime 規律検証 (補助確認、Step 5.a-2-4 で確立、γ-lite + κ)
 
-advisory review の一環として、`verification_type=command` 契約の **runtime 規律** が body.md §6.5 command authoring protocol + §12.5.5 capability-based dispatch checklist に従っているかを補助的に確認する。
+advisory review の一環として、`verification_type=command` 契約の **runtime 規律** が body.md §6.5 command authoring protocol + 段階設計プロンプト §5.5 capability-based dispatch checklist (split: `prompts/design-stages.md`) に従っているかを補助的に確認する。
 
 **主防御ではない** (主防御は契約起草時の workflow + design-stages 段階)。本観点はレビュー時に **見落とされていた違反を捕捉する補強策**。
 
@@ -109,7 +109,7 @@ grep -l '\xef\xbf\xbd' evidence/REQ-XXX/latest/stages/*.log
 
 `U+FFFD` が見つかった場合、command の stdout / stderr が UTF-8 として復号できなかった (cp932 や別 encoding で出力されていた可能性)。対処:
 
-1. 該当 contract の `runtime` を確認、capability checklist (§12.5.5) を再適用
+1. 該当 contract の `runtime` を確認、capability checklist (段階設計プロンプト §5.5) を再適用
 2. PowerShell なら `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` 設定漏れ、Python なら `PYTHONUTF8=1` 設定漏れ、bash なら `LC_ALL=C.UTF-8` 設定漏れ等を疑う
 3. `skills/source/lint/check-command-contract.{ps1,py}` の C6 check を実行して機械検査
 
@@ -117,7 +117,7 @@ advisory として `knowledge.jsonl` に `kind: inferred_fact` + `source_type: i
 
 #### θ / ι 適用確認: contract.runtime field の存在
 
-`verification_type=command` 契約に `runtime` field が **存在しない / 未確定 / 「any」等の曖昧表現**の場合、§6.5 + §12.5.5 が適用不能。proposal adopt 前に runtime を 1 つに確定すべき。
+`verification_type=command` 契約に `runtime` field が **存在しない / 未確定 / 「any」等の曖昧表現**の場合、§6.5 + 段階設計プロンプト §5.5 が適用不能。proposal adopt 前に runtime を 1 つに確定すべき。
 
 #### lint helper script 実行
 
@@ -161,7 +161,7 @@ exit 0 (fix-required findings なし、advisory note があっても 0) なら a
 - ❌ `Edit` / `Write` tool で `.quality-system/policy.json` を直接編集
 - ❌ 直接編集で waiver を追加 (`knowledge.jsonl` の append を含む)
 
-✅ 代わりに: `python -m qgb patch` (JSON Patch、atomic swap)、`python -m qgb add-waiver`、`python -m qgb add-knowledge` 経由。Phase 2 で確立した構造化編集規律 (誤った中途状態を作らない、atomic 性を保つ)。
+✅ 代わりに: `python -m qgb patch` (JSON Patch、atomic swap)、`python -m qgb add-waiver`、`python -m qgb add-knowledge` 経由。Phase 2 で確立した構造化編集規律 (誤った中途状態を作らない、atomic 性を保つ)。なお scaffold 直後の placeholder を実値に初めて充填する行為は「contract の設計」(作業手順 §6.2 step 4) であり本禁止の対象ではない — 線引きは作業手順 §6.4 参照。
 
 ### 4.4 ❌ 他プロジェクトとの比較で ALLOW 水準を語る
 
