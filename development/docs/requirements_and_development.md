@@ -1,10 +1,10 @@
-# quality-gate-builder 要件定義書・基本設計書 v0.3
+# quality-gate-builder 要件定義書・基本設計書 v0.4
 
 ## 1. 文書概要
 
 ### 1.1 文書名
 
-quality-gate-builder 要件定義書・基本設計書 v0.3
+quality-gate-builder 要件定義書・基本設計書 v0.4
 
 ### 1.2 目的
 
@@ -12,7 +12,19 @@ quality-gate-builder 要件定義書・基本設計書 v0.3
 
 本システムは、LLM による生成物や評価を無条件に信頼するのではなく、要求、機械的契約、自動テスト、証跡、ユーザー判断を組み合わせることで、成果物の採用可否を説明可能にすることを目的とする。
 
-### 1.3 v0.3 での主な更新点
+### 1.3 v0.4 での主な更新点
+
+本版は Phase 5 (Skill Creator 化) の完結を設計正本へ反映した。主な変更：
+
+- A1' 単一正本 (`skills/source/body.md` + `metadata.yaml`) と決定論 converter を本実装し、Claude Code / Codex CLI × full / split の 4 成果物を生成可能にした
+- `skill-v0.1.0`〜`skill-v0.1.5` をリリースし、各版 4 zip の生成・検証・GitHub Releases 公開を release pipeline に固定した
+- install UX (`INSTALL.md`、`setup-qgb.ps1` / `.sh`) と、golden 48 files、lock / golden / POSIX setup を含む CI 検証を確立した
+- 2 回の canary と Claude split / Codex full+split dogfood を完走し、発見を v0.1.2〜v0.1.5 へ反映する改善ループを実証した
+- 同一タスクで Codex full 103.6k tokens、split 46.4k tokens を実測し、必要な helper のみ読む split economy を定量確認した
+- 思想憲章を v2.0 へ改訂し、P12「評価系もまた設計物である」を追加、P6 を監査可能性と利害独立へ再接地した
+- Phase 5 の全 Step (5.a〜5.e) を 2026-07-05 に完結し、テストは Phase 3 末の 753 件から 846 件へ増加した
+
+(参考) v0.3 での主な更新点:
 
 本版は v0.2 を全面改訂し、設計判断の整理と関連文書の分離を行った。主な変更：
 
@@ -59,6 +71,8 @@ quality-gate-builder 要件定義書・基本設計書 v0.3
 - `project-background.md` — 本プロジェクトの経緯
 - `wakaba-talk-summary.md` — 着想の起点となった発表資料のまとめ
 - `yaoyorozu-system-references.md` — 参考実装の情報
+- `roadmap-2026-07.md` — 今後の展望 (計画スナップショット)
+- `ci-examples.md` — 利用者運用 CI 参考例
 - `requirements_and_development.v0.2.md` — 前版（履歴保存）
 
 ---
@@ -1359,14 +1373,14 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 **サブステップ:**
 
-- **Step 3.0 detect 廃止 + project-context 導入** (規模 2.0〜2.5) — **✅ 完結 2026-06-22** (詳細は `journal/phase3-step3-0.md` / detailed-design.md §15 改訂履歴 0.27)
+- **Step 3.0 detect 廃止 + project-context 導入** (規模 2.0〜2.5) — **✅ 完結 2026-06-22** (詳細は `journal/phase3-step3-0.md` / detailed-design.md §16 改訂履歴 0.27)
   - `qgb detect` / `qgb/core/detect.py` / `qgb/adapters/` 削除
   - `.quality-system/project-context.json` 新設 (機械正本、schema 検証可能)
   - 既存 `.quality-system/knowledge/project-context.md` は人間正本として温存
   - `qgb design-stages propose-context` の出力から `detect` フィールド削除、`project_context` フィールド追加
   - 補佐 Agent (利用者環境の LLM) が md → json 変換、本番 LLM (Phase 5 スキル) が propose-context → proposal 生成、の二重 LLM 構造
   - `source_metadata.generated_by` で「人間 / agent-assisted」を区別、`human_reviewed: bool` で人間承認状態を表現
-- **Step 3.1 command runner 強化 + CI 雛形** (規模 1.5〜2.0) — **✅ 完結 2026-06-24** (詳細は `journal/phase3-step3-1.md` / detailed-design.md §15 改訂履歴 0.28)
+- **Step 3.1 command runner 強化 + CI 雛形** (規模 1.5〜2.0) — **✅ 完結 2026-06-24** (詳細は `journal/phase3-step3-1.md` / detailed-design.md §16 改訂履歴 0.28)
   - `qgb/core/runner.py` の `_run_command` を `qgb/core/command.py` に切り出し (P9)
   - Popen + process tree kill (Windows: ctypes 経由 Job Objects + transactional spawn + fallback / POSIX: setsid + killpg)
   - `.bat` / `.cmd` argument escaping (cmd.exe メタ文字 + MSVCRT argv parsing の二段、argv[0] を含む全 item に均一適用)
@@ -1375,7 +1389,7 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
   - CI 雛形 (`.github/workflows/test.yml`): pytest only、windows-latest + ubuntu-latest × Python 3.10 + 3.12 matrix、actions/checkout + actions/setup-python の commit SHA pin、permissions: contents: read、persist-credentials: false、timeout-minutes: 20、third-party action ゼロ、secrets 不使用、Dependabot/Renovate なし、`SECURITY.md` で SHA pin 更新規約明文化
   - 補修 7 件で **ステート不在化** 観点に転換 (supervisor 観測契機 ≠ 最終結果、`_CapExceededState` Lock 保護、WindowsJob transactional cleanup、reader.join timeout なしの OS+stdlib 契約信頼)
   - 異常時の責務分離を `framework-shape.md` §7.4 で明文化 (process tree partial survivor は qgb 責務外、ドメイン依存性の前置きを明示)
-- **Step 3.2 依存解決固定** (規模 0.9〜1.5 上方修正、実績 1.6 弱) — **✅ 完結 2026-06-26** (詳細は `journal/phase3-step3-2.md` / detailed-design.md §15 改訂履歴 0.29)
+- **Step 3.2 依存解決固定** (規模 0.9〜1.5 上方修正、実績 1.6 弱) — **✅ 完結 2026-06-26** (詳細は `journal/phase3-step3-2.md` / detailed-design.md §16 改訂履歴 0.29)
   - `pip-tools` (`pip-compile`) で `requirements.lock` (runtime 149 行) + `requirements-dev.lock` (dev 298 行、`-c requirements.lock` で layered + `--allow-unsafe` で pip/setuptools/wheel 含む) を Windows × Python 3.10 生成
   - CI に `--require-hashes --only-binary :all:` install (sdist 任意コード実行面排除) + `--no-build-isolation` editable install (build path も hash 経路に閉じる) + `lock-integrity` job (Windows × Python 3.10 で committed lock を seed に regen + `tools/diff_locks.py` で header strip + 改行正規化 body 比較) を統合
   - `tests/test_lock_integrity.py` 11 件で lock 静的構造検証、`.gitattributes` で `requirements*.lock` LF 固定の二重防御
@@ -1405,16 +1419,32 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 ### Phase 5: Skill Creator 化（エージェント中立、adapter なしで設計）
 
-- スキル中間表現 `skills/source/` の整備 (A1' 単一正本: `body.md` + `metadata.yaml` + `metadata.schema.json`、Phase 5 Step 5.a-2-2 で確定)。`workflow.md` / `references.md` / `prompts/design-stages.md` / `prompts/review-policy.md` は `skills/source/` には存在せず、body.md include marker から converter が split build で機械生成
-- コンバータ `tools/build_skill.py` の実装 (集合分離契約 + marker path 安全性 + golden fixture 検証)
-- Claude Code 向け成果物 (`SKILL.md` + 補助ファイル) の生成 (full/split 両モード)
-- Codex CLI 向け成果物 (`SKILL.md` + 補助ファイル、Agent Skills 標準準拠) の生成 (full/split 両モード)
-- supported 2 agent × 2 mode = 計 4 成果物 の CI ビルドと GitHub Releases へのアタッチ
-- 段階設計フェーズ（パターン B / C）の自律実行
-- 設計例パック few-shot 参照 (Phase 2 で 6 例完成済み、Phase 5 で必要に応じて追加: prompt-collection / terraform-modules / sql-schemas / legal-templates / mixed-devops 等の言語非依存ドメイン)
-- supported 2 agent 向け運用ガイド（インストール・更新・トラブルシューティング）
-- **スキルが対象プロジェクトを Read で読んで分析** (adapter なし、対象理解は LLM 責務、ALLOW/DENY は qgb の contract 実行結果で決まる)
-- 利用者プロジェクトに CI テンプレ (GitHub Actions 等) を生成する機能はスキルに含める (当初 Phase 4 の項目を吸収)
+> **Phase 5 全体完結 (2026-07-05)。** 全 Step (5.a〜5.e) を完結し、`skill-v0.1.0`〜`skill-v0.1.5` (各 4 zip) を公開、canary 2 回を完走した。横断レビューから派生した Track 2 では思想憲章 v2.0 (P12 新設、P6 再接地) を確定した。
+
+**計画項目の決着:**
+
+- ✅ スキル中間表現 `skills/source/` — A1' 単一正本 (`body.md` + `metadata.yaml` + schema) を実装。split helper は include marker から converter が生成
+- ✅ converter `tools/build_skill.py` — 決定論ビルド、封じ込め防御、BuildError 階層、48-file golden fixture を実装
+- ✅ Claude Code / Codex CLI 向け full / split — supported 2 agent × 2 mode の 4 成果物を生成・実走
+- ✅ CI build / release — `test.yml` に pytest 4 matrix + lock-integrity + golden-integrity + setup-script-posix、`release.yml` にタグ三点一致ガード + 両系譜検証 + job 間 artifact 非転送の再ビルド公開を実装
+- ✅ 段階設計フェーズ — pattern B の propose / adopt を含む実運用を canary で完走
+- **見送り:** 設計例パック追加 (prompt-collection 等) は既存 6 例で足りたため追加せず、実需待ちで Phase 6 判断
+- ✅ supported 2 agent の install / update 導線 — `INSTALL.md` + `setup-qgb.ps1` / `.sh`、venv-default、`-FromPath` / `--from-path` を提供
+- ✅ adapter なしの対象分析 — skill が対象を Read し、qgb は contract の機械実行と ALLOW / DENY 証跡を担う境界を実機確認
+- **見送り:** 利用者プロジェクトへの CI テンプレ生成機能は実需が出ず未実装。`ci-examples.md` への参照案内で代替し、Phase 6 で要否を判断
+
+**実施 Step:**
+
+- **5.a — 中間表現と authoring protocol:** A1'、command authoring protocol (θ)、capability-based dispatch (ι)、mojibake sentinel (κ)、Python / PowerShell lint parity を確立 (`journal/phase5-step5-a-2.md`)
+- **横断レビュー + Track 2:** Fable 5 横断レビューで計画を再構築し、Issue #26 を経て思想憲章 v2.0 を確定 (`journal/phase5-fable5-cross-review.md`、`journal/phase5-track2-charter-p12-draft.md`)
+- **5.b — converter:** digest 8 カテゴリの length-prefix、stdlib frontmatter serializer、`SOURCE_DATE_EPOCH` 二系譜、48-file golden と CI integrity を確立 (`journal/phase5-step5-b.md`)
+- **5.c / 5.c-1 — release + install:** dry-run 可能な release pipeline、v0.1.0、install UX、v0.1.1 を公開 (`journal/phase5-step5-c.md`、`journal/phase5-step5-c-1-prejournal.md`)
+- **5.d — canary:** canary #1 / #2 の発見を v0.1.2〜v0.1.4 に反映。設営者と受験者の系統分離、および利用者代表が文言だけで完走できる合格線を確立 (`journal/phase5-step5-d-canary1.md`、`journal/phase5-step5-d-canary2.md`)
+- **5.e — dogfood:** POSIX setup、PS5 日本語、A1' 伝播、Claude split、Codex full / split の全 5 items に合格。full 103.6k vs split 46.4k tokens を実測し、発見 6 件を v0.1.5 に反映 (`journal/phase5-step5-e.md`、`journal/phase5-v0-1-5.md`)
+
+**Phase 5 完結条件:** 4 成果物の決定論生成・配布、2 回の canary、全 dogfood cell、Issues #26〜#30 close、CI 緑、テスト 846 件を確認した。これにより Skill Creator 化の機構・配布・実運用検証・改善ループが一巡した。
+
+Phase 6 以降の候補は `roadmap-2026-07.md` を参照。
 
 ---
 

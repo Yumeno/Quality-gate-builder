@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Phase 1 (Python CLI MVP) と Phase 2 ("編集を安全にする") は完結。**Phase 3 ("機械責務側の最終整備") も 2026-06-26 に完結**。Step 3.0 (`detect` 廃止 + project-context 二重ファイル設計、2026-06-22) / Step 3.1 (command runner 強化 + CI 雛形 + 補修 1〜7、2026-06-24) / Step 3.2 (依存解決固定 / lock + hash + CI lock-integrity job + 利用者運用との境界整理、2026-06-26) すべて完結。Step 3.3 (Phase 2 繰越実需回収) は任意で Phase 5 実需待ち。次は Phase 5 (Skill Creator 化)。See `development/docs/detailed-design.md` §14 for the Phase 3 plan, `development/docs/requirements_and_development.md` §13 for the phase overview, and `development/docs/journal/phase3-step3-2.md` for the latest completed Step's record.
+Phase 1 (Python CLI MVP)、Phase 2 ("編集を安全にする")、Phase 3 ("機械責務側の最終整備"、2026-06-26) に続き、**Phase 5 (Skill Creator 化) も 2026-07-05 に全 Step (5.a〜5.e) 完結**。思想憲章は v2.0 (P12「評価系もまた設計物である」追加)。skill は v0.1.0〜v0.1.5 を GitHub Releases で公開済み (claude/codex × full/split の 4 zip、決定論ビルド + golden 照合 + 両系譜リリース検証)。canary 2 回 (機構検証 + Sonnet ブラインド実運用) と dogfood 全セルの発見はすべて回収済み (Issues #26〜#30 close)。Step 3.3 (Phase 2 繰越実需回収) は実需が出ず再評価待ち。**今後の計画は `development/docs/roadmap-2026-07.md`** (次の最優先は同書 §3 参照)。総括は `development/docs/journal/phase5-completion.md`、要件は `requirements_and_development.md` §13、実装記録は `detailed-design.md` §15。
 
 The authoritative documents in priority order:
 
 1. `development/docs/philosophy.md` — the 思想憲章 (philosophy charter, 12 不易). All other documents are subordinate.
-2. `development/docs/requirements_and_development.md` — 要件定義書・基本設計書 v0.3 (Phase 3 完結反映済み, §1.3 / §13 / §14).
-3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.29 as of 2026-06-26, Step 3.2 完結 + Phase 3 全体完結反映).
+2. `development/docs/requirements_and_development.md` — 要件定義書・基本設計書 v0.4 (Phase 5 完結反映済み, §1.3 / §13).
+3. `development/docs/detailed-design.md` — Phase-by-Step implementation record (v0.30 as of 2026-07-05, §15 Phase 5 実装記録 + §16 改訂履歴).
 4. `development/docs/framework-shape.md` — Layer 1〜4 境界 (Phase 3 Step 3.0 で Layer 3 スキル責務文言改訂、Step 3.1 で §4 command runner 動作契約節 + §7.4 異常時の責務分離を追加).
 5. `development/docs/stage-design.md` — 段階設計フェーズ仕様.
 
@@ -105,22 +105,31 @@ development/
                # journal/phase*-step*.md (every Step's prejournal + completion record)
 examples/      # generic-minimal, python-cli-pytest, markdown-docs,
                # python-fastapi-pytest, go-cli, node-cli-vitest (6 examples)
-skills/source/ # Phase 5 中間表現 (現在は README.md だけ予約)
+               # (repo 内のみ。skill 配布物には同梱されない — v0.1.4 で明文化)
+skills/source/ # Phase 5 A1' 単一正本: body.md + metadata.yaml + metadata.schema.json
+               # + lint/ (check-command-contract.{py,ps1} 両実装) + hooks/
+               # helper (workflow.md 等) はここに存在しない — body.md の include
+               # marker から converter が split build で機械生成する
 tests/
-tools/         # CI 補助 script (qgb package 外、Phase 5 で skills builder も)
-               #   - diff_locks.py: pip-compile lock の header strip + 改行正規化 + body 比較
-                 #                   (Phase 3 Step 3.2 で `lock-integrity` CI job 用に新設)
-pyproject.toml
+tools/         # qgb package 外の補助 script
+               #   - build_skill.py: converter (決定論ビルド、4 セル生成、Phase 5)
+               #   - regen_golden.py: golden 再生成 (メンテナ用)
+               #   - _golden/: committed golden 48 files (CI が毎 push 照合)
+               #   - diff_locks.py: pip-compile lock の header strip + body 比較
+pyproject.toml # version は skill リリースと lockstep (v0.1.4 以降、release CI が機械検証)
 requirements.lock      # runtime 依存 + 推移依存 (Phase 3 Step 3.2、Windows × Python 3.10 生成)
 requirements-dev.lock  # dev 依存 (layered `-c requirements.lock` + `--allow-unsafe`)
 .gitattributes         # requirements*.lock を LF 固定 (Phase 3 Step 3.2)
-.github/workflows/test.yml  # CI: pytest 4 matrix + lock-integrity job (Phase 3 Step 3.1+3.2)
+.github/workflows/test.yml  # CI: pytest 4 matrix + lock-integrity + golden-integrity
+                            #     + setup-script-posix (Phase 3 Step 3.1+3.2, Phase 5 5.b/5.e)
+.github/workflows/release.yml  # skill-v* タグ → タグ三点一致ガード (tag=metadata=pyproject)
+                               #  + 両系譜検証 → 4 zip を GitHub Release へ (Phase 5 5.c)
 SECURITY.md            # Action SHA Pin Policy + Dependency Lock Policy + Vulnerability Reporting
 ```
 
 There is **no `qgb/adapters/`** — withdrawn 2026-06-21 (Phase 3 Step 3.0). Target understanding is Phase 5 skill responsibility.
 
-## CLI surface (current as of Phase 3 Step 3.0)
+## CLI surface (current as of Phase 5 完結時点)
 
 Required (Phase 1〜2 で確立、すべて実装済み):
 
