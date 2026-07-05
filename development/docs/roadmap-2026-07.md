@@ -21,7 +21,7 @@ Fable 5 (メインループ担当) の利用可能期間の区切りにあたり
 ## 3. 直近の作業 (順序込みの推奨計画)
 
 1. ~~**v0.1.5** (Issue #30)~~ — **完了 (2026-07-05、release skill-v0.1.5、journal `phase5-v0-1-5.md`)**
-2. **Phase 5 完結のドキュメント現実化**: requirements_and_development.md §13 / detailed-design.md / CLAUDE.md / framework-shape.md (必要なら) を Phase 5 完結状態に揃え、完結 journal を書く。「ドキュメントは Phase ごとに現実装へ揃える」規律 (CLAUDE.md) の対象。**次の指揮モデルの最初の作業として推奨** (全材料は journal に揃っており、文脈確認と執筆だけで完結する)。
+2. ~~**Phase 5 完結のドキュメント現実化**~~ — **完了 (2026-07-05、commit `d9197ef`)**: requirements v0.4 / detailed-design v0.30 (§15 実装記録 + §16 改訂履歴) / CLAUDE.md / journal `phase5-completion.md` (総括)。**Phase 5 は宣言まで含めて完結**。
 3. (任意) CI matrix への **Python 3.11 追加の再判断** — test.yml に「Phase 5 提供前に再判断」と明記した宿題。判断だけでも記録する。
 
 ## 4. 中期 (Phase 6 候補領域)
@@ -61,7 +61,7 @@ Fable 5 の window 終了後も、体制は**役割で定義**されており代
 | 項目 | 状態 | 出所 |
 |---|---|---|
 | v0.1.5 文言バッチ | ✅ 完了 (Issue #30 close、release skill-v0.1.5) | 5.e item 1 |
-| Phase 5 完結ドキュメント現実化 | 未起票 (直近作業 §3-2、**次の最優先**) | CLAUDE.md 規律 |
+| Phase 5 完結ドキュメント現実化 | ✅ 完了 (2026-07-05、`d9197ef`) | CLAUDE.md 規律 |
 | CI 3.11 再判断 | 未起票 (判断のみでも可) | test.yml 内コメント |
 | wheel 添付 → PyPI + 名前防衛 | 未起票 (Phase 6) | 5.c 配布の階段 |
 | Step 3.3 再評価 | 未起票 | Phase 3 繰越 |
