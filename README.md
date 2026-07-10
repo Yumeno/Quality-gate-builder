@@ -139,8 +139,12 @@ Windows PowerShell 5 が第一級環境 (NF-004)、POSIX が第二ターゲッ�
 ## Status
 
 - Phase 1 (CLI MVP) / Phase 2 (構造化編集) / Phase 3 (機械責務側の整備: command runner 強化、依存 lock + hash、project-context 二重ファイル) — 完結
-- **Phase 5 (Skill Creator 化) — 全 Step 完結 (2026-07-05)**: 憲章 v2.0 (P12 追加)、skill 単一正本 + 決定論 converter + release pipeline、skill v0.1.0〜v0.1.5 公開 (canary 2 回 + dogfood 全セルの発見をすべて反映済み)、canary 2 回合格 (機構検証 + ブラインド実運用)、dogfood 全セル消化 (POSIX CI / PS5 日本語実走 / claude split / codex smoke)
+- **Phase 5 (Skill Creator 化) — 全 Step 完結 (2026-07-05)**: 憲章 v2.0 (P12 追加)、skill 単一正本 + 決定論 converter + release pipeline、skill v0.1.5 まで公開 (5 リリース、v0.1.3 のみタグ未発行で v0.1.4 に統合。canary 2 回 + dogfood 全セルの発見をすべて反映済み)、canary 2 回合格 (機構検証 + ブラインド実運用)、dogfood 全セル消化 (POSIX CI / PS5 日本語実走 / claude split / codex smoke)
 - 今後: [`roadmap-2026-07.md`](development/docs/roadmap-2026-07.md) 参照 (Phase 5 完結ドキュメント現実化、配布の階段、実運用 dogfood ほか)
+
+## Acknowledgements
+
+qgb の思想的な出発点は、**wakabadou** さんによる品質保証と LLM 開発についての発表・議論にあります (経緯: [`development/docs/wakaba-talk-summary.md`](development/docs/wakaba-talk-summary.md)、[`development/docs/project-background.md`](development/docs/project-background.md))。思想憲章の理念原案への貢献に感謝します。
 
 ## License
 

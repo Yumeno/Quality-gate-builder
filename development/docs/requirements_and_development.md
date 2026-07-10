@@ -17,7 +17,7 @@ quality-gate-builder 要件定義書・基本設計書 v0.4
 本版は Phase 5 (Skill Creator 化) の完結を設計正本へ反映した。主な変更：
 
 - A1' 単一正本 (`skills/source/body.md` + `metadata.yaml`) と決定論 converter を本実装し、Claude Code / Codex CLI × full / split の 4 成果物を生成可能にした
-- `skill-v0.1.0`〜`skill-v0.1.5` をリリースし、各版 4 zip の生成・検証・GitHub Releases 公開を release pipeline に固定した
+- `skill-v0.1.5` まで 5 リリース (v0.1.3 はタグ発行の行き違いで取り消され、内容は v0.1.4 に統合)を発行し、各版 4 zip の生成・検証・GitHub Releases 公開を release pipeline に固定した
 - install UX (`INSTALL.md`、`setup-qgb.ps1` / `.sh`) と、golden 48 files、lock / golden / POSIX setup を含む CI 検証を確立した
 - 2 回の canary と Claude split / Codex full+split dogfood を完走し、発見を v0.1.2〜v0.1.5 へ反映する改善ループを実証した
 - 同一タスクで Codex full 103.6k tokens、split 46.4k tokens を実測し、必要な helper のみ読む split economy を定量確認した
@@ -1419,7 +1419,7 @@ Phase 1 は以下を満たした場合に受け入れ可能とする：
 
 ### Phase 5: Skill Creator 化（エージェント中立、adapter なしで設計）
 
-> **Phase 5 全体完結 (2026-07-05)。** 全 Step (5.a〜5.e) を完結し、`skill-v0.1.0`〜`skill-v0.1.5` (各 4 zip) を公開、canary 2 回を完走した。横断レビューから派生した Track 2 では思想憲章 v2.0 (P12 新設、P6 再接地) を確定した。
+> **Phase 5 全体完結 (2026-07-05)。** 全 Step (5.a〜5.e) を完結し、`skill-v0.1.5` まで 5 リリース (v0.1.3 はタグ発行の行き違いで取り消され、内容は v0.1.4 に統合) (各 4 zip) を公開、canary 2 回を完走した。横断レビューから派生した Track 2 では思想憲章 v2.0 (P12 新設、P6 再接地) を確定した。
 
 **計画項目の決着:**
 

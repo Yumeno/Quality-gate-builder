@@ -76,10 +76,20 @@ non-zero so a compromised pin commit looks anomalous in `git log`.
    ```
    Do not rely on the GitHub UI for the SHA — copy it from the API
    response or `git ls-remote`.
-2. Edit `.github/workflows/test.yml`:
+2. Edit `.github/workflows/test.yml` (and `release.yml`, which uses the
+   same pins):
    - Replace the SHA in the `uses:` line.
    - Update the comment line above it with the new tag and date.
 3. Update this file's pin table.
+3b. Update the repository Actions allowlist to the new pins. The repo
+   settings restrict runnable actions to exactly the pinned SHAs
+   (`allowed_actions: selected` with `patterns_allowed`); a pin bump
+   without this step will fail CI by design:
+   ```
+   gh api -X PUT repos/<owner>/<repo>/actions/permissions/selected-actions \
+     -f "patterns_allowed[]=actions/checkout@<SHA>" \
+     -f "patterns_allowed[]=actions/setup-python@<SHA>"
+   ```
 4. Commit as a **single-purpose commit** with the subject:
    ```
    CI: bump actions/<name> from <SHA1> to <SHA2> (<reason>)

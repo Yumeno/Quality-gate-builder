@@ -11,7 +11,7 @@
 
 ## 2. 数字での総括
 
-- 期間: 8 日間 (2026-06-28〜07-05)。リリース 6 本 (v0.1.0〜v0.1.5)、Issues #26〜#30 全 close
+- 期間: 8 日間 (2026-06-28〜07-05)。リリース 5 本 (v0.1.0/0.1.1/0.1.2/0.1.4/0.1.5 — **v0.1.3 はタグ発行の行き違いで取り消され、版番号のみ存在。内容は v0.1.4 に含めて配布**)、Issues #26〜#30 全 close
 - テスト 753 → 846 (+93)。CI job 4 → 6 種 (golden-integrity / setup-script-posix 追加)、release workflow 新設
 - canary 2 回 (Fable 5 機構検証 / Sonnet ブラインド実運用)、dogfood 5 セル全消化
 - 発見→反映のループ: canary/dogfood で見つかった skill 欠陥・摩擦 **19 件** (Issue #28: 4、#29: 6+1、#30: 6、その他 2) をすべて回収し、**積み残しゼロ**で完結
@@ -52,7 +52,7 @@
 | 条件 | 状態 |
 |---|---|
 | 5.a〜5.e 全 Step 完結 | ✅ (各 journal) |
-| skill リリース (2 agent × 2 mode) | ✅ v0.1.0〜0.1.5、各 4 zip |
+| skill リリース (2 agent × 2 mode) | ✅ v0.1.5 まで 5 リリース、各 4 zip (v0.1.3 はタグ未発行、v0.1.4 に統合) |
 | canary / dogfood の発見の全回収 | ✅ 積み残しゼロ (Issues #28〜#30 close) |
 | 憲章・spec・README の現実化 | ✅ 本 commit (requirements v0.4 / detailed-design v0.30 / CLAUDE.md / README) |
 | CI 全緑 | ✅ (test 6 job + release 両系譜) |
