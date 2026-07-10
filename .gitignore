@@ -43,3 +43,6 @@ Thumbs.db
 
 # qgb skill build artifacts (Phase 5)
 dist/skills/
+
+# local drafts (articles etc., not committed)
+drafts/
