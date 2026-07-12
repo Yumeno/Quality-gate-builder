@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.5
+  skill_version: 0.1.6
   converter_version: 0.1.1
-  build_input_digest: 6c3b5b83d915af62
+  build_input_digest: e19b3516e5bbe5a8
 -->
 
 ## 7. 参照集
