@@ -181,6 +181,274 @@ This is operator policy, not qgb policy.
 
 ---
 
+## Pattern F — Evidence-to-source binding snapshot (short-term answer to Issue #32)
+
+qgb's `gate.json` records what was executed and what passed, but it does
+NOT self-describe *which revision of the sources it judged* (no
+provenance block yet — Issue #32 tracks the design space). The binding
+is an operational discipline: run the gate, then immediately fix the
+evidence and the sources in the same commit. Nothing detects it when
+that discipline slips.
+
+This pattern converts the discipline into a recorded snapshot: a sidecar
+JSON next to the curated evidence, capturing the VCS revision and a
+digest of the gate's configuration files. A later auditor can then check
+what HEAD and which contract/policy bytes the run saw.
+
+Two caveats, stated plainly:
+
+- The sidecar is written by YOUR wrapper, not by qgb — its integrity is
+  your responsibility, and it proves nothing about files it does not
+  hash. The digest below covers the gate *configuration*
+  (contract + policy), not the full input closure of your checks.
+- This is a **git-specific reference profile**. qgb itself does not
+  assume git (a target project may use no VCS at all). A manifest-based
+  variant for non-git projects follows.
+
+The sidecar is written NEXT TO `latest/` (not inside it) because qgb
+owns the contents of `latest/` and replaces the whole directory
+atomically on the next run.
+
+The sidecar shape is shared across all three variants below:
+
+```json
+{
+  "snapshot_kind": "git",
+  "taken_at": "2026-07-12T03:15:00+09:00",
+  "qgb_exit_code": 0,
+  "vcs": {
+    "kind": "git",
+    "revision": "b1c2d3e4f5a6...",
+    "dirty": false
+  },
+  "configuration_digest": {
+    "algorithm": "sha256",
+    "files": {
+      ".quality-system/policy.json": "9f2c...",
+      ".quality-system/contracts/REQ-APP-001/L1-static.json": "3a7e..."
+    }
+  }
+}
+```
+
+(non-git projects use `"vcs": {"kind": "none"}` — see F-3.) The field is
+named `configuration_digest`, not `input_digest` or `source_digest` —
+it deliberately does not claim to cover every file your checks read.
+
+### F-1 git snapshot wrapper (PowerShell)
+
+```powershell
+# run-with-provenance.ps1
+# Usage: .\run-with-provenance.ps1 -ReqId REQ-APP-001 [-RequireClean]
+param(
+    [Parameter(Mandatory = $true)][string]$ReqId,
+    [switch]$RequireClean
+)
+
+$ErrorActionPreference = 'Stop'
+
+if ($RequireClean) {
+    $status = git status --porcelain
+    if ($status) {
+        Write-Error "Working tree is dirty; -RequireClean was requested. Commit or stash first."
+        exit 1
+    }
+}
+
+# Run qgb; capture its exit code without letting PowerShell's own
+# error preference mask it.
+& .venv\Scripts\python.exe -m qgb run $ReqId --yes
+$qgbExitCode = $LASTEXITCODE
+
+$revision = (git rev-parse HEAD).Trim()
+# Exclude paths that the gate run itself (and this wrapper) legitimately
+# mutates -- evidence, volatile artifacts, and the sidecar. Without the
+# exclusion, dirty would be true after every run and the field would
+# carry no information about the SOURCES the gate judged.
+$dirty = [bool](git status --porcelain -- ':(exclude).quality-system/evidence' ':(exclude).quality-system/artifacts')
+
+$configFiles = @()
+$configFiles += Get-ChildItem -Path ".quality-system\contracts\$ReqId" -Filter *.json -File -ErrorAction SilentlyContinue
+if (Test-Path ".quality-system\policy.json") {
+    $configFiles += Get-Item ".quality-system\policy.json"
+}
+
+$digest = [ordered]@{}
+foreach ($f in $configFiles) {
+    $relPath = (Resolve-Path -Relative $f.FullName) -replace '^\.\\', '' -replace '\\', '/'
+    $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLower()
+    $digest[$relPath] = $hash
+}
+
+$sidecar = [ordered]@{
+    snapshot_kind = "git"
+    taken_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
+    qgb_exit_code = $qgbExitCode
+    vcs = [ordered]@{
+        kind = "git"
+        revision = $revision
+        dirty = $dirty
+    }
+    configuration_digest = [ordered]@{
+        algorithm = "sha256"
+        files = $digest
+    }
+}
+
+$outPath = ".quality-system\evidence\$ReqId\latest.provenance.json"
+$json = $sidecar | ConvertTo-Json -Depth 10
+# Write BOM-less UTF-8 explicitly; PowerShell 5's default Out-File
+# encoding is not UTF-8-without-BOM.
+[System.IO.File]::WriteAllText((Resolve-Path -Path (Split-Path $outPath -Parent)).Path + "\" + (Split-Path $outPath -Leaf), $json, (New-Object System.Text.UTF8Encoding($false)))
+
+exit $qgbExitCode
+```
+
+### F-2 git snapshot wrapper (bash)
+
+```bash
+#!/usr/bin/env bash
+# run-with-provenance.sh
+# Usage: ./run-with-provenance.sh REQ-APP-001 [--require-clean]
+set -euo pipefail
+
+req_id="$1"
+require_clean="${2:-}"
+
+if [ "$require_clean" = "--require-clean" ]; then
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "Working tree is dirty; --require-clean was requested. Commit or stash first." >&2
+        exit 1
+    fi
+fi
+
+# Run qgb; capture its exit code without letting `set -e` short-circuit
+# the rest of the snapshot logic.
+qgb_exit_code=0
+.venv/bin/python -m qgb run "$req_id" --yes || qgb_exit_code=$?
+
+revision="$(git rev-parse HEAD)"
+# Same exclusion rationale as the PowerShell variant above.
+if [ -n "$(git status --porcelain -- ':(exclude).quality-system/evidence' ':(exclude).quality-system/artifacts')" ]; then
+    dirty=true
+else
+    dirty=false
+fi
+
+taken_at="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+
+files_json="{}"
+config_files=(".quality-system/policy.json")
+if [ -d ".quality-system/contracts/$req_id" ]; then
+    while IFS= read -r -d '' f; do
+        config_files+=("$f")
+    done < <(find ".quality-system/contracts/$req_id" -name '*.json' -print0)
+fi
+
+entries=()
+for f in "${config_files[@]}"; do
+    [ -f "$f" ] || continue
+    hash="$(sha256sum "$f" | cut -d' ' -f1)"
+    entries+=("\"$f\": \"$hash\"")
+done
+files_json="{$(IFS=,; echo "${entries[*]}")}"
+
+cat > ".quality-system/evidence/$req_id/latest.provenance.json" <<EOF
+{
+  "snapshot_kind": "git",
+  "taken_at": "$taken_at",
+  "qgb_exit_code": $qgb_exit_code,
+  "vcs": {
+    "kind": "git",
+    "revision": "$revision",
+    "dirty": $dirty
+  },
+  "configuration_digest": {
+    "algorithm": "sha256",
+    "files": $files_json
+  }
+}
+EOF
+
+exit "$qgb_exit_code"
+```
+
+### F-3 non-git manifest variant
+
+For projects that do not use git (or use a VCS qgb has no special
+knowledge of), maintain a `provenance-manifest.txt` listing one path
+per line (the files that matter for your judgment — typically the
+contracts and policy, optionally extending to the checked sources
+themselves). A small Python script reads that manifest and hashes each
+listed file into the same sidecar shape:
+
+```python
+#!/usr/bin/env python3
+# snapshot_provenance.py
+# Usage: python snapshot_provenance.py REQ-APP-001 --exit-code 0
+#
+# Run this immediately AFTER `qgb run`, not before — the digest must
+# reflect the files as they existed when qgb produced its evidence.
+import argparse
+import datetime
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("req_id")
+    parser.add_argument("--exit-code", type=int, required=True)
+    parser.add_argument("--manifest", default="provenance-manifest.txt")
+    args = parser.parse_args()
+
+    manifest_path = Path(args.manifest)
+    files: dict[str, str] = {}
+    if manifest_path.exists():
+        for line in manifest_path.read_text(encoding="utf-8-sig").splitlines():
+            rel = line.strip()
+            if not rel or rel.startswith("#"):
+                continue
+            p = Path(rel)
+            if p.is_file():
+                files[rel] = sha256_of(p)
+
+    sidecar = {
+        "snapshot_kind": "manifest",
+        "taken_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "qgb_exit_code": args.exit_code,
+        "vcs": {"kind": "none"},
+        "configuration_digest": {
+            "algorithm": "sha256",
+            "files": files,
+        },
+    }
+
+    out_dir = Path(".quality-system/evidence") / args.req_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "latest.provenance.json"
+    out_path.write_text(
+        json.dumps(sidecar, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+---
+
 ## What Phase 5 will likely add
 
 Once `skills/source/` and `tools/build_skill.py` exist

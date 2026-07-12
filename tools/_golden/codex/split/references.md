@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.6
+  skill_version: 0.1.7
   converter_version: 0.1.1
-  build_input_digest: e19b3516e5bbe5a8
+  build_input_digest: 817b442b8348de30
 -->
 
 ## 7. 参照集
@@ -40,4 +40,5 @@
 - マーケティング目的の対外品質指標として使ってはならない
 - 「他のプロジェクトでも qgb で ALLOW が出ているから同じ水準だ」は誤り
 - 各 ALLOW の意味は `gate.json.basis[]` と `decision.meaning` を読んで個別解釈する
+- ALLOW は**実行時点の**検査通過であり、その後のソース変更を検出しない。evidence とソースの対応づけは利用者運用の責務 (§6.1 step 9 の設計分岐で方針を決める)
 

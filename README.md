@@ -68,6 +68,8 @@ qgb 自身は LLM を一切呼びません。LLM (スキルを動かす agent) �
   artifacts/                                         # 揮発 run/check 出力 (.gitignore)
 ```
 
+なお `gate.json` は「どの時点のソースに対する判定か」を自己記述しません — evidence とソースの対応づけは利用者の運用 (run 直後の commit 等) で保ちます。運用を記録に変える参考実装が [`ci-examples.md` Pattern F](development/docs/ci-examples.md) に、本体機能としての provenance 検討が [Issue #32](https://github.com/Yumeno/Quality-gate-builder/issues/32) にあります。
+
 ## リポジトリ構成
 
 ```

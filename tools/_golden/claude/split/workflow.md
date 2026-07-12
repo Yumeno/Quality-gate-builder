@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.6
+  skill_version: 0.1.7
   converter_version: 0.1.1
-  build_input_digest: e19b3516e5bbe5a8
+  build_input_digest: 817b442b8348de30
 -->
 
 ## 6. 作業手順
@@ -44,6 +44,7 @@
 
 9. **設計分岐の提示: 判定履歴の保存方針** (§3.5 決定の所有権の型で、初期化時に一度だけ)
    - 機構の事実を開示する: `evidence/<REQ>/latest/` は次の `qgb run` で**上書き**され、`artifacts/` は揮発 (.gitignore + prune 対象)。過去の判定 — 特に DENY だった証跡 — を残したければ、上書き前にどこかへ固定する必要がある
+   - あわせて開示する: **gate.json は「どの時点のソースに対する判定か」を自己記述しない** (provenance 記録は将来検討)。evidence とソースの対応づけは運用 — 例: run 直後に evidence とソースを同一 commit に固定する — で保たれ、**qgb はその崩れを検証しない**。運用で守る場合の参考実装 (git 用スナップショット wrapper / 非 git 用 manifest) が qgb repo の `development/docs/ci-examples.md` Pattern F にある
    - 残すか・どう残すか (git commit のタイミング規約 / 別の VCS / アーカイブ / 「latest だけで十分」) は**利用者の設計判断**。git の利用を前提にしない
    - 選択した方針は §6.6 トリガ 1 (設計分岐の選択) として knowledge.jsonl に理由ごと記録する
 
