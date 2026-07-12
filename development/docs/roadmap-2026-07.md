@@ -5,7 +5,7 @@ Fable 5 (メインループ担当) の利用可能期間の区切りにあたり
 ## 1. 現在地
 
 - **Phase 1〜3 完結** (Python CLI MVP → 構造化編集 → 機械責務側の最終整備)。Phase 4 は欠番。
-- **Phase 5 (Skill Creator 化) は全 Step (5.a〜5.e) 完結** (2026-07-05、journal `phase5-step5-e.md` 総括)。skill リリース **v0.1.5 まで公開済み** (5 リリース — v0.1.3 はタグ発行の行き違いで取り消され v0.1.4 に統合。v0.1.5 = 5.e 発見 6 件の回収、2026-07-05、Issue #30 close)。canary #1 (Fable 5 運転・機構検証) / canary #2 (Sonnet 運転・ブラインド維持・実運用ワークフロー) とも合格。**canary + dogfood の発見はすべて skill に反映済み = 積み残しゼロ**。
+- **Phase 5 (Skill Creator 化) は全 Step (5.a〜5.e) 完結** (2026-07-05、journal `phase5-step5-e.md` 総括)。skill リリース **v0.1.6 まで公開済み** (6 リリース — v0.1.3 はタグ発行の行き違いで取り消され v0.1.4 に統合。v0.1.6 = TDD 実走 qgb_soukoban の発見 4 件の回収、2026-07-12、Issue #31 close。provenance は Issue #32 で Phase 6 検討中)。canary #1 (Fable 5 運転・機構検証) / canary #2 (Sonnet 運転・ブラインド維持・実運用ワークフロー) とも合格。**canary + dogfood の発見はすべて skill に反映済み = 積み残しゼロ**。
 - **Phase 5 全体の完結宣言は未実施** — 残るはドキュメント現実化のみ (§3)。
 - 思想憲章は **v2.0** (P12「評価系もまた設計物である」追加、P6 の根拠を監査可能性 + 利害独立に再接地)。
 

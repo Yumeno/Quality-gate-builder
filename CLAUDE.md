@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Phase 1 (Python CLI MVP)、Phase 2 ("編集を安全にする")、Phase 3 ("機械責務側の最終整備"、2026-06-26) に続き、**Phase 5 (Skill Creator 化) も 2026-07-05 に全 Step (5.a〜5.e) 完結**。思想憲章は v2.0 (P12「評価系もまた設計物である」追加)。skill は v0.1.5 まで GitHub Releases で公開済み (5 リリース — v0.1.3 のみタグ未発行で v0.1.4 に統合。claude/codex × full/split の 4 zip、決定論ビルド + golden 照合 + 両系譜リリース検証)。canary 2 回 (機構検証 + Sonnet ブラインド実運用) と dogfood 全セルの発見はすべて回収済み (Issues #26〜#30 close)。Step 3.3 (Phase 2 繰越実需回収) は実需が出ず再評価待ち。**今後の計画は `development/docs/roadmap-2026-07.md`** (次の最優先は同書 §3 参照)。総括は `development/docs/journal/phase5-completion.md`、要件は `requirements_and_development.md` §13、実装記録は `detailed-design.md` §15。
+Phase 1 (Python CLI MVP)、Phase 2 ("編集を安全にする")、Phase 3 ("機械責務側の最終整備"、2026-06-26) に続き、**Phase 5 (Skill Creator 化) も 2026-07-05 に全 Step (5.a〜5.e) 完結**。思想憲章は v2.0 (P12「評価系もまた設計物である」追加)。skill は v0.1.6 まで GitHub Releases で公開済み (6 リリース — v0.1.3 のみタグ未発行で v0.1.4 に統合。claude/codex × full/split の 4 zip、決定論ビルド + golden 照合 + 両系譜リリース検証)。canary 2 回 (機構検証 + Sonnet ブラインド実運用) と dogfood 全セルの発見はすべて回収済み (Issues #26〜#30 close)。Step 3.3 (Phase 2 繰越実需回収) は実需が出ず再評価待ち。**今後の計画は `development/docs/roadmap-2026-07.md`** (次の最優先は同書 §3 参照)。総括は `development/docs/journal/phase5-completion.md`、要件は `requirements_and_development.md` §13、実装記録は `detailed-design.md` §15。
 
 The authoritative documents in priority order:
 
