@@ -49,7 +49,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, BinaryIO
 
 from qgb.core.loader import LoaderError, resolve_project_relative
@@ -664,6 +664,51 @@ def _run_subprocess(
     )
 
 
+def _windows_shim_hint(
+    argv0: str, path_env: str | None, *, is_windows: bool
+) -> str | None:
+    """Issue #35: ``command not found`` 時の診断 hint を返す (なければ None)。
+
+    Windows で argv[0] が bare name (区切り文字なし・拡張子なし) かつ PATH 上に
+    ``<name>.cmd`` / ``<name>.bat`` が存在する場合だけ 1 行返す。``shutil.which``
+    は cwd 探索・PATHEXT・Python version 依存を持ち込むので使わず、PATH を
+    ``os.pathsep`` で分割して決定論的に探索する。解決・起動はしない (診断のみ)。
+    探索中の例外は握りつぶして None (本来の failed 経路を壊さない)。
+
+    拡張子判定は ``PurePath.suffix`` を使うため ``python3.12`` のような名前も
+    "拡張子あり" として None になる (誤 hint を出さない側に倒す)。``C:foo`` の
+    ようなドライブ相対名も ``:`` で除外する。PATH の相対エントリ (``.`` 等) は
+    子の cwd 基準か qgb の cwd 基準かが曖昧になるので探索しない。
+    """
+    if not is_windows or not path_env or not argv0:
+        return None
+    if (
+        "/" in argv0
+        or "\\" in argv0
+        or ":" in argv0
+        or PurePath(argv0).suffix != ""
+    ):
+        return None
+    try:
+        for entry in path_env.split(os.pathsep):
+            if not entry or not Path(entry).is_absolute():
+                continue
+            for ext in (".cmd", ".bat"):
+                candidate = Path(entry) / (argv0 + ext)
+                if candidate.is_file():
+                    return (
+                        f"hint: '{argv0}' is not an executable, but "
+                        f"'{candidate}' exists on PATH. qgb runs commands "
+                        "without a shell and does not resolve PATHEXT; write "
+                        f"the shim name explicitly (e.g. '{argv0}{ext}') or "
+                        "invoke the underlying runtime directly "
+                        f"(e.g. ['node', '<cli script>', ...])."
+                    )
+    except (OSError, ValueError):
+        return None
+    return None
+
+
 def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
     """Execute a ``verification_type=command`` stage.
 
@@ -779,15 +824,27 @@ def run_command(project_root: Path, stage: AdoptedStage) -> StageResult:
     log_lines.append("")
     log_lines.append("--- execution ---")
 
+    child_env = os.environ.copy()
     try:
         sub_result = _run_subprocess(
             argv=command_arg,
             cwd=str(cwd_path),
-            env=os.environ.copy(),
+            env=child_env,
             timeout_seconds=timeout_seconds,
         )
     except FileNotFoundError as exc:
         log_lines.append(f"command not found: {exc}")
+        # Issue #35: Windows の .cmd/.bat shim (npx 等) は CreateProcess で
+        # PATHEXT 解決されず not found になる。runner は argv を宣言どおりに
+        # 実行する責務なので解決・起動はせず、存在の事実だけを診断として残す。
+        # 判定 (failed / exit_code=None) は変えない。
+        hint = _windows_shim_hint(
+            command_arg[0],
+            child_env.get("PATH"),
+            is_windows=(os.name == "nt"),
+        )
+        if hint is not None:
+            log_lines.append(hint)
         log_lines.append("result: failed (command not found)")
         return StageResult(
             stage_id=stage.stage_id,

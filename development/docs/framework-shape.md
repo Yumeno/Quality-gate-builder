@@ -93,6 +93,7 @@ Layer 2 の `qgb.core.command.run_command` は、利用者が与えた foregroun
 - **process tree termination**: POSIX は `preexec_fn=os.setsid` + `killpg(SIGTERM)` → grace 3s → `killpg(SIGKILL)`、Windows は `WindowsJob` (CreateJobObject + KILL_ON_JOB_CLOSE) + `TerminateJobObject` + transactional spawn (assign/resume 失敗時は子を kill+wait してから raise)
 - **structured reason**: `stages[].reason` enum と `stages[].runner_warning` (kill 経路の degradation を構造化フィールドで残す) で gate.json の証跡が事実を語る (philosophy P7)
 - **.bat / .cmd argument escaping**: Windows の `.bat` / `.cmd` 起動では cmd.exe メタ文字 (`& | < > ( ) % ^`) と MSVCRT argv parsing の両層を、argv[0] (script path) を含む全 item に均一に適用する
+- **command not found 時の shim 診断 (Issue #35)**: Windows で argv[0] が bare name (区切り文字・`:`・拡張子なし) かつ PATH の絶対パスエントリ上に同名の `.cmd` / `.bat` があるとき (最初の一致のみ)、stage log に `hint:` 行を出す。**診断のみ** — qgb は PATHEXT 解決も `.cmd` への読み替え起動もせず、判定 (failed) も変えない (contract の argv をそのまま実行する責務を保つ)
 - **observation vs final result の分離**: supervisor loop は早期離脱契機を観測するだけで、最終結果 (cap > timeout > natural exit の優先順) は reader thread 完了後に確定する
 
 これらの契約は philosophy P5 (ALLOW の意味限定) / P7 (再現可能な証跡) / P9 (段階単一責任) の機械側担保。

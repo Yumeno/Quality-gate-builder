@@ -14,11 +14,15 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 
+import pytest
+
 from qgb.cli import EXIT_DENY, EXIT_NOT_READY, EXIT_OK, main
+from qgb.core.command import _windows_shim_hint
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GENERIC_MINIMAL = REPO_ROOT / "examples" / "generic-minimal"
@@ -279,7 +283,91 @@ def test_command_not_found_is_failed(tmp_path: Path) -> None:
     assert exit_code == EXIT_DENY
     log = _stage_log(project, "S1")
     assert "result: failed" in log
+    assert "hint:" not in log  # shim が PATH にない通常ケースは hint なし
     # No traceback — graceful failure.
+
+
+# ---- Issue #35: Windows .cmd/.bat shim hint ---------------------------
+
+
+def _path_with(tmp_path: Path, *names: str) -> str:
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir(exist_ok=True)
+    for n in names:
+        (shim_dir / n).write_text("@echo off\n", encoding="utf-8")
+    return str(shim_dir)
+
+
+def test_shim_hint_cmd_found(tmp_path: Path) -> None:
+    path_env = _path_with(tmp_path, "foo.cmd")
+    hint = _windows_shim_hint("foo", path_env, is_windows=True)
+    assert hint is not None
+    assert hint.startswith("hint:")
+    assert str(Path(path_env) / "foo.cmd") in hint
+
+
+def test_shim_hint_bat_found(tmp_path: Path) -> None:
+    path_env = _path_with(tmp_path, "foo.bat")
+    hint = _windows_shim_hint("foo", path_env, is_windows=True)
+    assert hint is not None
+    assert str(Path(path_env) / "foo.bat") in hint
+
+
+def test_shim_hint_nothing_found(tmp_path: Path) -> None:
+    path_env = _path_with(tmp_path, "other.cmd")
+    assert _windows_shim_hint("foo", path_env, is_windows=True) is None
+
+
+def test_shim_hint_not_windows(tmp_path: Path) -> None:
+    path_env = _path_with(tmp_path, "foo.cmd")
+    assert _windows_shim_hint("foo", path_env, is_windows=False) is None
+
+
+@pytest.mark.parametrize("argv0", ["foo.exe", "bin/foo", "bin\\foo", "C:foo"])
+def test_shim_hint_non_bare_name(tmp_path: Path, argv0: str) -> None:
+    path_env = _path_with(tmp_path, "foo.cmd")
+    assert _windows_shim_hint(argv0, path_env, is_windows=True) is None
+
+
+def test_shim_hint_tolerates_empty_and_missing_entries(tmp_path: Path) -> None:
+    real = _path_with(tmp_path, "foo.cmd")
+    missing = str(tmp_path / "does-not-exist")
+    path_env = os.pathsep.join(["", missing, "", real])
+    hint = _windows_shim_hint("foo", path_env, is_windows=True)
+    assert hint is not None
+    assert "foo.cmd" in hint
+    assert _windows_shim_hint("foo", os.pathsep.join(["", missing]), is_windows=True) is None
+
+
+def test_shim_hint_skips_relative_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """相対 PATH エントリは基準 cwd が曖昧なので探索しない."""
+    _path_with(tmp_path, "foo.cmd")
+    monkeypatch.chdir(tmp_path)
+    assert _windows_shim_hint("foo", "shims", is_windows=True) is None
+
+
+def test_shim_hint_path_env_none() -> None:
+    assert _windows_shim_hint("foo", None, is_windows=True) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows .cmd shim only")
+def test_command_not_found_windows_shim_hint_e2e(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shim_dir = Path(_path_with(tmp_path, "qgbshimtest.cmd"))
+    monkeypatch.setenv("PATH", str(shim_dir) + os.pathsep + os.environ["PATH"])
+    project = _copy_generic_minimal(tmp_path)
+    _inject_command_stage(project, command=["qgbshimtest"])
+    exit_code = main(["run", "REQ-APP-001", "--yes", "--path", str(project)])
+    assert exit_code == EXIT_DENY
+    log = _stage_log(project, "S1")
+    assert "hint:" in log
+    assert "qgbshimtest.cmd" in log
+    section = log.split("--- execution ---", 1)[1]
+    last = [ln for ln in section.splitlines() if ln.strip()][-1]
+    assert last == "result: failed (command not found)"
 
 
 # ---- preflight: command verification_type は Step 7 で sup されている ----

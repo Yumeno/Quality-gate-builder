@@ -344,6 +344,7 @@ expected failure を判定する。
 | `qgb run` が NOT_READY を返す | preflight が design issue を検出 | `qgb validate-policy <REQ>` で具体的な kind / where を確認 |
 | `qgb validate` が schema_violation | knowledge.jsonl に `source_type: external` 行があるが `requires_human_review: true` がない | 当該行に `requires_human_review: true` を追記 (受け入れ条件 18) |
 | `command` stage で "command not found" | Windows で `python` が PATH にない (Microsoft Store 経由 install) | contract をローカルで `["py", "-3", ...]` に書き換える (commit しない)。詳細は `examples/python-cli-pytest/README.md` の Windows note を参照 |
+| Windows で `npx` / `npm` 等の `command` stage が "command not found" (stage log に `hint:` 行) | `npx` 等は Windows では `.cmd` shim。qgb は shell を介さず argv をそのまま起動し、PATHEXT 解決をしない (Issue #35) | `node <CLI エントリ>` を直接指定する (例: `["node", "node_modules/vitest/vitest.mjs", "run"]`)。Windows 専用 contract なら `npx.cmd` のように拡張子を明示 |
 | gate.json の `paths.run_dir` に backslash が混じる | Phase 1 では POSIX forward slash 固定。混じったらバグ | issue で報告 |
 | `qgb design-stages --commit` で validate-policy エラー | tmp tree での validation が failed | エラー詳細を確認、policy.json / config.json を修正 |
 | `examples/python-cli-pytest` が DENY を返す | demo_cli が editable install されていない / pytest が無い | `pip install -e ".[test]"` を当該例ディレクトリで実行 |
