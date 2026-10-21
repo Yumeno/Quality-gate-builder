@@ -7,9 +7,9 @@ description: |
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.7
+  skill_version: 0.1.8
   converter_version: 0.1.1
-  build_input_digest: 817b442b8348de30
+  build_input_digest: c3dc582f60a8ba20
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)
@@ -307,6 +307,7 @@ qgb は **L1〜L6 のような固定階層を強制しない** (philosophy P10)�
      - Python: `python -X utf8 <script.py>` (Python 3.7+ で UTF-8 mode、Windows 日本語環境で `PYTHONUTF8=1` 推奨)
      - Node: `node --input-type=module <script.mjs>` 等、Node version を意識
    - argv[0] (実行ファイルの path) は **OS ネイティブの path 区切り**で書く (例: Windows では `.venv\Scripts\python.exe`)。Windows の CreateProcess は `/` 区切りの相対 path を実行ファイルとして解決しない
+   - **Windows の shim に注意**: `npx` / `npm` / `yarn` / `pnpm` 等は Windows では `.cmd` shim で、qgb は shell を介さず argv をそのまま起動する (PATHEXT 解決をしない) ため、拡張子なしの `npx` は command not found になる。推奨順: ① OS 共通の実行ファイル + CLI エントリを直接指定 (例: `["node", "node_modules/vitest/vitest.mjs", "run"]`) ② Windows 専用 contract なら `.cmd` を明示 (例: `["npx.cmd", ...]`) ③ 拡張子なしの shim 名は使わない。argv[1] 以降の script path は runtime (node 等) が解釈するので `/` 区切りでよい。qgb は Windows で argv[0] が拡張子なしの名前かつ PATH 上に同名の `.cmd` / `.bat` があるときだけ stage log へ `hint:` 行を出す (判定 failed は変わらない)。hint が出なくても shim 起因の可能性は残る
 5. **runtime-specific preflight (= ι capability-based dispatch)**
    - 確定 runtime に対応する checklist を**段階設計プロンプト §5.5「capability-based dispatch checklist」** (full: 同一 SKILL.md 内の埋め込み見出し / split: `prompts/design-stages.md`) から読み込んで適用
    - PowerShell 5 + 非 ASCII なら BOM 必須 / `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` 設定必須 等
@@ -826,6 +827,7 @@ python -m qgb design-stages --json
 | stdout encoding | Node 18+ では default UTF-8、`process.stdout.write` で確認 |
 | locale | 環境依存最小 (Node は locale 影響少) |
 | argv | `node <script.mjs>` (Node version は package.json `engines` で固定推奨) |
+| npm 系 CLI の起動 | `npx` / `npm` 等の拡張子なし shim 名を argv[0] にしない (Windows では `.cmd` shim で起動できない)。`node <package の CLI エントリ>` を直接指定する (例: `node node_modules/vitest/vitest.mjs run`)。CLI エントリは推測で書かず、その package の `package.json` の `bin` と実在 (`node_modules/` 配下、pnpm / workspace では配置が変わる) をローカルで確認してから書く。配置依存なので version 固定 (lockfile) とセットにする |
 | exit code | `process.exit(0)` / `process.exit(1)` |
 | 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep |
 
