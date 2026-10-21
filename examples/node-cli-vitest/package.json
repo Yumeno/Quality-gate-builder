@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Minimal Node.js CLI for qgb example pack",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=22.23.4"
+  },
   "scripts": {
     "test": "vitest run"
   },

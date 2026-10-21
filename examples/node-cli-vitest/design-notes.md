@@ -55,4 +55,8 @@ S1 (vitest)     S2 (file_exists)     S3 (substring_match)
 
 - `npm install` が事前に必要 (node_modules 未作成だと S1 が失敗する)。
 - ESM / CJS の混在問題は scope 外 (本 example は CJS)。
-- vitest は Node.js 18+ を要求する。
+- 実行要件は Node.js 22.23.4 以上 (`package.json` `engines.node`)。vitest
+  自体の要求 (18+) より厳しく、修正版 Node.js 系列での実行を前提にする
+  (Issue #33)。`.npmrc` の `engine-strict=true` で `npm install` 時に
+  機械的に拒否する。ただし qgb の S1 は `npx vitest run` の exit code だけを
+  見るため、install 済み環境で Node を下げても gate はこの要件を検査しない。
