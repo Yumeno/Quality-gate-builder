@@ -7,9 +7,9 @@ description: |
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.7
+  skill_version: 0.1.8
   converter_version: 0.1.1
-  build_input_digest: 817b442b8348de30
+  build_input_digest: c3dc582f60a8ba20
 -->
 <!--
 qgb スキル本体 (Phase 5 Step 5.a-2-1 で本実装)

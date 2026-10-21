@@ -10,7 +10,7 @@
 # スキーマ: skills/source/metadata.schema.json
 
 skill_id: qgb
-version: 0.1.7
+version: 0.1.8
 description: |
   qgb (quality-gate-builder) を使って任意のプロジェクトに証跡ゲート
   (REQ → contract → 機械検査 → ALLOW/DENY) を構築するスキル。

@@ -1,9 +1,9 @@
 <!--
   GENERATED FILE - DO NOT EDIT.
   これは生成物。skills/source/body.md を編集すること。
-  skill_version: 0.1.7
+  skill_version: 0.1.8
   converter_version: 0.1.1
-  build_input_digest: 817b442b8348de30
+  build_input_digest: c3dc582f60a8ba20
 -->
 
 # 段階設計プロンプト (qgb design-stages、パターン B / C)
@@ -313,6 +313,7 @@ python -m qgb design-stages --json
 | stdout encoding | Node 18+ では default UTF-8、`process.stdout.write` で確認 |
 | locale | 環境依存最小 (Node は locale 影響少) |
 | argv | `node <script.mjs>` (Node version は package.json `engines` で固定推奨) |
+| npm 系 CLI の起動 | `npx` / `npm` 等の拡張子なし shim 名を argv[0] にしない (Windows では `.cmd` shim で起動できない)。`node <package の CLI エントリ>` を直接指定する (例: `node node_modules/vitest/vitest.mjs run`)。CLI エントリは推測で書かず、その package の `package.json` の `bin` と実在 (`node_modules/` 配下、pnpm / workspace では配置が変わる) をローカルで確認してから書く。配置依存なので version 固定 (lockfile) とセットにする |
 | exit code | `process.exit(0)` / `process.exit(1)` |
 | 文字化け検出 | qgb check 後の stage log で `U+FFFD` を grep |
 
