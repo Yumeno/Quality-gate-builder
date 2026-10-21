@@ -5,7 +5,7 @@
 ## 対象系の特徴
 
 Node.js の小さな CLI ツール + vitest テスト。`npm install` 後に
-`npx vitest run` でテストが走る構成。Next.js ではなく Node CLI を選んだ
+vitest でテストが走る構成。Next.js ではなく Node CLI を選んだ
 理由: Next.js は `npm install` が重い (数百 MB) ため、Phase 1 の軽量
 example に不適。Node CLI + vitest なら依存が小さく、qgb の多言語対応
 能力を示すのに十分。
@@ -24,7 +24,7 @@ qgb の quality-system 構造は同じであることを示す。
 
 | stage | verification_type | 単一責務 | なぜ |
 |---|---|---|---|
-| S1 | `command` | `npx vitest run` が exit 0 | テスト回帰検知 |
+| S1 | `command` | `node node_modules/vitest/vitest.mjs run` が exit 0 | テスト回帰検知 |
 | S2 | `file_exists` | `src/index.js` が存在 | エントリポイント保証。テストが import で動くのとファイル存在は別 |
 | S3 | `substring_match` | README に "Usage" を含む | 利用者 onboarding |
 
@@ -40,7 +40,11 @@ qgb の quality-system 構造は同じであることを示す。
 
 - **P9 (単一責任)** — test と file_exists の分離。
 - **NF-010 (依存最小化)** — vitest 1 個のみ (devDependency)。
-- **NF-004 (Windows first-class)** — npx / node は Windows でネイティブ動作。
+- **NF-004 (Windows first-class)** — S1 は `npx` ではなく `node` + vitest
+  CLI エントリを直接指定する。Windows の `npx` / `npm` は `.cmd` shim で、
+  qgb の command runner (shell=False) は拡張子なしの `npx` を起動できない
+  (PATHEXT 解決をしない)。`node` は実行ファイルなので Windows / POSIX
+  共通の argv で動く。
 
 ## 段階間の依存関係
 
@@ -58,5 +62,8 @@ S1 (vitest)     S2 (file_exists)     S3 (substring_match)
 - 実行要件は Node.js 22.23.4 以上 (`package.json` `engines.node`)。vitest
   自体の要求 (18+) より厳しく、修正版 Node.js 系列での実行を前提にする
   (Issue #33)。`.npmrc` の `engine-strict=true` で `npm install` 時に
-  機械的に拒否する。ただし qgb の S1 は `npx vitest run` の exit code だけを
+  機械的に拒否する。ただし qgb の S1 は vitest の exit code だけを
   見るため、install 済み環境で Node を下げても gate はこの要件を検査しない。
+- 依存は `package-lock.json` で固定する (`npm install` / `npm ci`)。
+- S1 の `node_modules/vitest/vitest.mjs` は vitest パッケージ内の配置に
+  依存する (公開 API ではない)。vitest のメジャー更新時は確認が必要。

@@ -3,7 +3,7 @@
   "req_id": "REQ-APP-001",
   "stage_id": "S1",
   "verification_type": "command",
-  "command": ["npx", "vitest", "run"],
+  "command": ["node", "node_modules/vitest/vitest.mjs", "run"],
   "expected_exit_code": 0,
   "timeout_seconds": 120
 }

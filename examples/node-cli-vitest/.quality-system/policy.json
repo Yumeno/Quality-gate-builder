@@ -5,7 +5,7 @@
     {
       "id": "S1",
       "name": "vitest が成功する",
-      "responsibility": "npx vitest run が exit 0 で完了する",
+      "responsibility": "vitest run (node 経由で vitest CLI を直接起動) が exit 0 で完了する",
       "depends_on": [],
       "verification_type": "command",
       "required_contract_fields": ["command"]
